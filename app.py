@@ -1,22 +1,36 @@
 import os
 import sys
 import traceback
-import uuid
+import logging
+import tempfile
+import json
 from datetime import datetime
 from http import HTTPStatus
+from typing import Dict, Any, Optional, List
 
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, Request, Response, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
 from botbuilder.core import (
     BotFrameworkAdapterSettings,
     TurnContext,
     BotFrameworkAdapter,
+    MessageFactory
 )
 from botbuilder.schema import Activity, ActivityTypes, Attachment, ConversationReference
+
 import requests
-import json
-import tempfile
-from typing import Dict, Any, Optional
+import aiohttp
+import asyncio
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
 
 # Your FastAPI backend URL - already deployed
 API_BASE_URL = "https://copilotv2.azurewebsites.net"
@@ -25,18 +39,30 @@ API_BASE_URL = "https://copilotv2.azurewebsites.net"
 # Key: conversation_id, Value: dict with assistant_id, session_id, etc.
 conversation_states = {}
 
-# App credentials from environment variables (already added to App Service)
-APP_ID = os.environ.get("MicrosoftAppId")
-APP_PASSWORD = os.environ.get("MicrosoftAppPassword")
+# App credentials from environment variables
+APP_ID = os.environ.get("MicrosoftAppId", "")
+APP_PASSWORD = os.environ.get("MicrosoftAppPassword", "")
 
-# Create adapter with proper settings object
+# Create adapter with proper settings
 SETTINGS = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
 ADAPTER = BotFrameworkAdapter(SETTINGS)
+
+# Create FastAPI app
+app = FastAPI(title="Teams Product Management Bot")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Catch-all for errors
 async def on_error(context: TurnContext, error: Exception):
     # Print the error to the console
-    print(f"\n [on_turn_error] unhandled error: {error}", file=sys.stderr)
+    logger.error(f"\n [on_turn_error] unhandled error: {error}")
     traceback.print_exc()
     
     # Send a message to the user
@@ -58,18 +84,6 @@ async def on_error(context: TurnContext, error: Exception):
 
 # Assign the error handler
 ADAPTER.on_turn_error = on_error
-
-# Create FastAPI app
-app = FastAPI(title="Teams Product Management Bot")
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Bot logic handler
 async def bot_logic(turn_context: TurnContext):
@@ -172,7 +186,7 @@ async def handle_file_upload(turn_context: TurnContext, state):
                 
         except Exception as e:
             await turn_context.send_activity(f"Error processing file: {str(e)}")
-            print(f"Error processing file: {str(e)}")
+            logger.error(f"Error processing file: {str(e)}")
             traceback.print_exc()
 
 # Download attachment content from Teams
@@ -192,7 +206,7 @@ async def download_attachment(turn_context: TurnContext, attachment: Attachment)
             
         return None
     except Exception as e:
-        print(f"Error downloading attachment: {str(e)}")
+        logger.error(f"Error downloading attachment: {str(e)}")
         traceback.print_exc()
         return None
 
@@ -206,12 +220,7 @@ async def handle_text_message(turn_context: TurnContext, state):
         return
     
     # Send typing indicator
-    try:
-        from botbuilder.core import MessageFactory
-        await turn_context.send_activity(MessageFactory.typing())
-    except ImportError:
-        # If MessageFactory isn't available, continue without the typing indicator
-        pass
+    await turn_context.send_activity(MessageFactory.typing())
     
     # Send message to the backend and get response
     params = {
@@ -248,18 +257,14 @@ async def handle_text_message(turn_context: TurnContext, state):
             
     except Exception as e:
         await turn_context.send_activity(f"Error processing your message: {str(e)}")
-        print(f"Error in handle_text_message: {str(e)}")
+        logger.error(f"Error in handle_text_message: {str(e)}")
         traceback.print_exc()
 
 # Initialize chat with the backend
 async def initialize_chat(turn_context: TurnContext, state, context=None):
     try:
         # Send typing indicator
-        try:
-            from botbuilder.core import MessageFactory
-            await turn_context.send_activity(MessageFactory.typing())
-        except ImportError:
-            pass
+        await turn_context.send_activity(MessageFactory.typing())
         
         # Prepare data for initialization
         data = {}
@@ -292,18 +297,14 @@ async def initialize_chat(turn_context: TurnContext, state, context=None):
     
     except Exception as e:
         await turn_context.send_activity(f"Error initializing chat: {str(e)}")
-        print(f"Error in initialize_chat: {str(e)}")
+        logger.error(f"Error in initialize_chat: {str(e)}")
         traceback.print_exc()
 
 # Send a message without user input (used after file upload or initialization)
 async def send_message(turn_context: TurnContext, state):
     try:
         # Send typing indicator
-        try:
-            from botbuilder.core import MessageFactory
-            await turn_context.send_activity(MessageFactory.typing())
-        except ImportError:
-            pass
+        await turn_context.send_activity(MessageFactory.typing())
         
         # Get the latest message from the thread
         params = {
@@ -331,7 +332,7 @@ async def send_message(turn_context: TurnContext, state):
             
     except Exception as e:
         await turn_context.send_activity(f"Error getting response: {str(e)}")
-        print(f"Error in send_message: {str(e)}")
+        logger.error(f"Error in send_message: {str(e)}")
         traceback.print_exc()
 
 # Send welcome message when bot is added
@@ -376,7 +377,7 @@ async def messages(req: Request) -> Response:
         return Response(status_code=HTTPStatus.OK)
     except Exception as e:
         # Log any errors
-        print(f"Error processing message: {str(e)}")
+        logger.error(f"Error processing message: {str(e)}")
         traceback.print_exc()
         return Response(content=str(e), status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
 
@@ -389,9 +390,6 @@ async def health_check():
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "Product Management Bot is running. Use the /api/messages endpoint."}
-
-# Import MessageFactory after FastAPI app is defined to avoid circular imports
-from botbuilder.core import MessageFactory
 
 # Run the app with uvicorn if executed directly
 if __name__ == "__main__":
