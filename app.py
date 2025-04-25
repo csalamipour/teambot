@@ -4,11 +4,12 @@ import traceback
 import requests
 import json
 import tempfile
+from typing import Dict, Any, Optional
+from fastapi import FastAPI, Request, Response, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from botbuilder.core import BotFrameworkAdapter, TurnContext, MessageFactory
-from botbuilder.schema import Activity, ActivityTypes, Attachment
-from botbuilder.integration.aiohttp import CloudAdapter, ConfigurationBotFrameworkAuthentication
-from aiohttp import web
-from aiohttp.web import Request, Response
+from botbuilder.schema import Activity, ActivityTypes, Attachment, ConversationReference
+from botframework.connector.auth import MicrosoftAppCredentials, SimpleCredentialProvider
 
 # Your FastAPI backend URL - already deployed
 API_BASE_URL = "https://copilotv2.azurewebsites.net"
@@ -17,40 +18,27 @@ API_BASE_URL = "https://copilotv2.azurewebsites.net"
 # Key: conversation_id, Value: dict with assistant_id, session_id, etc.
 conversation_states = {}
 
-# App credentials from environment variables
+# App credentials from environment variables (already added to App Service)
 APP_ID = os.environ.get("MicrosoftAppId", "")
 APP_PASSWORD = os.environ.get("MicrosoftAppPassword", "")
 
-# Check if credentials are provided
-if not APP_ID or not APP_PASSWORD:
-    print("ERROR: MicrosoftAppId and MicrosoftAppPassword must be set in environment variables")
-    print("These should be configured in the Azure App Service Configuration/Application Settings")
+# Create credential provider for Bot Framework
+CREDENTIAL_PROVIDER = SimpleCredentialProvider(APP_ID, APP_PASSWORD)
 
-# For aiohttp setup with Bot Framework
-CONFIG_AUTH_PROVIDER = ConfigurationBotFrameworkAuthentication(
-    app_id=APP_ID,
-    app_password=APP_PASSWORD
+# Create adapter with credentials
+ADAPTER = BotFrameworkAdapter(CREDENTIAL_PROVIDER)
+
+# Create FastAPI app
+app = FastAPI(title="Teams Product Management Bot")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-ADAPTER = CloudAdapter(CONFIG_AUTH_PROVIDER)
-
-# Main bot message handler
-async def bot_main(req: Request) -> Response:
-    if "application/json" in req.headers["Content-Type"]:
-        body = await req.json()
-    else:
-        return Response(status=415)
-
-    # Create a TurnContext from the incoming activity
-    activity = Activity().deserialize(body)
-    
-    try:
-        response = Response()
-        await ADAPTER.process(req, response, activity, bot_logic)
-        return response
-    except Exception as e:
-        print(f"Error processing activity: {e}")
-        traceback.print_exc()
-        return Response(status=500)
 
 # Bot logic handler
 async def bot_logic(turn_context: TurnContext):
@@ -320,18 +308,44 @@ async def send_welcome_message(turn_context: TurnContext):
     
     await turn_context.send_activity(welcome_text)
 
-# Set up the web app
-app = web.Application()
-app.router.add_post("/api/messages", bot_main)
+# FastAPI endpoint to handle Bot Framework messages
+@app.post("/api/messages")
+async def messages(request: Request) -> Response:
+    # Check content type
+    if not request.headers.get("Content-Type", "").startswith("application/json"):
+        return Response(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
+    
+    # Get the request body
+    body_data = await request.json()
+    
+    # Create a Bot Framework activity from the request
+    activity = Activity().deserialize(body_data)
+    
+    # Create a response object
+    response = Response()
+    response.headers["Content-Type"] = "application/json"
+    
+    # Process the activity with the bot adapter
+    try:
+        await ADAPTER.process_activity(activity, "", bot_logic)
+        return response
+    except Exception as e:
+        # Log the error
+        print(f"Error processing activity: {e}")
+        traceback.print_exc()
+        # Return a 500 error
+        return Response(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=json.dumps({"error": str(e)}),
+        )
+
+# Simple health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "Teams Product Management Bot"}
 
 if __name__ == "__main__":
-    try:
-        # Get port from environment for Azure deployment
-        PORT = int(os.environ.get("PORT", 8000))
-        
-        # Start the web server
-        web.run_app(app, host="0.0.0.0", port=PORT)
-    except Exception as e:
-        print(f"Error starting bot: {e}")
-        traceback.print_exc()
-        sys.exit()
+    # This block is not needed for App Service deployment
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
