@@ -15,8 +15,7 @@ from fastapi.responses import JSONResponse
 from botbuilder.core import (
     BotFrameworkAdapterSettings,
     TurnContext,
-    BotFrameworkAdapter,
-    MessageFactory
+    BotFrameworkAdapter
 )
 from botbuilder.schema import Activity, ActivityTypes, Attachment, ConversationReference
 
@@ -85,6 +84,13 @@ async def on_error(context: TurnContext, error: Exception):
 # Assign the error handler
 ADAPTER.on_turn_error = on_error
 
+# Create typing indicator activity
+def create_typing_activity() -> Activity:
+    return Activity(
+        type=ActivityTypes.typing,
+        channel_id="msteams"
+    )
+
 # Bot logic handler
 async def bot_logic(turn_context: TurnContext):
     # Get the conversation reference for later use
@@ -124,7 +130,7 @@ async def handle_file_upload(turn_context: TurnContext, state):
     for attachment in turn_context.activity.attachments:
         try:
             # Send typing indicator
-            await turn_context.send_activity(MessageFactory.typing())
+            await turn_context.send_activity(create_typing_activity())
             
             # Download the file content
             file_content = await download_attachment(turn_context, attachment)
@@ -220,7 +226,7 @@ async def handle_text_message(turn_context: TurnContext, state):
         return
     
     # Send typing indicator
-    await turn_context.send_activity(MessageFactory.typing())
+    await turn_context.send_activity(create_typing_activity())
     
     # Send message to the backend and get response
     params = {
@@ -264,7 +270,7 @@ async def handle_text_message(turn_context: TurnContext, state):
 async def initialize_chat(turn_context: TurnContext, state, context=None):
     try:
         # Send typing indicator
-        await turn_context.send_activity(MessageFactory.typing())
+        await turn_context.send_activity(create_typing_activity())
         
         # Prepare data for initialization
         data = {}
@@ -304,7 +310,7 @@ async def initialize_chat(turn_context: TurnContext, state, context=None):
 async def send_message(turn_context: TurnContext, state):
     try:
         # Send typing indicator
-        await turn_context.send_activity(MessageFactory.typing())
+        await turn_context.send_activity(create_typing_activity())
         
         # Get the latest message from the thread
         params = {
