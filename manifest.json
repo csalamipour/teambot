@@ -1,0 +1,81 @@
+{
+    "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.14/MicrosoftTeams.schema.json",
+    "manifestVersion": "1.14",
+    "version": "1.0.0",
+    "id": "{{MICROSOFT_APP_ID}}",
+    "packageName": "com.productmanagement.bot",
+    "developer": {
+        "name": "Product Management Bot",
+        "websiteUrl": "https://copilotv2.azurewebsites.net",
+        "privacyUrl": "https://copilotv2.azurewebsites.net/privacy",
+        "termsOfUseUrl": "https://copilotv2.azurewebsites.net/terms"
+    },
+    "icons": {
+        "color": "color.png",
+        "outline": "outline.png"
+    },
+    "name": {
+        "short": "PM Copilot",
+        "full": "Product Management Copilot"
+    },
+    "description": {
+        "short": "Create documentation and analyze files with AI assistant",
+        "full": "This bot helps you create documentation and analyze various file types. Upload CSV, Excel, PDF, and other files for AI-powered analysis, or chat to get help with product management tasks."
+    },
+    "accentColor": "#FFFFFF",
+    "bots": [
+        {
+            "botId": "{{MICROSOFT_APP_ID}}",
+            "scopes": [
+                "personal",
+                "team",
+                "groupchat"
+            ],
+            "supportsFiles": true,
+            "isNotificationOnly": false,
+            "commandLists": [
+                {
+                    "scopes": [
+                        "personal",
+                        "team",
+                        "groupchat"
+                    ],
+                    "commands": [
+                        {
+                            "title": "Help",
+                            "description": "Shows available commands and features"
+                        },
+                        {
+                            "title": "New",
+                            "description": "Start a new chat with a new assistant"
+                        },
+                        {
+                            "title": "New Thread",
+                            "description": "Create a new thread with the current assistant"
+                        },
+                        {
+                            "title": "Clear",
+                            "description": "Clear chat history (creates a new thread)"
+                        },
+                        {
+                            "title": "Files",
+                            "description": "List uploaded files"
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+    "permissions": [
+        "identity",
+        "messageTeamMembers"
+    ],
+    "validDomains": [
+        "*.botframework.com",
+        "copilotv2.azurewebsites.net"
+    ],
+    "webApplicationInfo": {
+        "id": "{{MICROSOFT_APP_ID}}",
+        "resource": "https://api.botframework.com"
+    }
+}
