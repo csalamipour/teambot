@@ -30,14 +30,17 @@ ADAPTER = BotFrameworkAdapter(
     app_password=APP_PASSWORD
 )
 
-# Add error handling
-ADAPTER.on_turn_error = async def on_error(context: TurnContext, error: Exception):
+# Define error handler function
+async def on_error(context: TurnContext, error: Exception):
     # Print the error to the console
-    print(f"\\n [on_turn_error] unhandled error: {error}", file=sys.stderr)
+    print(f"\n [on_turn_error] unhandled error: {error}", file=sys.stderr)
     traceback.print_exc()
     
     # Send the error message to the user
     await context.send_activity("The bot encountered an error. Please try again.")
+
+# Add error handling
+ADAPTER.on_turn_error = on_error
 
 # Create FastAPI app
 app = FastAPI(title="Teams Product Management Bot")
