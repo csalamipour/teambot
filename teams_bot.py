@@ -20,7 +20,7 @@ from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
 from botbuilder.schema.teams import MessagingExtensionAction, MessagingExtensionResult
 
 # API endpoint URL - update with your FastAPI server address
-API_BASE_URL = "http://localhost:8080"  # Change this to your deployed backend URL
+API_BASE_URL = "copilotv2.azurewebsites.net"  # Change this to your deployed backend URL
 
 # Store conversation state for each user
 conversation_state = {}
