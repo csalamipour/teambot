@@ -1,0 +1,46 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.14/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.14",
+  "version": "1.0.0",
+  "id": "f982cbc2-d0eb-4a94-8329-4dafe0f71a02",
+  "packageName": "com.yourcompany.productmanagementbot",
+  "developer": {
+    "name": "Your Company",
+    "websiteUrl": "https://example.com",
+    "privacyUrl": "https://example.com/privacy",
+    "termsOfUseUrl": "https://example.com/terms"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Product Management Bot",
+    "full": "Product Management Bot for Teams"
+  },
+  "description": {
+    "short": "A bot that helps with product management tasks",
+    "full": "This bot helps with product management tasks including PRD creation, file analysis, and answering product-related questions."
+  },
+  "accentColor": "#FFFFFF",
+  "bots": [
+    {
+      "botId": "f982cbc2-d0eb-4a94-8329-4dafe0f71a02",
+      "scopes": [
+        "personal",
+        "team",
+        "groupchat"
+      ],
+      "supportsFiles": true,
+      "isNotificationOnly": false
+    }
+  ],
+  "permissions": [
+    "identity",
+    "messageTeamMembers"
+  ],
+  "validDomains": [
+    "product-management-bot-ambeftbkgsgwb6dh.eastus-01.azurewebsites.net",
+    "copilotv2.azurewebsites.net"
+  ]
+}
