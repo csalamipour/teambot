@@ -195,46 +195,176 @@ async def handle_file_upload(turn_context: TurnContext, state):
             logger.error(f"Error processing file: {str(e)}")
             traceback.print_exc()
 
-async def download_attachment(turn_context: TurnContext, attachment: Attachment):
+async def download_attachment(turn_context: TurnContext, attachment: Attachment) -> Optional[bytes]:
+    """
+    Download an attachment from Teams.
+    
+    Args:
+        turn_context: The turn context
+        attachment: The attachment to download
+        
+    Returns:
+        The file content as bytes or None if download failed
+    """
     try:
-        if attachment.content_url:
+        # Log attachment information for debugging
+        logger.info(f"Downloading attachment: {attachment.name} ({attachment.content_type})")
+        
+        if not attachment.content_url:
+            logger.error("No content_url in attachment")
+            return None
+            
+        # More detailed error trapping for Teams attachments
+        try:
+            # Get connector client
             connector = turn_context.adapter.create_connector_client(
                 turn_context.activity.service_url
             )
             
-            # Get the attachment content
-            response = await connector.attachments.get_attachment_content(
-                attachment.content_url,
-            )
-            
-            # The response now needs to be converted to binary content
-            # In the Bot Framework, response is typically a stream that needs to be read
-            if hasattr(response, 'content') and hasattr(response.content, 'read'):
-                # If response has content attribute with read method
-                return await response.content.read()
-            elif hasattr(response, 'read'):
-                # If response itself has read method
-                return await response.read()
-            elif isinstance(response, bytes):
-                # If response is already bytes
-                return response
-            elif hasattr(response, 'content') and isinstance(response.content, bytes):
-                # If response has content as bytes
-                return response.content
-            else:
-                # Log the response type for debugging
-                logger.error(f"Unexpected response type: {type(response)}")
-                logger.error(f"Response dir: {dir(response)}")
-                if hasattr(response, 'content'):
-                    logger.error(f"Response.content type: {type(response.content)}")
-                    logger.error(f"Response.content dir: {dir(response.content)}")
+            # Check if connector was created properly
+            if not connector:
+                logger.error("Failed to create connector client")
                 return None
+                
+            # Try to download content with better error handling
+            try:
+                # Get file content from Teams
+                attachment_content = await connector.attachments.get_attachment_content(
+                    attachment.content_url
+                )
+                
+                # Handle the response based on its structure
+                if hasattr(attachment_content, 'content') and hasattr(attachment_content.content, 'read'):
+                    # aiohttp response structure
+                    return await attachment_content.content.read()
+                elif hasattr(attachment_content, 'read'):
+                    # File-like object
+                    return await attachment_content.read()
+                elif isinstance(attachment_content, bytes):
+                    # Already bytes
+                    return attachment_content
+                elif hasattr(attachment_content, 'content') and isinstance(attachment_content.content, bytes):
+                    # Response with content attribute as bytes
+                    return attachment_content.content
+                elif isinstance(attachment_content, dict) and 'body' in attachment_content:
+                    # Some bot framework versions return dict with body
+                    return attachment_content['body']
+                else:
+                    # Try to serialize as string and encode
+                    try:
+                        content_str = str(attachment_content)
+                        return content_str.encode('utf-8')
+                    except:
+                        logger.error(f"Unknown attachment content structure: {type(attachment_content)}")
+                        logger.error(f"Content: {attachment_content}")
+                        return None
+                        
+            except Exception as download_error:
+                logger.error(f"Error downloading attachment content: {str(download_error)}")
+                traceback.print_exc()
+                return None
+                
+        except Exception as connector_error:
+            logger.error(f"Error with connector: {str(connector_error)}")
+            traceback.print_exc()
+            return None
             
-        return None
     except Exception as e:
-        logger.error(f"Error downloading attachment: {str(e)}")
+        logger.error(f"Error in download_attachment: {str(e)}")
         traceback.print_exc()
         return None
+
+# Update the handle_file_upload function to have better debugging
+async def handle_file_upload(turn_context: TurnContext, state):
+    """Handle file uploads from Teams with improved error handling and logging"""
+    
+    for attachment in turn_context.activity.attachments:
+        try:
+            # Send typing indicator
+            await turn_context.send_activity(create_typing_activity())
+            
+            # Log more details about the attachment
+            logger.info(f"Processing attachment: {attachment.name} ({attachment.content_type})")
+            if hasattr(attachment, 'content_url'):
+                logger.info(f"Content URL available: {attachment.content_url[:50]}...")
+            else:
+                logger.info("No content URL found in attachment")
+            
+            # Download the file content with improved function
+            file_content = await download_attachment(turn_context, attachment)
+            
+            if not file_content:
+                await turn_context.send_activity(f"Sorry, I couldn't download the file '{attachment.name}'.")
+                continue
+                
+            # Log success and file size
+            file_size = len(file_content) if file_content else 0
+            logger.info(f"Successfully downloaded file: {attachment.name} ({file_size} bytes)")
+            
+            # Message user that file is being processed
+            await turn_context.send_activity(f"Processing file: '{attachment.name}'...")
+            
+            # If no assistant yet, initialize chat first
+            if not state["assistant_id"]:
+                await initialize_chat(turn_context, state)
+            
+            # Create a temporary file to handle the upload properly
+            with tempfile.NamedTemporaryFile(delete=False, suffix='_' + attachment.name) as temp:
+                temp.write(file_content)
+                temp_path = temp.name
+                logger.info(f"Saved file to temporary path: {temp_path}")
+            
+            try:
+                # Upload file to the backend
+                with open(temp_path, 'rb') as file:
+                    files = {"file": (attachment.name, file)}
+                    data = {"assistant": state["assistant_id"]}
+                    
+                    # Add session if available
+                    if state["session_id"]:
+                        data["session"] = state["session_id"]
+                    
+                    logger.info(f"Uploading file to API: {attachment.name}")
+                    logger.info(f"Upload data: assistant={state['assistant_id']}, session={state['session_id']}")
+                    
+                    response = requests.post(
+                        f"{API_BASE_URL}/upload-file", 
+                        files=files,
+                        data=data
+                    )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    state["uploaded_files"].append(attachment.name)
+                    logger.info(f"File upload successful: {attachment.name}")
+                    await turn_context.send_activity(f"File '{attachment.name}' uploaded successfully!")
+                    
+                    # If it's an image, show the analysis
+                    if "processing_method" in result and result["processing_method"] == "thread_message":
+                        await turn_context.send_activity("Here's my analysis of the image:")
+                        await send_message(turn_context, state)
+                else:
+                    logger.error(f"API upload failed: {response.status_code}")
+                    logger.error(f"Response: {response.text[:500]}")
+                    await turn_context.send_activity(f"Failed to upload file. Status code: {response.status_code}")
+                    if response.text:
+                        try:
+                            error_json = response.json()
+                            await turn_context.send_activity(f"Error details: {json.dumps(error_json)}")
+                        except:
+                            await turn_context.send_activity(f"Error details: {response.text[:500]}")
+            finally:
+                # Clean up the temporary file
+                try:
+                    os.unlink(temp_path)
+                    logger.info(f"Removed temporary file: {temp_path}")
+                except Exception as cleanup_error:
+                    logger.error(f"Error removing temp file: {str(cleanup_error)}")
+                
+        except Exception as e:
+            logger.error(f"Error processing file: {str(e)}")
+            traceback.print_exc()
+            await turn_context.send_activity(f"Error processing file: {str(e)}")
 # Function to handle text messages
 async def handle_text_message(turn_context: TurnContext, state):
     user_message = turn_context.activity.text.strip()
