@@ -1,7 +1,8 @@
+fastapi>=0.68.0
+uvicorn>=0.15.0
 botbuilder-core>=4.14.0
 botbuilder-schema>=4.14.0
-botbuilder-integration-aiohttp>=4.14.0
 botframework-connector>=4.14.0
 requests>=2.25.1
-aiohttp>=3.7.4
-python-dotenv>=0.19.0
+python-multipart>=0.0.5
+pydantic>=1.8.2
