@@ -9,7 +9,8 @@ from fastapi import FastAPI, Request, Response, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from botbuilder.core import BotFrameworkAdapter, TurnContext, MessageFactory
 from botbuilder.schema import Activity, ActivityTypes, Attachment, ConversationReference
-from botframework.connector.auth import MicrosoftAppCredentials, SimpleCredentialProvider
+from botbuilder.core.integration import aiohttp_error_middleware
+from botframework.connector.auth import MicrosoftAppCredentials
 
 # Your FastAPI backend URL - already deployed
 API_BASE_URL = "https://copilotv2.azurewebsites.net"
@@ -19,14 +20,24 @@ API_BASE_URL = "https://copilotv2.azurewebsites.net"
 conversation_states = {}
 
 # App credentials from environment variables (already added to App Service)
-APP_ID = os.environ.get("MicrosoftAppId", "")
-APP_PASSWORD = os.environ.get("MicrosoftAppPassword", "")
+APP_ID = os.environ.get("MicrosoftAppId")
+APP_PASSWORD = os.environ.get("MicrosoftAppPassword")
 
-# Create credential provider for Bot Framework
-CREDENTIAL_PROVIDER = SimpleCredentialProvider(APP_ID, APP_PASSWORD)
+# Create the adapter with proper credentials
+# Note: BotFrameworkAdapter directly accepts APP_ID and APP_PASSWORD
+ADAPTER = BotFrameworkAdapter(
+    app_id=APP_ID, 
+    app_password=APP_PASSWORD
+)
 
-# Create adapter with credentials
-ADAPTER = BotFrameworkAdapter(CREDENTIAL_PROVIDER)
+# Add error handling
+ADAPTER.on_turn_error = async def on_error(context: TurnContext, error: Exception):
+    # Print the error to the console
+    print(f"\\n [on_turn_error] unhandled error: {error}", file=sys.stderr)
+    traceback.print_exc()
+    
+    # Send the error message to the user
+    await context.send_activity("The bot encountered an error. Please try again.")
 
 # Create FastAPI app
 app = FastAPI(title="Teams Product Management Bot")
@@ -310,42 +321,36 @@ async def send_welcome_message(turn_context: TurnContext):
 
 # FastAPI endpoint to handle Bot Framework messages
 @app.post("/api/messages")
-async def messages(request: Request) -> Response:
-    # Check content type
-    if not request.headers.get("Content-Type", "").startswith("application/json"):
-        return Response(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
+async def messages(req: Request) -> Response:
+    # Create a response
+    res = Response()
     
-    # Get the request body
-    body_data = await request.json()
+    # Process the message
+    body = await req.json()
+    activity = Activity().deserialize(body)
+    auth_header = req.headers.get("Authorization", "")
     
-    # Create a Bot Framework activity from the request
-    activity = Activity().deserialize(body_data)
-    
-    # Create a response object
-    response = Response()
-    response.headers["Content-Type"] = "application/json"
-    
-    # Process the activity with the bot adapter
     try:
-        await ADAPTER.process_activity(activity, "", bot_logic)
-        return response
+        await ADAPTER.process_activity(activity, auth_header, bot_logic)
+        return res
     except Exception as e:
-        # Log the error
-        print(f"Error processing activity: {e}")
+        # Log any errors
+        print(f"Error processing message: {str(e)}")
         traceback.print_exc()
-        # Return a 500 error
-        return Response(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content=json.dumps({"error": str(e)}),
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Simple health check endpoint
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": "Teams Product Management Bot"}
 
+# Root path redirect to health
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Product Management Bot is running. Use the /api/messages endpoint."}
+
+# Run the app with uvicorn if executed directly
 if __name__ == "__main__":
-    # This block is not needed for App Service deployment
     import uvicorn
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
