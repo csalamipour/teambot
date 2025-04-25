@@ -6,3 +6,6 @@ botframework-connector>=4.14.0
 requests>=2.25.1
 python-multipart>=0.0.5
 pydantic>=1.8.2
+aiohttp>=3.7.4
+msrest>=0.6.21
+typing-extensions>=4.1.0
