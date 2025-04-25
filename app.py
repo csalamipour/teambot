@@ -9,8 +9,6 @@ from fastapi import FastAPI, Request, Response, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from botbuilder.core import BotFrameworkAdapter, TurnContext, MessageFactory
 from botbuilder.schema import Activity, ActivityTypes, Attachment, ConversationReference
-from botbuilder.core.integration import aiohttp_error_middleware
-from botframework.connector.auth import MicrosoftAppCredentials
 
 # Your FastAPI backend URL - already deployed
 API_BASE_URL = "https://copilotv2.azurewebsites.net"
@@ -23,13 +21,6 @@ conversation_states = {}
 APP_ID = os.environ.get("MicrosoftAppId")
 APP_PASSWORD = os.environ.get("MicrosoftAppPassword")
 
-# Create the adapter with proper credentials
-# Note: BotFrameworkAdapter directly accepts APP_ID and APP_PASSWORD
-ADAPTER = BotFrameworkAdapter(
-    app_id=APP_ID, 
-    app_password=APP_PASSWORD
-)
-
 # Define error handler function
 async def on_error(context: TurnContext, error: Exception):
     # Print the error to the console
@@ -39,7 +30,13 @@ async def on_error(context: TurnContext, error: Exception):
     # Send the error message to the user
     await context.send_activity("The bot encountered an error. Please try again.")
 
-# Add error handling
+# Create the adapter with proper credentials
+ADAPTER = BotFrameworkAdapter(
+    app_id=APP_ID, 
+    app_password=APP_PASSWORD
+)
+
+# Assign the error handler
 ADAPTER.on_turn_error = on_error
 
 # Create FastAPI app
