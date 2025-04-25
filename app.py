@@ -1,14 +1,22 @@
 import os
 import sys
 import traceback
+import uuid
+from datetime import datetime
+from http import HTTPStatus
+
+from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from botbuilder.core import (
+    BotFrameworkAdapterSettings,
+    TurnContext,
+    BotFrameworkAdapter,
+)
+from botbuilder.schema import Activity, ActivityTypes, Attachment, ConversationReference
 import requests
 import json
 import tempfile
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, Request, Response, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
-from botbuilder.core import BotFrameworkAdapter, TurnContext, MessageFactory
-from botbuilder.schema import Activity, ActivityTypes, Attachment, ConversationReference
 
 # Your FastAPI backend URL - already deployed
 API_BASE_URL = "https://copilotv2.azurewebsites.net"
@@ -21,20 +29,32 @@ conversation_states = {}
 APP_ID = os.environ.get("MicrosoftAppId")
 APP_PASSWORD = os.environ.get("MicrosoftAppPassword")
 
-# Define error handler function
+# Create adapter with proper settings object
+SETTINGS = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
+ADAPTER = BotFrameworkAdapter(SETTINGS)
+
+# Catch-all for errors
 async def on_error(context: TurnContext, error: Exception):
     # Print the error to the console
     print(f"\n [on_turn_error] unhandled error: {error}", file=sys.stderr)
     traceback.print_exc()
     
-    # Send the error message to the user
+    # Send a message to the user
     await context.send_activity("The bot encountered an error. Please try again.")
-
-# Create the adapter with proper credentials
-ADAPTER = BotFrameworkAdapter(
-    app_id=APP_ID, 
-    app_password=APP_PASSWORD
-)
+    
+    # Send a trace activity if we're talking to the Bot Framework Emulator
+    if context.activity.channel_id == "emulator":
+        # Create a trace activity that contains the error object
+        trace_activity = Activity(
+            label="TurnError",
+            name="on_turn_error Trace",
+            timestamp=datetime.utcnow(),
+            type=ActivityTypes.trace,
+            value=f"{error}",
+            value_type="https://www.botframework.com/schemas/error",
+        )
+        # Send a trace activity, which will be displayed in Bot Framework Emulator
+        await context.send_activity(trace_activity)
 
 # Assign the error handler
 ADAPTER.on_turn_error = on_error
@@ -186,7 +206,12 @@ async def handle_text_message(turn_context: TurnContext, state):
         return
     
     # Send typing indicator
-    await turn_context.send_activity(MessageFactory.typing())
+    try:
+        from botbuilder.core import MessageFactory
+        await turn_context.send_activity(MessageFactory.typing())
+    except ImportError:
+        # If MessageFactory isn't available, continue without the typing indicator
+        pass
     
     # Send message to the backend and get response
     params = {
@@ -230,7 +255,11 @@ async def handle_text_message(turn_context: TurnContext, state):
 async def initialize_chat(turn_context: TurnContext, state, context=None):
     try:
         # Send typing indicator
-        await turn_context.send_activity(MessageFactory.typing())
+        try:
+            from botbuilder.core import MessageFactory
+            await turn_context.send_activity(MessageFactory.typing())
+        except ImportError:
+            pass
         
         # Prepare data for initialization
         data = {}
@@ -270,7 +299,11 @@ async def initialize_chat(turn_context: TurnContext, state, context=None):
 async def send_message(turn_context: TurnContext, state):
     try:
         # Send typing indicator
-        await turn_context.send_activity(MessageFactory.typing())
+        try:
+            from botbuilder.core import MessageFactory
+            await turn_context.send_activity(MessageFactory.typing())
+        except ImportError:
+            pass
         
         # Get the latest message from the thread
         params = {
@@ -322,22 +355,30 @@ async def send_welcome_message(turn_context: TurnContext):
 # FastAPI endpoint to handle Bot Framework messages
 @app.post("/api/messages")
 async def messages(req: Request) -> Response:
-    # Create a response
-    res = Response()
+    # Check content type
+    if "application/json" not in req.headers.get("Content-Type", ""):
+        return Response(content="Unsupported Media Type", status_code=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
     
-    # Process the message
+    # Get the request body
     body = await req.json()
+    
+    # Parse the activity
     activity = Activity().deserialize(body)
+    
+    # Get authentication header
     auth_header = req.headers.get("Authorization", "")
     
+    # Process the activity
     try:
-        await ADAPTER.process_activity(activity, auth_header, bot_logic)
-        return res
+        response = await ADAPTER.process_activity(activity, auth_header, bot_logic)
+        if response:
+            return Response(content=json.dumps(response.body), status_code=response.status)
+        return Response(status_code=HTTPStatus.OK)
     except Exception as e:
         # Log any errors
         print(f"Error processing message: {str(e)}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        return Response(content=str(e), status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
 
 # Simple health check endpoint
 @app.get("/health")
@@ -348,6 +389,9 @@ async def health_check():
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "Product Management Bot is running. Use the /api/messages endpoint."}
+
+# Import MessageFactory after FastAPI app is defined to avoid circular imports
+from botbuilder.core import MessageFactory
 
 # Run the app with uvicorn if executed directly
 if __name__ == "__main__":
