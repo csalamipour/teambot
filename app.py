@@ -195,7 +195,6 @@ async def handle_file_upload(turn_context: TurnContext, state):
             logger.error(f"Error processing file: {str(e)}")
             traceback.print_exc()
 
-# Download attachment content from Teams
 async def download_attachment(turn_context: TurnContext, attachment: Attachment):
     try:
         if attachment.content_url:
@@ -203,19 +202,39 @@ async def download_attachment(turn_context: TurnContext, attachment: Attachment)
                 turn_context.activity.service_url
             )
             
+            # Get the attachment content
             response = await connector.attachments.get_attachment_content(
                 attachment.content_url,
             )
             
-            if response:
+            # The response now needs to be converted to binary content
+            # In the Bot Framework, response is typically a stream that needs to be read
+            if hasattr(response, 'content') and hasattr(response.content, 'read'):
+                # If response has content attribute with read method
+                return await response.content.read()
+            elif hasattr(response, 'read'):
+                # If response itself has read method
+                return await response.read()
+            elif isinstance(response, bytes):
+                # If response is already bytes
                 return response
+            elif hasattr(response, 'content') and isinstance(response.content, bytes):
+                # If response has content as bytes
+                return response.content
+            else:
+                # Log the response type for debugging
+                logger.error(f"Unexpected response type: {type(response)}")
+                logger.error(f"Response dir: {dir(response)}")
+                if hasattr(response, 'content'):
+                    logger.error(f"Response.content type: {type(response.content)}")
+                    logger.error(f"Response.content dir: {dir(response.content)}")
+                return None
             
         return None
     except Exception as e:
         logger.error(f"Error downloading attachment: {str(e)}")
         traceback.print_exc()
         return None
-
 # Function to handle text messages
 async def handle_text_message(turn_context: TurnContext, state):
     user_message = turn_context.activity.text.strip()
