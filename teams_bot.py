@@ -1,398 +1,417 @@
 import os
-import sys
-import asyncio
-import aiohttp
-import base64
+import requests
+import json
+import logging
 import tempfile
-from typing import List, Dict, Any, Optional
-from botbuilder.core import ActivityHandler, TurnContext, CardFactory, MessageFactory
-from botbuilder.schema import (
-    Activity, ActivityTypes, Attachment, AttachmentData, 
-    ConversationReference, HeroCard, CardImage, CardAction, 
-    ActionTypes, ChannelAccount
-)
-from botbuilder.schema.teams import (
-    FileConsentCard, FileConsentCardResponse, FileDownloadInfo,
-    TeamsChannelAccount
-)
-from botframework.connector import Channels
-from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
-from botbuilder.schema.teams import MessagingExtensionAction, MessagingExtensionResult
+from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext, CardFactory
+from botbuilder.schema import Activity, Attachment, HeroCard, CardAction, ActionTypes
+from botbuilder.schema import ResourceResponse, ActivityTypes, MessageFactory
+from aiohttp import web
+from aiohttp.web import Request, Response
+import aiohttp
+import asyncio
 
-# API endpoint URL - update with your FastAPI server address
-API_BASE_URL = "copilotv2.azurewebsites.net"  # Change this to your deployed backend URL
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-# Store conversation state for each user
-conversation_state = {}
+# API Base URL - Update this to your FastAPI deployment
+API_BASE_URL = "https://copilotv2.azurewebsites.net"
 
-class TeamsBot(ActivityHandler):
-    def __init__(self):
-        """Initialize the TeamsBot."""
-        self.client_session = None
-        super().__init__()
+# Bot credentials - Replace with your values from Azure Bot registration
+APP_ID = os.environ.get("MicrosoftAppId", "")
+APP_PASSWORD = os.environ.get("MicrosoftAppPassword", "")
+
+# Configure the Bot Framework adapter
+SETTINGS = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
+ADAPTER = BotFrameworkAdapter(SETTINGS)
+
+# Error handler
+async def on_error(context: TurnContext, error: Exception):
+    logger.error(f"Error: {str(error)}")
+    await context.send_activity("Sorry, an error occurred. Please try again.")
     
+ADAPTER.on_turn_error = on_error
+
+# Store session state (in-memory for demo, use Azure Storage or Redis for production)
+SESSION_STORE = {}
+
+# Initialize or get session data
+def get_session_data(user_id):
+    if user_id not in SESSION_STORE:
+        SESSION_STORE[user_id] = {
+            "assistant_id": None,
+            "session_id": None,
+            "vector_store_id": None,
+            "uploaded_files": []
+        }
+    return SESSION_STORE[user_id]
+
+# Main bot functionality
+class ProductManagementBot:
     async def on_turn(self, turn_context: TurnContext):
-        """Process incoming activities and initialize HTTP session."""
-        # Initialize aiohttp session if not already created
-        if self.client_session is None:
-            self.client_session = aiohttp.ClientSession()
+        if turn_context.activity.type == ActivityTypes.message:
+            await self.on_message_activity(turn_context)
+        elif turn_context.activity.type == ActivityTypes.conversation_update:
+            # Handle conversation update (e.g., bot added to conversation)
+            for member in turn_context.activity.members_added or []:
+                if member.id != turn_context.activity.recipient.id:
+                    # New user added - send welcome message
+                    await self.send_welcome_message(turn_context)
+
+    async def send_welcome_message(self, turn_context: TurnContext):
+        welcome_text = (
+            "# Welcome to the Product Management Bot!\n\n"
+            "I can help you create documentation and analyze various file types. "
+            "You can interact with me in the following ways:\n\n"
+            "- **Upload a file** for analysis (CSV, Excel, PDF, etc.)\n"
+            "- **Chat with me** to create documentation\n"
+            "- **Start a new session** with `/new`\n"
+            "- **Create a new thread** with `/newthread`\n\n"
+            "Type `/help` for more details on what I can do!"
+        )
+        await turn_context.send_activity(welcome_text)
         
-        # Process the activity
-        await super().on_turn(turn_context)
-    
-    async def on_conversation_update_activity(self, turn_context: TurnContext):
-        """Handle conversation update activities."""
-        # When the bot is added to a conversation
-        if self._is_bot_added_activity(turn_context.activity):
-            await self._send_welcome_message(turn_context)
-        
-        # Call the parent handler
-        await super().on_conversation_update_activity(turn_context)
-    
-    async def on_message_activity(self, turn_context: TurnContext):
-        """Handle message activities (text messages from users)."""
-        # Get the conversation reference for storing state
-        conversation_ref = TurnContext.get_conversation_reference(turn_context.activity)
-        conversation_id = self._get_conversation_id(conversation_ref)
-        
-        # Initialize user state if not exists
-        if conversation_id not in conversation_state:
-            conversation_state[conversation_id] = {
-                "assistant_id": None,
-                "session_id": None,
-                "vector_store_id": None,
-                "thread_name": None,
-                "uploaded_files": []
-            }
-        
-        # Get the text from the activity
-        text = turn_context.activity.text.strip()
-        
-        # Check for commands
-        if text.lower() == "/start":
-            await self._handle_start_command(turn_context, conversation_id)
-        elif text.lower() == "/newthread":
-            await self._handle_new_thread_command(turn_context, conversation_id)
-        elif text.lower() == "/help":
-            await self._send_help_message(turn_context)
-        elif text.lower() == "/status":
-            await self._handle_status_command(turn_context, conversation_id)
-        else:
-            # Process as a regular message for conversation
-            await self._handle_conversation(turn_context, conversation_id, text)
-    
-    async def on_teams_file_consent_accept(self, turn_context: TurnContext, file_consent_card_response: FileConsentCardResponse):
-        """Handle when a user accepts a file upload request."""
-        try:
-            conversation_ref = TurnContext.get_conversation_reference(turn_context.activity)
-            conversation_id = self._get_conversation_id(conversation_ref)
-            
-            # Download the file that the user has accepted to upload
-            file_data = await self._download_file(file_consent_card_response.upload_info.upload_url)
-            
-            # Get the file name
-            file_name = file_consent_card_response.upload_info.name
-            
-            # Upload the file to our backend API
-            await self._upload_file_to_api(turn_context, conversation_id, file_name, file_data)
-            
-            # Send acknowledgment
-            await turn_context.send_activity(f"File '{file_name}' uploaded successfully!")
-            
-        except Exception as e:
-            await turn_context.send_activity(f"Error processing file: {str(e)}")
-    
-    async def on_teams_file_consent_decline(self, turn_context: TurnContext, file_consent_card_response: FileConsentCardResponse):
-        """Handle when a user declines a file upload request."""
-        await turn_context.send_activity("File upload was canceled.")
-    
-    async def _handle_start_command(self, turn_context: TurnContext, conversation_id: str):
-        """Initialize a new chat session."""
-        try:
-            # Show typing indicator
-            await self._send_typing_indicator(turn_context)
-            
-            # Call initiate-chat endpoint
-            async with self.client_session.post(f"{API_BASE_URL}/initiate-chat") as response:
-                if response.status == 200:
-                    result = await response.json()
-                    
-                    # Store the session data
-                    conversation_state[conversation_id]["assistant_id"] = result.get("assistant")
-                    conversation_state[conversation_id]["session_id"] = result.get("session")
-                    conversation_state[conversation_id]["vector_store_id"] = result.get("vector_store")
-                    conversation_state[conversation_id]["thread_name"] = "Default Thread"
-                    
-                    await turn_context.send_activity(
-                        "✅ New assistant created! You can start chatting now.\n\n"
-                        "📤 Upload files by attaching them to a message.\n"
-                        "🧵 Create a new thread with /newthread\n"
-                        "❓ Get help with /help"
-                    )
-                else:
-                    error_text = await response.text()
-                    await turn_context.send_activity(f"Error creating assistant: {error_text}")
-        except Exception as e:
-            await turn_context.send_activity(f"Error starting chat: {str(e)}")
-    
-    async def _handle_new_thread_command(self, turn_context: TurnContext, conversation_id: str):
-        """Create a new thread with the existing assistant."""
-        try:
-            # Get current state
-            state = conversation_state.get(conversation_id, {})
-            assistant_id = state.get("assistant_id")
-            vector_store_id = state.get("vector_store_id")
-            
-            if not assistant_id or not vector_store_id:
-                await turn_context.send_activity("Please start a chat first with /start")
-                return
-            
-            # Show typing indicator
-            await self._send_typing_indicator(turn_context)
-            
-            # Call co-pilot endpoint
-            data = {
-                "assistant": assistant_id,
-                "vector_store": vector_store_id,
-                "context": "",  # Optional context could be added here
-                "thread_name": f"Teams Thread {len(conversation_state)}"
-            }
-            
-            async with self.client_session.post(
-                f"{API_BASE_URL}/co-pilot", 
-                data=data
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    
-                    # Update session ID
-                    conversation_state[conversation_id]["session_id"] = result.get("session")
-                    
-                    await turn_context.send_activity("✅ New thread created! You can continue chatting.")
-                else:
-                    error_text = await response.text()
-                    await turn_context.send_activity(f"Error creating new thread: {error_text}")
-        except Exception as e:
-            await turn_context.send_activity(f"Error creating new thread: {str(e)}")
-    
-    async def _handle_status_command(self, turn_context: TurnContext, conversation_id: str):
-        """Show current conversation status."""
-        state = conversation_state.get(conversation_id, {})
-        
-        if not state.get("assistant_id"):
-            await turn_context.send_activity("No active chat session. Start with /start")
-            return
-        
-        status_message = (
-            "📊 **Current Status**\n\n"
-            f"👨‍💼 Assistant ID: `{state.get('assistant_id', 'None')}`\n"
-            f"💬 Session ID: `{state.get('session_id', 'None')}`\n"
-            f"🧵 Thread Name: {state.get('thread_name', 'Default')}\n"
-            f"📁 Uploaded Files: {len(state.get('uploaded_files', []))}"
+        # Create a card with buttons for common actions
+        card = HeroCard(
+            title="What would you like to do?",
+            buttons=[
+                CardAction(
+                    type=ActionTypes.im_back,
+                    title="Start New Session",
+                    value="/new"
+                ),
+                CardAction(
+                    type=ActionTypes.im_back,
+                    title="Help",
+                    value="/help"
+                )
+            ]
         )
         
-        if state.get("uploaded_files"):
-            status_message += "\n\n**Files:**\n" + "\n".join(
-                [f"- {file}" for file in state.get("uploaded_files", [])]
-            )
+        message = MessageFactory.attachment(CardFactory.hero_card(card))
+        await turn_context.send_activity(message)
+
+    async def on_message_activity(self, turn_context: TurnContext):
+        user_id = turn_context.activity.from_property.id
+        channel_id = turn_context.activity.channel_id
+        conversation_id = turn_context.activity.conversation.id
         
-        await turn_context.send_activity(status_message)
-    
-    async def _handle_conversation(self, turn_context: TurnContext, conversation_id: str, text: str):
-        """Handle a regular conversation message."""
-        # Get current state
-        state = conversation_state.get(conversation_id, {})
+        # Create a unique ID for this user-conversation combo
+        user_session_id = f"{user_id}_{conversation_id}_{channel_id}"
+        session_data = get_session_data(user_session_id)
         
-        # Check if we have an active session
-        if not state.get("session_id") or not state.get("assistant_id"):
-            await turn_context.send_activity(
-                "You need to start a chat first. Use /start to create a new assistant."
-            )
-            return
+        # Get the message text
+        message_text = turn_context.activity.text.strip() if turn_context.activity.text else ""
         
         # Check for file attachments
         if turn_context.activity.attachments and len(turn_context.activity.attachments) > 0:
-            for attachment in turn_context.activity.attachments:
-                # Handle file attachment
-                if attachment.content_type != "text/html":
-                    await self._handle_file_attachment(turn_context, conversation_id, attachment)
+            await self._process_file_attachment(turn_context, session_data)
             return
         
-        try:
-            # Show typing indicator
-            await self._send_typing_indicator(turn_context)
-            
-            # Call conversation endpoint
-            session_id = state.get("session_id")
-            assistant_id = state.get("assistant_id")
-            
-            # We'll use the non-streaming endpoint for Teams
-            params = {
-                "session": session_id,
-                "assistant": assistant_id,
-                "prompt": text,
-            }
-            
-            async with self.client_session.get(
-                f"{API_BASE_URL}/chat", 
-                params=params
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    assistant_response = result.get("response", "No response received")
-                    
-                    # Send the response
-                    await turn_context.send_activity(assistant_response)
-                else:
-                    error_text = await response.text()
-                    await turn_context.send_activity(f"Error getting response: {error_text}")
-        except Exception as e:
-            await turn_context.send_activity(f"Error processing message: {str(e)}")
+        # Check for commands
+        if message_text.startswith("/"):
+            await self._process_command(turn_context, message_text, session_data)
+            return
+        
+        # Process regular message as conversation
+        await self._process_conversation(turn_context, message_text, session_data)
     
-    async def _handle_file_attachment(self, turn_context: TurnContext, conversation_id: str, attachment: Attachment):
-        """Handle file attachments from the user."""
-        try:
-            # Get current state
-            state = conversation_state.get(conversation_id, {})
+    async def _process_file_attachment(self, turn_context: TurnContext, session_data):
+        # Process each attachment
+        for attachment in turn_context.activity.attachments:
+            # Check file type
+            content_type = attachment.content_type
+            file_name = attachment.name or "uploaded_file"
             
-            # Check if we have an active session
-            if not state.get("assistant_id"):
-                await turn_context.send_activity(
-                    "You need to start a chat first before uploading files. Use /start to create a new assistant."
-                )
-                return
-            
-            # Teams doesn't provide direct file content, so we need to use FileConsentCard
-            filename = attachment.name or "uploaded_file"
-            
-            # Create consent card for the user to approve file upload
-            consent_context = { "conversationId": conversation_id, "filename": filename }
-            
-            # Create file consent card
-            file_card = FileConsentCard(
-                description=f"Please approve to upload and process '{filename}'",
-                accept_context=consent_context,
-                decline_context=consent_context
-            )
-            
-            consent_attachment = CardFactory.file_consent_card(file_card)
-            
-            await turn_context.send_activity(MessageFactory.attachment(consent_attachment))
-            
-        except Exception as e:
-            await turn_context.send_activity(f"Error processing file attachment: {str(e)}")
-    
-    async def _upload_file_to_api(self, turn_context: TurnContext, conversation_id: str, filename: str, file_data: bytes):
-        """Upload a file to the backend API."""
-        try:
-            # Get current state
-            state = conversation_state.get(conversation_id, {})
-            assistant_id = state.get("assistant_id")
-            session_id = state.get("session_id")
-            
-            if not assistant_id:
-                await turn_context.send_activity("No active assistant. Please start a chat with /start first.")
-                return
-            
-            # Show typing indicator
-            await self._send_typing_indicator(turn_context)
-            
-            # Save file to temp location
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
-                tmp.write(file_data)
-                tmp_path = tmp.name
+            await turn_context.send_activity(f"Processing your file: {file_name}...")
             
             try:
-                # Create form data
-                data = aiohttp.FormData()
-                data.add_field('file', 
-                            open(tmp_path, 'rb'),
-                            filename=filename,
-                            content_type='application/octet-stream')
-                data.add_field('assistant', assistant_id)
+                # Download the file content
+                file_content = await self._get_file_content(turn_context, attachment)
+                if not file_content:
+                    await turn_context.send_activity("Could not download the file. Please try again.")
+                    continue
                 
-                # Add session ID if available
-                if session_id:
-                    data.add_field('session', session_id)
+                # Create a temporary file
+                with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as temp_file:
+                    temp_file.write(file_content)
+                    temp_path = temp_file.name
                 
-                # Upload file
-                async with self.client_session.post(
-                    f"{API_BASE_URL}/upload-file", 
-                    data=data
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
+                # Determine appropriate API call based on session state
+                if not session_data["assistant_id"]:
+                    # Initialize a new chat with the file
+                    await turn_context.send_activity("Creating a new assistant with your file...")
+                    
+                    with open(temp_path, 'rb') as file:
+                        files = {'file': (file_name, file)}
+                        response = requests.post(f"{API_BASE_URL}/initiate-chat", files=files)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        session_data["assistant_id"] = data["assistant"]
+                        session_data["session_id"] = data["session"]
+                        session_data["vector_store_id"] = data["vector_store"]
+                        session_data["uploaded_files"].append(file_name)
                         
-                        # Add to uploaded files list
-                        state["uploaded_files"].append(filename)
-                        
-                        # Notify the user
-                        await turn_context.send_activity(f"File '{filename}' uploaded and processed successfully!")
+                        await turn_context.send_activity(f"✅ Created a new assistant and uploaded {file_name}. Ask me anything about this file!")
                     else:
-                        error_text = await response.text()
-                        await turn_context.send_activity(f"Error uploading file: {error_text}")
-            finally:
-                # Clean up temp file
-                os.unlink(tmp_path)
+                        await turn_context.send_activity(f"❌ Failed to initialize chat with your file. Error: {response.status_code}")
+                else:
+                    # Upload to existing session
+                    with open(temp_path, 'rb') as file:
+                        files = {'file': (file_name, file)}
+                        data = {"assistant": session_data["assistant_id"]}
+                        
+                        if session_data["session_id"]:
+                            data["session"] = session_data["session_id"]
+                            
+                        response = requests.post(f"{API_BASE_URL}/upload-file", files=files, data=data)
+                    
+                    if response.status_code == 200:
+                        session_data["uploaded_files"].append(file_name)
+                        await turn_context.send_activity(f"✅ File '{file_name}' uploaded successfully! Ask me anything about this file.")
+                    else:
+                        await turn_context.send_activity(f"❌ Failed to upload file. Error: {response.status_code}")
                 
+                # Clean up the temporary file
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+                    
+            except Exception as e:
+                logger.error(f"Error processing file: {str(e)}")
+                await turn_context.send_activity(f"❌ Error processing your file: {str(e)}")
+    
+    async def _get_file_content(self, turn_context: TurnContext, attachment: Attachment):
+        try:
+            # If content is already available in the attachment
+            if hasattr(attachment, 'content') and attachment.content:
+                if isinstance(attachment.content, str):
+                    return attachment.content.encode('utf-8')
+                return attachment.content
+            
+            # If there's a content URL, download the file
+            if attachment.content_url:
+                connector = turn_context.adapter.create_connector_client(turn_context.activity.service_url)
+                
+                if "sharepoint" in attachment.content_url.lower() or "teams" in attachment.content_url.lower():
+                    # For Teams/Sharepoint files, use connector client for authentication
+                    response = await connector.conversations.get_attachment_file(
+                        attachment.content_url
+                    )
+                    return response
+                else:
+                    # For other URLs, try a direct download
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(attachment.content_url) as response:
+                            if response.status == 200:
+                                return await response.read()
+            
+            # If we couldn't get the content
+            return None
         except Exception as e:
-            await turn_context.send_activity(f"Error uploading file: {str(e)}")
+            logger.error(f"Error downloading file: {str(e)}")
+            return None
     
-    async def _download_file(self, download_url: str) -> bytes:
-        """Download a file from a URL."""
-        async with self.client_session.get(download_url) as response:
-            if response.status == 200:
-                return await response.read()
+    async def _process_command(self, turn_context: TurnContext, command: str, session_data):
+        cmd = command.lower()
+        
+        if cmd == "/start" or cmd == "/new":
+            # Start a new chat
+            await turn_context.send_activity("Creating a new assistant...")
+            
+            response = requests.post(f"{API_BASE_URL}/initiate-chat")
+            
+            if response.status_code == 200:
+                data = response.json()
+                session_data["assistant_id"] = data["assistant"]
+                session_data["session_id"] = data["session"]
+                session_data["vector_store_id"] = data["vector_store"]
+                session_data["uploaded_files"] = []
+                
+                await turn_context.send_activity("✅ Created a new assistant. How can I help you today?")
             else:
-                error_text = await response.text()
-                raise Exception(f"Error downloading file: {error_text}")
+                await turn_context.send_activity(f"❌ Failed to create assistant. Error: {response.status_code}")
+        
+        elif cmd == "/newthread":
+            # Create a new thread with existing assistant
+            if not session_data["assistant_id"]:
+                await turn_context.send_activity("❌ Please start a new chat first using /new")
+                return
+            
+            await turn_context.send_activity("Creating a new thread...")
+            
+            data = {
+                "assistant": session_data["assistant_id"],
+                "vector_store": session_data["vector_store_id"]
+            }
+            
+            response = requests.post(f"{API_BASE_URL}/co-pilot", data=data)
+            
+            if response.status_code == 200:
+                data = response.json()
+                session_data["session_id"] = data["session"]
+                
+                await turn_context.send_activity("✅ Created a new thread. How can I help you today?")
+            else:
+                await turn_context.send_activity(f"❌ Failed to create new thread. Error: {response.status_code}")
+        
+        elif cmd == "/clear":
+            # Clear the current thread history
+            if not session_data["session_id"]:
+                await turn_context.send_activity("❌ No active thread to clear.")
+                return
+                
+            await turn_context.send_activity("Clearing chat history for current thread...")
+            
+            # We don't have a direct clear-chat endpoint, so we'll just create a new thread
+            data = {
+                "assistant": session_data["assistant_id"],
+                "vector_store": session_data["vector_store_id"]
+            }
+            
+            response = requests.post(f"{API_BASE_URL}/co-pilot", data=data)
+            
+            if response.status_code == 200:
+                data = response.json()
+                session_data["session_id"] = data["session"]
+                
+                await turn_context.send_activity("✅ Chat history cleared. You're now in a new thread.")
+            else:
+                await turn_context.send_activity(f"❌ Failed to clear chat history. Error: {response.status_code}")
+        
+        elif cmd == "/files":
+            # Show uploaded files
+            if not session_data["uploaded_files"]:
+                await turn_context.send_activity("No files have been uploaded in this session.")
+            else:
+                files_list = "\n".join([f"- {file}" for file in session_data["uploaded_files"]])
+                await turn_context.send_activity(f"Uploaded files:\n{files_list}")
+        
+        elif cmd == "/help":
+            help_text = """
+# Available Commands
+
+- **/new** or **/start** - Start a new chat with a new assistant
+- **/newthread** - Create a new thread with the current assistant
+- **/clear** - Clear chat history (creates a new thread)
+- **/files** - List uploaded files
+- **/help** - Show this help message
+
+## Features
+- **Upload files** directly to be analyzed (CSV, Excel, PDF, images, etc.)
+- **Create documentation** by chatting with the assistant
+- **Analyze data** by uploading data files
+
+## Tips
+- If you upload a file, you can ask questions about it
+- Start a new thread when changing topics
+- Clear chat history to start fresh while keeping the context
+            """
+            await turn_context.send_activity(help_text)
+        
+        else:
+            await turn_context.send_activity(f"Unknown command: {command}\nUse /help to see available commands.")
     
-    async def _send_welcome_message(self, turn_context: TurnContext):
-        """Send a welcome message when the bot is added to a conversation."""
-        welcome_text = (
-            "# 👋 Welcome to the Product Management Bot!\n\n"
-            "I can help you create documentation and analyze various file types.\n\n"
-            "## Getting Started\n"
-            "- Use **/start** to create a new assistant\n"
-            "- Simply send messages to chat with me\n"
-            "- Attach files to upload them for analysis\n"
-            "- Use **/newthread** to create a new thread\n"
-            "- Use **/help** to see all available commands\n\n"
-            "Let's get started! Type **/start** to begin."
-        )
-        await turn_context.send_activity(welcome_text)
-    
-    async def _send_help_message(self, turn_context: TurnContext):
-        """Send a help message with available commands."""
-        help_text = (
-            "# 🛠️ Product Management Bot - Help\n\n"
-            "## Available Commands\n"
-            "- **/start** - Create a new assistant and start a chat\n"
-            "- **/newthread** - Create a new thread with the current assistant\n"
-            "- **/status** - Show current session information\n"
-            "- **/help** - Show this help message\n\n"
-            "## Features\n"
-            "- Chat with the AI assistant by typing messages\n"
-            "- Upload files by attaching them to a message\n"
-            "- Analyze CSV/Excel files automatically\n"
-            "- Generate PRDs and other product documentation\n"
-        )
-        await turn_context.send_activity(help_text)
-    
-    async def _send_typing_indicator(self, turn_context: TurnContext):
-        """Send a typing indicator to show the bot is processing."""
-        typing_activity = Activity(
-            type=ActivityTypes.typing,
-            recipient=turn_context.activity.from_property,
-            from_property=turn_context.activity.recipient
-        )
-        await turn_context.send_activity(typing_activity)
-    
-    def _is_bot_added_activity(self, activity: Activity) -> bool:
-        """Check if the activity is about the bot being added to conversation."""
-        members_added = activity.members_added or []
-        return any(member.id == activity.recipient.id for member in members_added)
-    
-    def _get_conversation_id(self, conversation_ref: ConversationReference) -> str:
-        """Get a unique ID for the conversation."""
-        return f"{conversation_ref.channel_id}:{conversation_ref.conversation.id}"
+    async def _process_conversation(self, turn_context: TurnContext, message: str, session_data):
+        # Check if we have an active session
+        if not session_data["assistant_id"] or not session_data["session_id"]:
+            # Initialize a new chat
+            await turn_context.send_activity("Starting a new chat session...")
+            
+            response = requests.post(f"{API_BASE_URL}/initiate-chat")
+            
+            if response.status_code == 200:
+                data = response.json()
+                session_data["assistant_id"] = data["assistant"]
+                session_data["session_id"] = data["session"]
+                session_data["vector_store_id"] = data["vector_store"]
+                
+                await turn_context.send_activity("✅ Created a new assistant. Now processing your message...")
+            else:
+                await turn_context.send_activity(f"❌ Failed to create assistant. Error: {response.status_code}")
+                return
+        
+        # Show typing indicator
+        await turn_context.send_activities([Activity(type=ActivityTypes.typing)])
+        
+        # Use the non-streaming chat endpoint
+        params = {
+            "session": session_data["session_id"],
+            "assistant": session_data["assistant_id"],
+            "prompt": message,
+        }
+        
+        try:
+            # Make the request to the API
+            response = requests.get(f"{API_BASE_URL}/chat", params=params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                response_text = data.get("response", "I didn't receive a proper response. Please try again.")
+                
+                # Check if the response is too long for a single message
+                if len(response_text) > 4000:
+                    # Split into chunks
+                    chunks = [response_text[i:i+4000] for i in range(0, len(response_text), 4000)]
+                    for chunk in chunks:
+                        await turn_context.send_activity(chunk)
+                else:
+                    # Send the full response
+                    await turn_context.send_activity(response_text)
+            else:
+                error_text = f"❌ Failed to get a response. Status code: {response.status_code}"
+                try:
+                    error_data = response.json()
+                    error_text += f"\nError: {json.dumps(error_data)}"
+                except:
+                    error_text += f"\nError: {response.text[:100]}"
+                
+                await turn_context.send_activity(error_text)
+        
+        except Exception as e:
+            logger.error(f"Error in conversation: {str(e)}")
+            await turn_context.send_activity(f"❌ Error processing your message: {str(e)}")
+
+# HTTP server setup
+APP = web.Application()
+
+# Process bot messages
+async def messages(req: Request) -> Response:
+    # Convert from aiohttp request to botbuilder activity
+    if "application/json" in req.headers["Content-Type"]:
+        body = await req.json()
+    else:
+        return Response(status=415)
+
+    # Create an activity object from the received payload
+    activity = Activity().deserialize(body)
+    auth_header = req.headers["Authorization"] if "Authorization" in req.headers else ""
+
+    # Call the bot's on_turn function and get a response
+    bot_response = await ADAPTER.process_activity(activity, auth_header, bot.on_turn)
+    if bot_response:
+        return Response(body=json.dumps(bot_response.body), status=bot_response.status)
+    return Response(status=201)
+
+# Create the bot instance
+bot = ProductManagementBot()
+
+# Set up HTTP route for Bot Framework
+APP.router.add_post("/api/messages", messages)
+
+# Health check endpoint
+async def health_check(req: Request) -> Response:
+    return Response(text="Bot is running!", status=200)
+
+APP.router.add_get("/", health_check)
+
+# Run the server
+if __name__ == "__main__":
+    try:
+        port = int(os.environ.get("PORT", 3978))
+        web.run_app(APP, host="0.0.0.0", port=port)
+    except Exception as e:
+        logger.error(f"Error running app: {e}")
