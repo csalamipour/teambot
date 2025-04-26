@@ -42,7 +42,7 @@ from botbuilder.schema import (
 )
 
 from botbuilder.schema.teams import (
-    FileDownloadInfo
+    FileDownloadInfo,
     FileConsentCard,
     FileConsentCardResponse,
     FileInfoCard,
