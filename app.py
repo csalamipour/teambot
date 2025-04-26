@@ -103,7 +103,69 @@ def create_client():
         api_key=AZURE_API_KEY,
         api_version=AZURE_API_VERSION,
     )
-
+async def upload_file_to_openai_thread(client: AzureOpenAI, file_content: bytes, filename: str, thread_id: str, message_content: str = None):
+    """
+    Uploads a file directly to OpenAI and attaches it to a thread.
+    
+    Args:
+        client: Azure OpenAI client
+        file_content: Raw file content bytes
+        filename: Name of the file
+        thread_id: Thread ID to attach the file to
+        message_content: Optional message content to include with the file
+        
+    Returns:
+        Dictionary with upload result information
+    """
+    try:
+        # Create a temporary file for upload
+        with tempfile.NamedTemporaryFile(delete=False, suffix='_' + filename) as temp:
+            temp.write(file_content)
+            temp_path = temp.name
+        
+        logging.info(f"Uploading file {filename} directly to OpenAI for thread {thread_id}")
+        
+        try:
+            # Upload the file to OpenAI
+            with open(temp_path, "rb") as file_data:
+                file_obj = client.files.create(
+                    file=file_data,
+                    purpose="assistants"
+                )
+            
+            file_id = file_obj.id
+            logging.info(f"File uploaded to OpenAI with ID: {file_id}")
+            
+            # Create a message with the file attachment
+            message_text = message_content or f"I've uploaded a file named '{filename}'. Please analyze this file."
+            
+            # Create a message with the file attachment
+            message = client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=message_text,
+                file_ids=[file_id]
+            )
+            
+            logging.info(f"File {filename} (ID: {file_id}) attached to thread {thread_id}")
+            
+            return {
+                "message": f"File {filename} uploaded and attached to thread",
+                "filename": filename,
+                "file_id": file_id,
+                "thread_id": thread_id,
+                "processing_method": "thread_attachment"
+            }
+            
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+    except Exception as e:
+        logging.error(f"Error uploading file to OpenAI: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to upload file to OpenAI: {str(e)}")
 def update_operation_status(operation_id: str, status: str, progress: float, message: str):
     """Update the status of a long-running operation."""
     operation_statuses[operation_id] = {
@@ -361,20 +423,21 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                 return
             
             # Process based on file type
+            client = create_client()
+            
             if is_image:
-                # Analyze image
+                # Analyze image - same as before
                 analysis_text = await image_analysis_internal(file_content, filename)
                 
                 # Add analysis to the thread
                 if state["session_id"]:
-                    client = create_client()
                     client.beta.threads.messages.create(
                         thread_id=state["session_id"],
                         role="user",
                         content=f"Analysis result for uploaded image '{filename}':\n{analysis_text}"
                     )
                     
-                    # Add image file awareness - direct function call
+                    # Add image file awareness
                     await add_file_awareness_internal(
                         state["session_id"], 
                         {
@@ -391,62 +454,114 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                     await turn_context.send_activity("Cannot process image: No active conversation session.")
                     
             elif is_document:
-                # If assistant and session exist, upload to vector store
+                # Use the new direct file upload approach for documents
                 if state["assistant_id"] and state["session_id"]:
-                    client = create_client()
+                    # Send a typing indicator
+                    await turn_context.send_activity(create_typing_activity())
                     
-                    # Get current vector store IDs
-                    assistant_obj = client.beta.assistants.retrieve(assistant_id=state["assistant_id"])
-                    vector_store_ids = []
+                    # Upload the file directly to the thread
+                    message_content = f"I've uploaded a document named '{filename}'. Please use this document to answer my questions."
                     
-                    if hasattr(assistant_obj, 'tool_resources') and assistant_obj.tool_resources:
-                        file_search_resources = getattr(assistant_obj.tool_resources, 'file_search', None)
-                        if file_search_resources and hasattr(file_search_resources, 'vector_store_ids'):
-                            vector_store_ids = list(file_search_resources.vector_store_ids)
-                    
-                    # Ensure a vector store exists
-                    if not vector_store_ids:
-                        vector_store = client.beta.vector_stores.create(name=f"Assistant_{state['assistant_id']}_Store")
-                        vector_store_ids = [vector_store.id]
-                        state["vector_store_id"] = vector_store.id
-                    else:
-                        state["vector_store_id"] = vector_store_ids[0]
-                    
-                    # Create a temporary file for uploading to vector store
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='_' + filename) as temp:
-                        temp.write(file_content)
-                        temp_path = temp.name
-                    
+                    # Use the new OpenAI direct file upload approach
                     try:
-                        # Upload to vector store
-                        with open(temp_path, "rb") as file_stream:
-                            file_batch = client.beta.vector_stores.file_batches.upload_and_poll(
-                                vector_store_id=vector_store_ids[0],
-                                files=[file_stream]
-                            )
+                        result = await upload_file_to_openai_thread(
+                            client,
+                            file_content,
+                            filename,
+                            state["session_id"],
+                            message_content
+                        )
                         
-                        # Add file awareness
+                        # Add to the list of uploaded files
+                        state["uploaded_files"].append(filename)
+                        
+                        # Add file awareness to the thread
                         await add_file_awareness_internal(
-                            state["session_id"], 
+                            state["session_id"],
                             {
                                 "name": filename,
                                 "type": file_ext[1:] if file_ext else "document",
-                                "processing_method": "vector_store"
+                                "processing_method": "thread_attachment"
                             }
                         )
                         
-                        await turn_context.send_activity(f"File '{filename}' uploaded successfully! You can now ask questions about it.")
-                        state["uploaded_files"].append(filename)
-                    finally:
-                        # Clean up temp file
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
+                        await turn_context.send_activity(f"Document '{filename}' uploaded successfully! You can now ask questions about it.")
+                        
+                    except Exception as upload_error:
+                        logger.error(f"Error uploading file to OpenAI: {str(upload_error)}")
+                        await turn_context.send_activity(f"Error uploading document: {str(upload_error)}")
+                        
+                        # Fall back to vector store approach if direct upload fails
+                        logger.info(f"Falling back to vector store approach for document '{filename}'")
+                        
+                        # Create a temporary file for vector store upload
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='_' + filename) as temp:
+                            temp.write(file_content)
+                            temp_path = temp.name
+                        
+                        try:
+                            # Get current vector store ID
+                            vector_store_id = state["vector_store_id"]
+                            if not vector_store_id:
+                                # Create a new vector store if needed
+                                vector_store = client.beta.vector_stores.create(name=f"Assistant_{state['assistant_id']}_Store")
+                                vector_store_id = vector_store.id
+                                state["vector_store_id"] = vector_store_id
+                            
+                            # Upload to vector store
+                            with open(temp_path, "rb") as file_stream:
+                                file_batch = client.beta.vector_stores.file_batches.upload_and_poll(
+                                    vector_store_id=vector_store_id,
+                                    files=[file_stream]
+                                )
+                            
+                            # Update assistant with file_search tool
+                            assistant_obj = client.beta.assistants.retrieve(assistant_id=state["assistant_id"])
+                            has_file_search = False
+                            
+                            for tool in assistant_obj.tools:
+                                if hasattr(tool, 'type') and tool.type == "file_search":
+                                    has_file_search = True
+                                    break
+                            
+                            if not has_file_search:
+                                current_tools = list(assistant_obj.tools)
+                                current_tools.append({"type": "file_search"})
+                                
+                                client.beta.assistants.update(
+                                    assistant_id=state["assistant_id"],
+                                    tools=current_tools,
+                                    tool_resources={"file_search": {"vector_store_ids": [vector_store_id]}}
+                                )
+                            
+                            # Add file awareness
+                            await add_file_awareness_internal(
+                                state["session_id"],
+                                {
+                                    "name": filename,
+                                    "type": file_ext[1:] if file_ext else "document",
+                                    "processing_method": "vector_store"
+                                }
+                            )
+                            
+                            # Add to the list of uploaded files
+                            state["uploaded_files"].append(filename)
+                            
+                            await turn_context.send_activity(f"Document '{filename}' uploaded to vector store successfully as a fallback method. You can now ask questions about it.")
+                            
+                        except Exception as fallback_error:
+                            await turn_context.send_activity(f"Failed to upload document via fallback method: {str(fallback_error)}")
+                        finally:
+                            # Clean up temp file
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
                 else:
                     await turn_context.send_activity("Cannot process document: No active assistant or session.")
             else:
                 await turn_context.send_activity(f"Unsupported file type: {file_ext}. Please upload PDF, DOC, DOCX, TXT files, or images.")
     except Exception as e:
         logger.error(f"Error processing file '{filename}': {e}")
+        traceback.print_exc()
         await turn_context.send_activity(f"Error processing file: {str(e)}")
     finally:
         # Clean up file
@@ -455,7 +570,6 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                 os.remove(file_path)
             except OSError as e:
                 logger.error(f"Error removing file {file_path}: {e}")
-
 # Function to send file to Teams
 async def send_file_to_teams(turn_context: TurnContext, filename: str):
     """Sends a file to the user in Teams using file consent card."""
@@ -1291,13 +1405,6 @@ async def upload_file_internal(client: AzureOpenAI, file: UploadFile, assistant:
         # Retrieve the assistant
         assistant_obj = client.beta.assistants.retrieve(assistant_id=assistant)
         
-        # Get current vector store IDs first
-        vector_store_ids = []
-        if hasattr(assistant_obj, 'tool_resources') and assistant_obj.tool_resources:
-            file_search_resources = getattr(assistant_obj.tool_resources, 'file_search', None)
-            if file_search_resources and hasattr(file_search_resources, 'vector_store_ids'):
-                vector_store_ids = list(file_search_resources.vector_store_ids)
-        
         # Handle CSV/Excel files - reject them
         if is_csv_excel:
             uploaded_file_details = {
@@ -1316,77 +1423,99 @@ async def upload_file_internal(client: AzureOpenAI, file: UploadFile, assistant:
                 )
                 
             logging.info(f"Rejected unsupported file type: {filename}")
-                
+        
         # Handle document files
         elif is_document:
-            # Ensure a vector store is linked or create one
-            if not vector_store_ids:
-                logging.info(f"No vector store linked to assistant {assistant}. Creating and linking a new one.")
-                vector_store = client.beta.vector_stores.create(name=f"Assistant_{assistant}_Store")
-                vector_store_ids = [vector_store.id]
-
-            vector_store_id_to_use = vector_store_ids[0]  # Use the first linked store
-
-            # Upload to vector store
-            with open(file_path, "rb") as file_stream:
-                file_batch = client.beta.vector_stores.file_batches.upload_and_poll(
-                    vector_store_id=vector_store_id_to_use,
-                    files=[file_stream]
-                )
-            uploaded_file_details = {
-                "message": "File successfully uploaded to vector store.",
-                "filename": filename,
-                "vector_store_id": vector_store_id_to_use,
-                "processing_method": "vector_store",
-                "batch_status": file_batch.status
-            }
-            
-            # If session provided, add file awareness message
+            # If a thread ID is provided, use the direct file upload approach
             if session:
+                # Use the new approach - upload file directly to thread
+                message_content = f"I've uploaded a document named '{filename}'. Please use this document to answer my questions."
+                uploaded_file_details = await upload_file_to_openai_thread(
+                    client, 
+                    file_content, 
+                    filename, 
+                    session, 
+                    message_content
+                )
+                
+                # Add file awareness
                 await add_file_awareness_internal(
                     thread_id=session, 
                     file_info={
                         "name": filename,
                         "type": file_ext[1:] if file_ext else "document",
-                        "processing_method": "vector_store"
+                        "processing_method": "thread_attachment"
                     }
                 )
                 
-            logging.info(f"Uploaded '{filename}' to vector store {vector_store_id_to_use} for assistant {assistant}")
-            
-            # Update assistant with file_search if needed
-            try:
-                has_file_search = False
-                for tool in assistant_obj.tools:
-                    if hasattr(tool, 'type') and tool.type == "file_search":
-                        has_file_search = True
-                        break
+                logging.info(f"Document '{filename}' uploaded and attached to thread {session}")
+            else:
+                # No thread ID - use the existing vector store approach
+                # Get current vector store IDs
+                vector_store_ids = []
+                if hasattr(assistant_obj, 'tool_resources') and assistant_obj.tool_resources:
+                    file_search_resources = getattr(assistant_obj.tool_resources, 'file_search', None)
+                    if file_search_resources and hasattr(file_search_resources, 'vector_store_ids'):
+                        vector_store_ids = list(file_search_resources.vector_store_ids)
                 
-                if not has_file_search:
-                    # Get full list of tools while preserving any existing tools
-                    current_tools = list(assistant_obj.tools)
-                    current_tools.append({"type": "file_search"})
+                # Ensure a vector store is linked or create one
+                if not vector_store_ids:
+                    logging.info(f"No vector store linked to assistant {assistant}. Creating and linking a new one.")
+                    vector_store = client.beta.vector_stores.create(name=f"Assistant_{assistant}_Store")
+                    vector_store_ids = [vector_store.id]
+
+                vector_store_id_to_use = vector_store_ids[0]  # Use the first linked store
+
+                # Upload to vector store
+                with open(file_path, "rb") as file_stream:
+                    file_batch = client.beta.vector_stores.file_batches.upload_and_poll(
+                        vector_store_id=vector_store_id_to_use,
+                        files=[file_stream]
+                    )
+                uploaded_file_details = {
+                    "message": "File successfully uploaded to vector store.",
+                    "filename": filename,
+                    "vector_store_id": vector_store_id_to_use,
+                    "processing_method": "vector_store",
+                    "batch_status": file_batch.status
+                }
+                
+                logging.info(f"Uploaded '{filename}' to vector store {vector_store_id_to_use} for assistant {assistant}")
+                
+                # Update assistant with file_search if needed
+                try:
+                    has_file_search = False
+                    for tool in assistant_obj.tools:
+                        if hasattr(tool, 'type') and tool.type == "file_search":
+                            has_file_search = True
+                            break
                     
-                    # Update the assistant
-                    client.beta.assistants.update(
-                        assistant_id=assistant,
-                        tools=current_tools,
-                        tool_resources={"file_search": {"vector_store_ids": vector_store_ids}}
-                    )
-                    logging.info(f"Added file_search tool to assistant {assistant}")
-                else:
-                    # Just update the vector store IDs if needed
-                    client.beta.assistants.update(
-                        assistant_id=assistant,
-                        tool_resources={"file_search": {"vector_store_ids": vector_store_ids}}
-                    )
-                    logging.info(f"Updated vector_store_ids for assistant {assistant}")
-            except Exception as e:
-                logging.error(f"Error updating assistant with file_search: {e}")
-                # Continue without failing the whole request
+                    if not has_file_search:
+                        # Get full list of tools while preserving any existing tools
+                        current_tools = list(assistant_obj.tools)
+                        current_tools.append({"type": "file_search"})
+                        
+                        # Update the assistant
+                        client.beta.assistants.update(
+                            assistant_id=assistant,
+                            tools=current_tools,
+                            tool_resources={"file_search": {"vector_store_ids": vector_store_ids}}
+                        )
+                        logging.info(f"Added file_search tool to assistant {assistant}")
+                    else:
+                        # Just update the vector store IDs if needed
+                        client.beta.assistants.update(
+                            assistant_id=assistant,
+                            tool_resources={"file_search": {"vector_store_ids": vector_store_ids}}
+                        )
+                        logging.info(f"Updated vector_store_ids for assistant {assistant}")
+                except Exception as e:
+                    logging.error(f"Error updating assistant with file_search: {e}")
+                    # Continue without failing the whole request
                 
         # Handle image files
         elif is_image and session:
+            # For images, keep the existing behavior (analyze and add to thread)
             analysis_text = await image_analysis_internal(file_content, filename, prompt)
             client.beta.threads.messages.create(
                 thread_id=session,
@@ -1401,15 +1530,14 @@ async def upload_file_internal(client: AzureOpenAI, file: UploadFile, assistant:
             }
             
             # Add file awareness message
-            if session:
-                await add_file_awareness_internal(
-                    thread_id=session, 
-                    file_info={
-                        "name": filename,
-                        "type": "image",
-                        "processing_method": "thread_message"
-                    }
-                )
+            await add_file_awareness_internal(
+                thread_id=session, 
+                file_info={
+                    "name": filename,
+                    "type": "image",
+                    "processing_method": "thread_message"
+                }
+            )
                 
             logging.info(f"Analyzed image '{filename}' and added to thread {session}")
         elif is_image:
@@ -1436,6 +1564,7 @@ async def upload_file_internal(client: AzureOpenAI, file: UploadFile, assistant:
     
     except Exception as e:
         logging.error(f"Error uploading file '{filename}' for assistant {assistant}: {e}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to upload or process file: {str(e)}")
     finally:
         # Clean up temporary file
@@ -1444,7 +1573,6 @@ async def upload_file_internal(client: AzureOpenAI, file: UploadFile, assistant:
                 os.remove(file_path)
             except OSError as e:
                 logging.error(f"Error removing temporary file {file_path}: {e}")
-
 # FastAPI endpoint for upload_file
 @app.post("/upload-file")
 async def upload_file(
