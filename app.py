@@ -38,10 +38,11 @@ from botbuilder.schema import (
     ConversationReference,
     ChannelAccount,
     ConversationAccount,
-    FileDownloadInfo
+    
 )
 
 from botbuilder.schema.teams import (
+    FileDownloadInfo
     FileConsentCard,
     FileConsentCardResponse,
     FileInfoCard,
