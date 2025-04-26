@@ -9,3 +9,11 @@ pydantic>=1.8.2
 aiohttp>=3.7.4
 msrest>=0.6.21
 typing-extensions>=4.1.0
+openai==1.60.0
+azure-identity
+azure-ai-ml
+azureml-inference-server-http
+pandas
+tabulate
+tables
+openpyxl
