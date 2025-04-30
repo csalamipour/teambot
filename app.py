@@ -887,6 +887,7 @@ async def send_file_to_teams(turn_context: TurnContext, filename: str):
     await turn_context.send_activity(reply)
 
 # Function to handle text messages
+# Function to handle text messages
 async def handle_text_message(turn_context: TurnContext, state):
     user_message = turn_context.activity.text.strip()
     conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
@@ -962,9 +963,10 @@ async def handle_text_message(turn_context: TurnContext, state):
         if state["session_id"] in active_runs:
             del active_runs[state["session_id"]]
             
-        await turn_context.send_activity(f"Error processing your message: {str(e)}")
-        logger.error(f"Error in handle_text_message: {str(e)}")
+        # Don't show raw error details to users
+        logging.error(f"Error in handle_text_message: {str(e)}")
         traceback.print_exc()
+        await turn_context.send_activity("I'm sorry, I encountered a problem while processing your message. Please try again.")
 # Initialize chat with the backend
 async def initialize_chat(turn_context: TurnContext, state=None, context=None):
     """Initialize a new chat session with the backend"""
@@ -1066,7 +1068,6 @@ async def send_message(turn_context: TurnContext, state):
         traceback.print_exc()
 
 # Stream response to Teams
-# Stream response to Teams
 async def stream_response_to_teams(turn_context: TurnContext, state, user_message):
     try:
         client = create_client()
@@ -1084,136 +1085,195 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
         active_runs[thread_id] = True
         
         try:
-            # Create the OpenAI streaming run
-            logging.info(f"Creating streaming run for thread {thread_id} with assistant {assistant_id}")
-            
-            # Store run ID before creating streaming run
-            # This way we can retrieve it later for polling
-            run_creation_response = None
+            # Check for any existing active runs on this thread first
+            active_run_id = None
             try:
-                # First create a normal run to get the ID
-                run_creation_response = client.beta.threads.runs.create(
+                runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
+                if runs.data:
+                    latest_run = runs.data[0]
+                    if latest_run.status in ["in_progress", "queued", "requires_action"]:
+                        active_run_id = latest_run.id
+                        logging.info(f"Found existing active run {active_run_id} with status {latest_run.status}")
+                        
+                        # Try to cancel the active run and wait for it to complete
+                        try:
+                            client.beta.threads.runs.cancel(thread_id=thread_id, run_id=active_run_id)
+                            logging.info(f"Requested cancellation of pre-existing run {active_run_id}")
+                            
+                            # Wait for cancellation (up to 8 seconds)
+                            for _ in range(4):
+                                await asyncio.sleep(2)
+                                run_status = client.beta.threads.runs.retrieve(
+                                    thread_id=thread_id, run_id=active_run_id
+                                )
+                                if run_status.status in ["cancelled", "completed", "failed", "expired"]:
+                                    logging.info(f"Pre-existing run {active_run_id} is now in state {run_status.status}")
+                                    break
+                                logging.info(f"Pre-existing run {active_run_id} still in state {run_status.status}, waiting...")
+                        except Exception as cancel_e:
+                            logging.warning(f"Error cancelling pre-existing run: {cancel_e}")
+            except Exception as check_e:
+                logging.warning(f"Error checking for existing runs: {check_e}")
+                # Continue even if we couldn't check for existing runs
+                
+            # Create message first
+            if user_message:
+                # First add the message to the thread
+                try:
+                    client.beta.threads.messages.create(
+                        thread_id=thread_id,
+                        role="user",
+                        content=user_message
+                    )
+                    logging.info(f"Added user message to thread {thread_id}")
+                except Exception as msg_e:
+                    if "while a run" in str(msg_e):
+                        logging.warning(f"Could not add message due to active run: {msg_e}")
+                        # Create a new thread as fallback and add message there
+                        new_thread = client.beta.threads.create()
+                        thread_id = new_thread.id
+                        state["session_id"] = thread_id
+                        logging.info(f"Created new thread {thread_id} due to message add failure")
+                        
+                        # Add the message to the new thread
+                        client.beta.threads.messages.create(
+                            thread_id=thread_id,
+                            role="user",
+                            content=user_message
+                        )
+                        logging.info(f"Added user message to new thread {thread_id}")
+                    else:
+                        logging.error(f"Error adding message to thread: {msg_e}")
+                        await turn_context.send_activity("I'm having trouble processing your request. Please try again in a moment.")
+                        raise Exception(f"Failed to add message: {str(msg_e)}")
+            
+            # First try the streaming approach
+            streaming_successful = False
+            try:
+                # Send a typing indicator before every major step
+                await teams_streamer.send_typing_indicator()
+                
+                # Create the OpenAI streaming run
+                logging.info(f"Creating streaming run for thread {thread_id} with assistant {assistant_id}")
+                
+                # Create the streaming run
+                run = client.beta.threads.runs.create(
+                    thread_id=thread_id,
+                    assistant_id=assistant_id,
+                    stream=True
+                )
+                
+                # Set timeout
+                stream_timeout = 110  # Max streaming time in seconds
+                start_time = time.time()
+                accumulated_text = ""
+                
+                # Handle the stream based on what methods it supports
+                if hasattr(run, "iter_chunks"):
+                    # Method 1: Using iter_chunks() (synchronous iteration)
+                    logging.info("Using iter_chunks() for streaming")
+                    
+                    # Need a run ID for possible later use
+                    run_id = None
+                    
+                    # Send a typing indicator before starting the stream
+                    await teams_streamer.send_typing_indicator()
+                    
+                    for chunk in run.iter_chunks():
+                        # Refresh typing indicator periodically
+                        if (time.time() - teams_streamer.last_update_time) >= 3:
+                            await teams_streamer.send_typing_indicator()
+                        
+                        # Check timeout
+                        if time.time() - start_time > stream_timeout:
+                            logging.warning("Stream timeout reached")
+                            break
+                        
+                        # Extract text from the chunk if available
+                        text_piece = ""
+                        
+                        if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
+                            delta = chunk.data.delta
+                            if hasattr(delta, "content") and delta.content:
+                                for content in delta.content:
+                                    if content.type == "text" and hasattr(content.text, "value"):
+                                        text_piece = content.text.value
+                        
+                        # Try to get run ID from chunk if we don't have it
+                        if not run_id and hasattr(chunk, "data") and hasattr(chunk.data, "id"):
+                            run_id = chunk.data.id
+                            logging.info(f"Extracted run ID from chunk: {run_id}")
+                        
+                        # Update the Teams response if we got text
+                        if text_piece:
+                            await teams_streamer.queue_update(text_piece)
+                            accumulated_text += text_piece
+                    
+                    # Streaming was successful
+                    streaming_successful = True
+                    
+                elif hasattr(run, "events"):
+                    # Method 2: Using events iterator
+                    logging.info("Using events iterator for streaming")
+                    
+                    # Send a typing indicator before starting the stream
+                    await teams_streamer.send_typing_indicator()
+                    
+                    for event in run.events:
+                        # Refresh typing indicator periodically
+                        if (time.time() - teams_streamer.last_update_time) >= 3:
+                            await teams_streamer.send_typing_indicator()
+                            
+                        # Check timeout
+                        if time.time() - start_time > stream_timeout:
+                            logging.warning("Stream timeout reached")
+                            break
+                        
+                        # Process different event types
+                        if event.event == "thread.message.delta":
+                            if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
+                                for content in event.data.delta.content:
+                                    if content.type == "text" and hasattr(content.text, "value"):
+                                        text_piece = content.text.value
+                                        await teams_streamer.queue_update(text_piece)
+                                        accumulated_text += text_piece
+                    
+                    # Streaming was successful
+                    streaming_successful = True
+                
+                else:
+                    # Stream object doesn't have expected attributes - use polling fallback
+                    logging.warning("Stream object doesn't have expected attributes, using fallback")
+                    streaming_successful = False
+                
+                # If we got text through streaming, send it
+                if streaming_successful and accumulated_text:
+                    logging.info("Streaming completed successfully")
+                    await teams_streamer.send_final_message()
+                    return
+            
+            except Exception as stream_e:
+                logging.error(f"Error during streaming: {stream_e}")
+                # Continue to fallback
+            
+            # If streaming failed or wasn't successful, use polling approach
+            if not streaming_successful:
+                logging.info("Using fallback polling approach for completion")
+                
+                # Send an interim message to the user
+                await turn_context.send_activity("I'm working on your request...")
+                
+                # Create a standard run
+                run = client.beta.threads.runs.create(
                     thread_id=thread_id,
                     assistant_id=assistant_id
                 )
-                run_id = run_creation_response.id
-                logging.info(f"Created run with ID: {run_id} for later reference")
+                run_id = run.id
+                logging.info(f"Created fallback run with ID: {run_id}")
                 
-                # Cancel this run since we'll create a streaming one
-                client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run_id)
-                logging.info(f"Cancelled initial run {run_id} to prepare for streaming")
-                
-                # Wait briefly for cancellation
-                await asyncio.sleep(1)
-            except Exception as pre_run_error:
-                logging.warning(f"Error in pre-run creation: {pre_run_error}")
-                # Continue without pre-run ID
-            
-            # Now create the streaming run
-            run = client.beta.threads.runs.create(
-                thread_id=thread_id,
-                assistant_id=assistant_id,
-                stream=True
-            )
-            
-            # Set timeout
-            stream_timeout = 110  # Max streaming time in seconds
-            start_time = time.time()
-            accumulated_text = ""
-            
-            # Handle the stream based on what methods it supports
-            if hasattr(run, "iter_chunks"):
-                # Method 1: Using iter_chunks() (synchronous iteration)
-                logging.info("Using iter_chunks() for streaming")
-                
-                for chunk in run.iter_chunks():
-                    # Check timeout
-                    if time.time() - start_time > stream_timeout:
-                        logging.warning("Stream timeout reached")
-                        break
-                    
-                    # Extract text from the chunk if available
-                    text_piece = ""
-                    
-                    if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
-                        delta = chunk.data.delta
-                        if hasattr(delta, "content") and delta.content:
-                            for content in delta.content:
-                                if content.type == "text" and hasattr(content.text, "value"):
-                                    text_piece = content.text.value
-                    
-                    # Check if we can get run ID from chunk
-                    if not run_id and hasattr(chunk, "data") and hasattr(chunk.data, "id"):
-                        run_id = chunk.data.id
-                        logging.info(f"Extracted run ID from chunk: {run_id}")
-                    
-                    # Update the Teams response if we got text
-                    if text_piece:
-                        await teams_streamer.queue_update(text_piece)
-                        accumulated_text += text_piece
-                
-                # Add some delay before final message
-                await asyncio.sleep(0.5)
-                
-            elif hasattr(run, "events"):
-                # Method 2: Using events iterator
-                logging.info("Using events iterator for streaming")
-                
-                for event in run.events:
-                    # Check timeout
-                    if time.time() - start_time > stream_timeout:
-                        logging.warning("Stream timeout reached")
-                        break
-                    
-                    # Try to extract run ID if we don't have it yet
-                    if not run_id and hasattr(event, "id"):
-                        parts = event.id.split("_")
-                        if len(parts) > 1:
-                            run_id = f"run_{parts[1]}"
-                            logging.info(f"Extracted run ID from event: {run_id}")
-                    
-                    # Process different event types
-                    if event.event == "thread.message.delta":
-                        if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
-                            for content in event.data.delta.content:
-                                if content.type == "text" and hasattr(content.text, "value"):
-                                    text_piece = content.text.value
-                                    await teams_streamer.queue_update(text_piece)
-                                    accumulated_text += text_piece
-                
-                # Add some delay before final message
-                await asyncio.sleep(0.5)
-                
-            else:
-                # Fallback: Poll for completion
-                logging.info("Using fallback polling approach for completion")
-                
-                # We need a run ID for polling - either from our pre-run or we need to create a new one
-                if not run_id:
-                    # We don't have a run ID yet, create a new non-streaming run
-                    logging.info("No run ID available, creating a new non-streaming run for polling")
-                    new_run = client.beta.threads.runs.create(
-                        thread_id=thread_id,
-                        assistant_id=assistant_id
-                    )
-                    run_id = new_run.id
-                    logging.info(f"Created new run with ID: {run_id} for polling")
-                else:
-                    # We have the run ID from pre-run, create a new one since we cancelled the first
-                    logging.info(f"Using pre-obtained run ID: {run_id} for polling")
-                    new_run = client.beta.threads.runs.create(
-                        thread_id=thread_id,
-                        assistant_id=assistant_id
-                    )
-                    run_id = new_run.id
-                    logging.info(f"Created new polling run with ID: {run_id}")
-                
-                # Send initial message
-                await turn_context.send_activity("I'm processing your request...")
-                
-                # Wait for completion with periodic typing indicators
+                # Poll for completion with periodic typing indicators
                 max_wait_time = 60  # seconds
-                wait_interval = 2   # seconds
+                wait_interval = 3   # seconds
                 elapsed_time = 0
                 
                 while elapsed_time < max_wait_time:
@@ -1236,38 +1296,45 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
                         
                         if messages.data:
                             latest_message = messages.data[0]
+                            accumulated_text = ""
                             for content_part in latest_message.content:
                                 if content_part.type == 'text':
                                     accumulated_text += content_part.text.value
-                        break
+                            
+                            # Send the final message directly
+                            if len(accumulated_text) > 7000:
+                                chunks = [accumulated_text[i:i+7000] for i in range(0, len(accumulated_text), 7000)]
+                                for i, chunk in enumerate(chunks):
+                                    if i == 0:
+                                        await turn_context.send_activity(chunk)
+                                    else:
+                                        await turn_context.send_activity(f"(continued) {chunk}")
+                            else:
+                                await turn_context.send_activity(accumulated_text)
+                            
+                            return
                     
                     elif run_status.status in ["failed", "cancelled", "expired"]:
-                        accumulated_text = f"I encountered an issue (status: {run_status.status}). Please try again."
-                        break
+                        await turn_context.send_activity("I had trouble processing your request. Please try again.")
+                        return
                     
                     # Wait before checking again
                     await asyncio.sleep(wait_interval)
                     elapsed_time += wait_interval
                 
                 # If we timed out
-                if elapsed_time >= max_wait_time and not accumulated_text:
-                    accumulated_text = "It's taking longer than expected to generate a response. Please try again or ask a different question."
-            
-            # Set the final accumulated text and send the message
-            for chunk in accumulated_text.split("\n"):
-                if chunk:
-                    await teams_streamer.queue_update(chunk + "\n")
-            
-            # Send the final complete message
-            await teams_streamer.send_final_message()
+                await turn_context.send_activity("It's taking longer than expected to generate a response. Please try again or ask a different question.")
+                return
                 
         except Exception as e:
-            error_msg = f"Error during streaming: {str(e)}"
+            error_msg = f"Error processing request: {str(e)}"
             logging.error(error_msg)
             traceback.print_exc()
-            await turn_context.send_activity(f"I encountered a technical issue: {str(e)}")
             
-            # Fallback to non-streaming
+            # Send a user-friendly error message, not the raw error
+            await turn_context.send_activity("I ran into a technical issue while processing your request. Please try again.")
+            
+            # Fallback to non-streaming only if necessary
             try:
                 logging.info("Falling back to non-streaming approach")
                 result = await process_conversation_internal(
@@ -1282,7 +1349,7 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
                     await turn_context.send_activity(result["response"])
             except Exception as fallback_e:
                 logging.error(f"Fallback also failed: {fallback_e}")
-                await turn_context.send_activity("I'm sorry, I couldn't process your request due to a technical issue.")
+                await turn_context.send_activity("I'm sorry, I couldn't process your request. Please try again later.")
         finally:
             # Mark run as complete
             state["active_run"] = False
@@ -1292,13 +1359,14 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
     except Exception as outer_e:
         logging.error(f"Outer error in stream_response_to_teams: {str(outer_e)}")
         traceback.print_exc()
-        await turn_context.send_activity("I encountered a technical issue. Please try again or start a new chat.")
+        
+        # User-friendly error message
+        await turn_context.send_activity("I encountered a problem while processing your request. Please try again or start a new chat.")
         
         # Ensure we mark run as complete even on error
         state["active_run"] = False
         if state.get("session_id") in active_runs:
-            del active_runs[state["session_id"]]
-
+            del active_runs[state.get("session_id", "")]
 # Send welcome message when bot is added
 async def send_welcome_message(turn_context: TurnContext):
     welcome_text = (
