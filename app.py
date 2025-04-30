@@ -116,51 +116,270 @@ def create_client():
         api_version=AZURE_API_VERSION,
     )
 class TeamsStreamingResponse:
-    """Handles streaming responses to Teams in a more controlled way"""
+    """
+    A helper class for streaming responses to Teams, following the StreamingResponse documentation.
+    This class properly implements the Teams streaming protocol.
+    """
     
     def __init__(self, turn_context):
-        self.turn_context = turn_context
-        self.message_parts = []
-        self.is_first_update = True
-        self.stream_id = f"stream_{int(time.time())}"
-        self.last_update_time = 0
-        self.min_update_interval = 1.0  # Minimum time between updates in seconds
-        
-    async def send_typing_indicator(self):
-        """Sends a typing indicator to Teams"""
-        await self.turn_context.send_activity(create_typing_activity())
-    
-    async def queue_update(self, text_chunk):
-        """Queues and potentially sends a text update"""
-        # Add to the accumulated text
-        self.message_parts.append(text_chunk)
-        
-        # Check if we should send an update
-        current_time = time.time()
-        if (current_time - self.last_update_time) >= self.min_update_interval:
-            await self.send_typing_indicator()
-            self.last_update_time = current_time
-    
-    def get_full_message(self):
-        """Gets the complete message from all chunks"""
-        return "".join(self.message_parts)
-    
-    async def send_final_message(self):
-        """Sends the final complete message, split if necessary"""
-        complete_message = self.get_full_message()
-        
-        # Split long messages if needed
-        if len(complete_message) > 7000:
-            chunks = [complete_message[i:i+7000] for i in range(0, len(complete_message), 7000)]
-            for i, chunk in enumerate(chunks):
-                if i == 0:
-                    await self.turn_context.send_activity(chunk)
-                else:
-                    await self.turn_context.send_activity(f"(continued) {chunk}")
+        """
+        Initializes a new instance of the `TeamsStreamingResponse` class.
+        :param turn_context: The turn context.
+        """
+        self._context = turn_context
+        self._next_sequence = 1
+        self._stream_id = ""
+        self._message = ""
+        self._attachments = []
+        self._ended = False
+        self._queue = []
+        self._queue_sync = None
+        self._chunk_queued = False
+
+    @property
+    def stream_id(self):
+        """
+        Access the Streaming Response's stream_id.
+        """
+        return self._stream_id
+
+    @property
+    def message(self):
+        """
+        Returns the most recently streamed message.
+        """
+        return self._message
+
+    def updates_sent(self):
+        """
+        Returns the number of updates sent.
+        """
+        return self._next_sequence - 1
+
+    def queue_informative_update(self, text):
+        """
+        Queue an informative update to be sent to the client.
+        :param text: The text of the update to be sent.
+        """
+        if self._ended:
+            raise Exception("The stream has already ended.")
+
+        # Queue a typing activity
+        activity = Activity(
+            type="typing",
+            text=text,
+            channel_data=StreamingChannelData(
+                stream_type="informative", 
+                stream_sequence=self._next_sequence
+            ).to_dict()
+        )
+        self.queue_activity(lambda: activity)
+        self._next_sequence += 1
+
+    def queue_text_chunk(self, text):
+        """
+        Queues a chunk of partial message text to be sent to the client.
+        The text will be sent as quickly as possible to the client. Chunks may be combined before
+        delivery to the client.
+        :param text: The text of the chunk to be sent.
+        """
+        if self._ended:
+            raise Exception("The stream has already ended.")
+
+        self._message += text
+
+        # Queue the next chunk
+        self.queue_next_chunk()
+
+    async def end_stream(self):
+        """
+        Ends the stream.
+        """
+        if self._ended:
+            raise Exception("The stream has already ended.")
+
+        # Queue final message
+        self._ended = True
+        self.queue_next_chunk()
+
+        # Wait for the queue to drain
+        await self.wait_for_queue()
+
+    async def wait_for_queue(self):
+        """
+        Waits for the outgoing activity queue to be empty.
+        """
+        if self._queue_sync:
+            await self._queue_sync
         else:
-            await self.turn_context.send_activity(complete_message)
+            await asyncio.sleep(0)
 
+    def queue_next_chunk(self):
+        """
+        Queues the next chunk of text to be sent.
+        """
+        if self._chunk_queued:
+            return
 
+        # Queue a chunk of text to be sent
+        self._chunk_queued = True
+
+        def _format_next_chunk():
+            """
+            Creates the next chunk activity to be sent.
+            """
+            self._chunk_queued = False
+            if self._ended:
+                return Activity(
+                    type="message",
+                    text=self._message,
+                    attachments=self._attachments,
+                    channel_data=StreamingChannelData(
+                        stream_type="final"
+                    ).to_dict()
+                )
+            activity = Activity(
+                type="typing",
+                text=self._message,
+                channel_data=StreamingChannelData(
+                    stream_type="streaming", 
+                    stream_sequence=self._next_sequence
+                ).to_dict()
+            )
+            self._next_sequence += 1
+            return activity
+
+        self.queue_activity(_format_next_chunk)
+
+    def queue_activity(self, factory):
+        """
+        Queues an activity to be sent to the client.
+        :param factory: A factory function that creates the activity to be sent.
+        """
+        self._queue.append(factory)
+
+        # If there's no sync in progress, start one
+        if not self._queue_sync:
+            try:
+                self._queue_sync = self.drain_queue()
+            except Exception as e:
+                raise Exception(f"Error occurred when sending activity while streaming: {e}")
+
+    def drain_queue(self):
+        """
+        Sends any queued activities to the client until the queue is empty.
+        """
+        async def _drain_queue():
+            try:
+                while len(self._queue) > 0:
+                    # Get next activity from queue
+                    factory = self._queue.pop(0)
+                    activity = factory()
+
+                    # Send activity
+                    await self.send_activity(activity)
+            finally:
+                # Queue is empty, mark as idle
+                self._queue_sync = None
+
+        return asyncio.create_task(_drain_queue())
+
+    async def send_activity(self, activity):
+        """
+        Sends an activity to the client and saves the stream ID returned.
+        :param activity: The activity to send.
+        """
+        # Set activity ID to the assigned stream ID
+        channel_data = StreamingChannelData.from_dict(activity.channel_data)
+
+        if self._stream_id:
+            channel_data.stream_id = self._stream_id
+            activity.channel_data = StreamingChannelData.to_dict(channel_data)
+
+        # Create streaming entity
+        entity = StreamingEntity(
+            stream_id=channel_data.stream_id,
+            stream_sequence=channel_data.stream_sequence,
+            stream_type=channel_data.stream_type
+        )
+        entities = [entity.to_dict()]
+        activity.entities = entities
+
+        # Send activity
+        response = await self._context.send_activity(activity)
+
+        # Save assigned stream ID
+        if not self._stream_id and response:
+            self._stream_id = response.id
+class StreamingChannelData:
+    """
+    A helper class for streaming channel data to Teams.
+    This matches the StreamingChannelData from the documentation.
+    """
+    def __init__(self, stream_type, stream_sequence=None, stream_id=None, feedback_loop_enabled=None, feedback_loop_type=None):
+        self.stream_type = stream_type
+        self.stream_sequence = stream_sequence
+        self.stream_id = stream_id
+        self.feedback_loop_enabled = feedback_loop_enabled
+        self.feedback_loop_type = feedback_loop_type
+
+    @staticmethod
+    def from_dict(channel_data_dict):
+        """Convert dictionary to StreamingChannelData object."""
+        if not channel_data_dict:
+            return StreamingChannelData(stream_type="streaming")
+        
+        return StreamingChannelData(
+            stream_type=channel_data_dict.get("stream_type", "streaming"),
+            stream_sequence=channel_data_dict.get("stream_sequence"),
+            stream_id=channel_data_dict.get("stream_id"),
+            feedback_loop_enabled=channel_data_dict.get("feedback_loop_enabled"),
+            feedback_loop_type=channel_data_dict.get("feedback_loop_type")
+        )
+    
+    @staticmethod
+    def to_dict(channel_data):
+        """Convert StreamingChannelData object to dictionary."""
+        result = {"stream_type": channel_data.stream_type}
+        
+        if channel_data.stream_sequence is not None:
+            result["stream_sequence"] = channel_data.stream_sequence
+            
+        if channel_data.stream_id:
+            result["stream_id"] = channel_data.stream_id
+            
+        if channel_data.feedback_loop_enabled is not None:
+            result["feedback_loop_enabled"] = channel_data.feedback_loop_enabled
+            
+        if channel_data.feedback_loop_type:
+            result["feedback_loop_type"] = channel_data.feedback_loop_type
+            
+        return result
+class StreamingEntity:
+    """
+    A helper class for streaming entity to Teams.
+    This matches the StreamingEntity from the documentation.
+    """
+    def __init__(self, stream_type, stream_sequence=None, stream_id=None):
+        self.type = "https://schema.org/Thing"  # Required for entity
+        self.stream_type = stream_type
+        self.stream_sequence = stream_sequence
+        self.stream_id = stream_id
+        
+    def to_dict(self):
+        """Convert to dictionary for adding to activity entities."""
+        result = {
+            "type": self.type,
+            "stream_type": self.stream_type
+        }
+        
+        if self.stream_sequence is not None:
+            result["stream_sequence"] = self.stream_sequence
+            
+        if self.stream_id:
+            result["stream_id"] = self.stream_id
+            
+        return result
 async def upload_file_to_openai_thread(client: AzureOpenAI, file_content: bytes, filename: str, thread_id: str, message_content: str = None):
     """
     Uploads a file directly to OpenAI and attaches it to a thread.
@@ -1557,24 +1776,25 @@ async def send_message(turn_context: TurnContext, state):
         traceback.print_exc()
 
 # Stream response to Teams
-# Stream response to Teams
 async def stream_response_to_teams(turn_context: TurnContext, state, user_message):
+    """
+    Streams a response to Teams using the proper streaming protocol.
+    This implementation follows the Teams streaming documentation.
+    """
     try:
         client = create_client()
         
         # Initialize our Teams-specific streaming handler
         teams_streamer = TeamsStreamingResponse(turn_context)
         
-        # Create a run with streaming=True
+        # Get thread and assistant IDs from state
         thread_id = state["session_id"]
         assistant_id = state["assistant_id"]
         
         # Mark run as active in state
-        state["active_run"] = True
+        with conversation_states_lock:
+            state["active_run"] = True
         active_runs[thread_id] = True
-        
-        # Send an initial typing indicator
-        await teams_streamer.send_typing_indicator()
         
         try:
             # First, add the user message to the thread
@@ -1626,204 +1846,116 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
                         await turn_context.send_activity("I'm having trouble processing your request. Please try again.")
                         raise
             
-            # Send a typing indicator to show we're working
-            await teams_streamer.send_typing_indicator()
+            # Send an informative update to indicate we're starting
+            teams_streamer.queue_informative_update("Processing your request...")
             
-            # Create a single run that we'll use for both streaming attempt and polling fallback
-            logging.info(f"Creating run for thread {thread_id}")
-            
-            # Create a non-streaming run first to have a guaranteed run ID
+            # Create a streaming run
+            logging.info(f"Creating streaming run for thread {thread_id}")
             run = client.beta.threads.runs.create(
                 thread_id=thread_id,
-                assistant_id=assistant_id
+                assistant_id=assistant_id,
+                stream=True
             )
-            run_id = run.id
-            logging.info(f"Created run with ID: {run_id}")
             
-            # Set up polling with typing indicators
-            max_wait_time = 120  # seconds
-            wait_interval = 2   # seconds
-            elapsed_time = 0
-            last_typing_time = time.time()
-            typing_interval = 3  # seconds
-            
-            # Poll for completion with periodic typing indicators
-            accumulated_text = ""
-            
-            while elapsed_time < max_wait_time:
-                # Send typing indicator periodically
-                current_time = time.time()
-                if current_time - last_typing_time >= typing_interval:
-                    await teams_streamer.send_typing_indicator()
-                    last_typing_time = current_time
-                
-                # Check run status
-                run_status = client.beta.threads.runs.retrieve(
-                    thread_id=thread_id,
-                    run_id=run_id
-                )
-                
-                if run_status.status == "completed":
-                    logging.info(f"Run {run_id} completed successfully")
+            # Process the streaming response
+            if hasattr(run, "iter_chunks"):
+                # Using iter_chunks synchronous iterator
+                logging.info("Using iter_chunks() for Teams streaming")
+                for chunk in run.iter_chunks():
+                    text_piece = ""
                     
-                    # Send one final typing indicator before fetching the result
-                    await teams_streamer.send_typing_indicator()
-                    
-                    # Get the complete message
-                    messages = client.beta.threads.messages.list(
-                        thread_id=thread_id,
-                        order="desc",
-                        limit=1
+                    if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
+                        delta = chunk.data.delta
+                        if hasattr(delta, "content") and delta.content:
+                            for content in delta.content:
+                                if content.type == "text" and hasattr(content.text, "value"):
+                                    text_piece = content.text.value
+                                    
+                    if text_piece:
+                        teams_streamer.queue_text_chunk(text_piece)
+                        # Small delay to make it work with asyncio
+                        await asyncio.sleep(0.01)
+                        
+            elif hasattr(run, "events"):
+                # Using events iterator
+                logging.info("Using events iterator for Teams streaming")
+                for event in run.events:
+                    if event.event == "thread.message.delta":
+                        if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
+                            for content in event.data.delta.content:
+                                if content.type == "text" and hasattr(content.text, "value"):
+                                    teams_streamer.queue_text_chunk(content.text.value)
+                                    await asyncio.sleep(0.01)
+            else:
+                # Fallback to polling
+                logging.info("Using fallback polling for Teams streaming")
+                teams_streamer.queue_informative_update("Working on your answer...")
+                
+                run_id = run.id
+                max_wait_time = 90  # seconds
+                wait_interval = 2   # seconds
+                elapsed_time = 0
+                
+                while elapsed_time < max_wait_time:
+                    run_status = client.beta.threads.runs.retrieve(
+                        thread_id=thread_id, 
+                        run_id=run_id
                     )
                     
-                    if messages.data:
-                        latest_message = messages.data[0]
-                        for content_part in latest_message.content:
-                            if content_part.type == 'text':
-                                accumulated_text += content_part.text.value
+                    if run_status.status == "completed":
+                        # Get the complete message
+                        messages = client.beta.threads.messages.list(
+                            thread_id=thread_id,
+                            order="desc",
+                            limit=1
+                        )
                         
-                        # Send the final message directly
-                        if len(accumulated_text) > 7000:
-                            chunks = [accumulated_text[i:i+7000] for i in range(0, len(accumulated_text), 7000)]
-                            for i, chunk in enumerate(chunks):
-                                if i == 0:
-                                    await turn_context.send_activity(chunk)
-                                else:
-                                    await turn_context.send_activity(f"(continued) {chunk}")
-                        else:
-                            await turn_context.send_activity(accumulated_text)
-                    else:
-                        await turn_context.send_activity("I processed your request, but couldn't generate a response.")
+                        if messages.data:
+                            latest_message = messages.data[0]
+                            full_text = ""
+                            for content_part in latest_message.content:
+                                if content_part.type == 'text':
+                                    full_text += content_part.text.value
+                            
+                            # Queue the full text as a chunk
+                            teams_streamer.queue_text_chunk(full_text)
+                        break
                     
-                    break
+                    elif run_status.status in ["failed", "cancelled", "expired"]:
+                        teams_streamer.queue_text_chunk(f"\nError: Run ended with status {run_status.status}. Please try again.")
+                        break
+                    
+                    # Send progress update
+                    if elapsed_time % 10 == 0 and elapsed_time > 0:  # Every 10 seconds
+                        teams_streamer.queue_informative_update(f"Still working on your answer... (elapsed: {elapsed_time}s)")
+                    
+                    await asyncio.sleep(wait_interval)
+                    elapsed_time += wait_interval
                 
-                elif run_status.status in ["failed", "cancelled", "expired"]:
-                    logging.error(f"Run ended with status: {run_status.status}")
-                    await turn_context.send_activity("I encountered an issue processing your request. Please try again.")
-                    break
-                
-                # Wait before checking again
-                await asyncio.sleep(wait_interval)
-                elapsed_time += wait_interval
+                if elapsed_time >= max_wait_time:
+                    teams_streamer.queue_text_chunk("Response timed out. Please try again.")
             
-            # If we timed out
-            if elapsed_time >= max_wait_time:
-                logging.warning(f"Run {run_id} timed out after {max_wait_time} seconds")
-                await turn_context.send_activity("It's taking longer than expected to generate a response. Please try again.")
-            
-            # No matter what happened with the run, make sure we mark it complete
-            state["active_run"] = False
-            if thread_id in active_runs:
-                del active_runs[thread_id]
+            # End the stream
+            await teams_streamer.end_stream()
             
         except Exception as inner_e:
             # Log the error but don't show technical details to the user
             logging.error(f"Error in streaming response: {str(inner_e)}")
             traceback.print_exc()
             
-            # Continue processing and try to generate a response anyway
+            # Try to end the stream if it's still active
             try:
-                # Only inform the user if the next steps also fail
-                handled = False
-                
-                # Create a new run with different thread/assistant if needed
-                if "while a run" in str(inner_e) or "already has an active run" in str(inner_e):
-                    # Create a new thread
-                    try:
-                        new_thread = client.beta.threads.create()
-                        old_thread = thread_id
-                        thread_id = new_thread.id
-                        state["session_id"] = thread_id
-                        logging.info(f"Created recovery thread {thread_id} to replace {old_thread}")
-                        
-                        # Add the message to the new thread
-                        if user_message:
-                            client.beta.threads.messages.create(
-                                thread_id=thread_id,
-                                role="user",
-                                content=user_message
-                            )
-                            logging.info(f"Added user message to recovery thread {thread_id}")
-                        
-                        # Create a new run
-                        recovery_run = client.beta.threads.runs.create(
-                            thread_id=thread_id,
-                            assistant_id=assistant_id
-                        )
-                        
-                        # Wait for completion
-                        max_recovery_attempts = 30  # 60 seconds
-                        for _ in range(max_recovery_attempts):
-                            # Send typing indicator
-                            await teams_streamer.send_typing_indicator()
-                            
-                            run_status = client.beta.threads.runs.retrieve(
-                                thread_id=thread_id,
-                                run_id=recovery_run.id
-                            )
-                            
-                            if run_status.status == "completed":
-                                # Get messages from the recovery thread
-                                messages = client.beta.threads.messages.list(
-                                    thread_id=thread_id,
-                                    order="desc",
-                                    limit=1
-                                )
-                                
-                                if messages.data:
-                                    latest_message = messages.data[0]
-                                    response_text = ""
-                                    for content_part in latest_message.content:
-                                        if content_part.type == 'text':
-                                            response_text += content_part.text.value
-                                    
-                                    # Send the response
-                                    if len(response_text) > 7000:
-                                        chunks = [response_text[i:i+7000] for i in range(0, len(response_text), 7000)]
-                                        for i, chunk in enumerate(chunks):
-                                            if i == 0:
-                                                await turn_context.send_activity(chunk)
-                                            else:
-                                                await turn_context.send_activity(f"(continued) {chunk}")
-                                    else:
-                                        await turn_context.send_activity(response_text)
-                                    handled = True
-                                    break
-                            
-                            elif run_status.status in ["failed", "cancelled", "expired"]:
-                                break
-                            
-                            await asyncio.sleep(2)
-                        
-                        if not handled:
-                            await turn_context.send_activity("I'm sorry, I couldn't process your request. Please try again.")
-                            handled = True
-                    except Exception as recovery_e:
-                        logging.error(f"Recovery attempt failed: {recovery_e}")
-                
-                # If no special handling worked, fall back to the standard approach
-                if not handled:
-                    # Try the standard process_conversation_internal as a final fallback
-                    result = await process_conversation_internal(
-                        client=client,
-                        session=state["session_id"],
-                        prompt=user_message,
-                        assistant=state["assistant_id"],
-                        stream_output=False
-                    )
-                    
-                    if isinstance(result, dict) and "response" in result:
-                        await turn_context.send_activity(result["response"])
-                    else:
-                        await turn_context.send_activity("I'm sorry, I couldn't process your request at this time.")
-            
-            except Exception as fallback_e:
-                logging.error(f"Final fallback failed: {fallback_e}")
-                await turn_context.send_activity("I'm sorry, I couldn't process your request. Please try again later.")
+                if not teams_streamer._ended:
+                    teams_streamer.queue_text_chunk("I'm sorry, I encountered an error while processing your request. Please try again.")
+                    await teams_streamer.end_stream()
+            except Exception as stream_e:
+                logging.error(f"Error ending stream after exception: {str(stream_e)}")
+                await turn_context.send_activity("I'm sorry, I encountered a problem while processing your request. Please try again.")
         
         finally:
             # Ensure run is marked as complete
-            state["active_run"] = False
+            with conversation_states_lock:
+                state["active_run"] = False
             if thread_id in active_runs:
                 del active_runs[thread_id]
     
@@ -1835,7 +1967,8 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
         await turn_context.send_activity("I encountered a problem while processing your request. Please try again or start a new chat.")
         
         # Ensure we mark run as complete even on error
-        state["active_run"] = False
+        with conversation_states_lock:
+            state["active_run"] = False
         if state.get("session_id") in active_runs:
             del active_runs[state.get("session_id", "")]
 # Send welcome message when bot is added
