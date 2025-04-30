@@ -388,7 +388,9 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
                         await turn_context.send_activity(f"Now addressing your {message_count} follow-up message(s) together...")
                         
                         # Process all messages in one request
-                        await handle_text_message_with_text(turn_context, state, f"Please answer all of these questions:\n{combined_message}")
+                        next_turn_context = copy.deepcopy(turn_context)
+                        next_turn_context.activity.text = f"Please answer all of these questions:\n{combined_message}"
+                        await handle_text_message(next_turn_context, state)
                 
                 # Send typing indicator
                 await turn_context.send_activity(create_typing_activity())
@@ -1179,136 +1181,6 @@ async def summarize_thread_if_needed(client: AzureOpenAI, thread_id: str, state:
         logging.error(f"Error summarizing thread: {str(e)}")
         traceback.print_exc()
         return False
-async def handle_text_message_with_text(turn_context: TurnContext, state, message_text: str):
-    """
-    Variant of handle_text_message that accepts a specific message text
-    instead of trying to extract it from the context.
-    """
-    conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-    conversation_id = conversation_reference.conversation.id
-    
-    # Extract user identity for security validation
-    user_id = turn_context.activity.from_property.id if hasattr(turn_context.activity, 'from_property') else "unknown"
-    
-    # Thread-safe access to state values
-    with conversation_states_lock:
-        stored_user_id = state.get("user_id")
-        stored_assistant_id = state.get("assistant_id")
-        stored_session_id = state.get("session_id")
-    
-    # Verify user identity matches state (double-check)
-    if stored_user_id and stored_user_id != user_id:
-        logging.warning(f"SECURITY ALERT: User mismatch detected in handle_text_message! Expected {stored_user_id}, got {user_id}")
-        # This is a severe security issue - reinitialize chat for this user
-        await turn_context.send_activity("For security reasons, I need to create a new conversation session.")
-        await initialize_chat(turn_context, None, context=message_text)
-        return
-    
-    # Record this user's message processing (audit trail)
-    logging.info(f"Processing message from user {user_id} in conversation {conversation_id}: {message_text[:50]}...")
-    
-    # If no assistant yet, initialize chat with the message as context
-    if not stored_assistant_id:
-        await initialize_chat(turn_context, state, context=message_text)
-        return
-    
-    # Send typing indicator
-    await turn_context.send_activity(create_typing_activity())
-    
-    # Check if thread needs summarization (with thread safety)
-    summarized = False
-    if stored_session_id:
-        client = create_client()
-        summarized = await summarize_thread_if_needed(client, stored_session_id, state, threshold=30)
-        
-        if summarized:
-            # Update stored_session_id after summarization (thread may have changed)
-            with conversation_states_lock:
-                stored_session_id = state.get("session_id")
-                
-            await turn_context.send_activity("I've summarized our previous conversation to maintain context while keeping the conversation focused.")
-    
-    # Mark thread as busy (thread-safe)
-    with conversation_states_lock:
-        state["active_run"] = True
-        current_session_id = state.get("session_id")
-    
-    if current_session_id:
-        active_runs[current_session_id] = True
-    
-    try:
-        # Double-verify resources before proceeding
-        client = create_client()
-        validation = await validate_resources(client, current_session_id, stored_assistant_id)
-        
-        # If any resource is invalid, force recovery
-        if not validation["thread_valid"] or not validation["assistant_valid"]:
-            logging.warning(f"Resource validation failed for user {user_id}: thread_valid={validation['thread_valid']}, assistant_valid={validation['assistant_valid']}")
-            raise Exception("Invalid conversation resources detected - forcing recovery")
-            
-        # Use streaming if supported by the channel
-        supports_streaming = turn_context.activity.channel_id == "msteams"
-        
-        if supports_streaming:
-            # Use streaming response for Teams
-            await stream_response_to_teams(turn_context, state, message_text)
-        else:
-            # Call the internal function directly without HTTP calls
-            result = await process_conversation_internal(
-                client=client,
-                session=current_session_id,
-                prompt=message_text,
-                assistant=stored_assistant_id,
-                stream_output=False
-            )
-            
-            # Extract text from response
-            if isinstance(result, dict) and "response" in result:
-                assistant_response = result["response"]
-            else:
-                assistant_response = "I'm sorry, I couldn't process your request."
-                
-            # Split long responses into chunks if needed (Teams has message size limits)
-            if len(assistant_response) > 7000:
-                chunks = [assistant_response[i:i+7000] for i in range(0, len(assistant_response), 7000)]
-                for i, chunk in enumerate(chunks):
-                    if i == 0:
-                        await turn_context.send_activity(chunk)
-                    else:
-                        await turn_context.send_activity(f"(continued) {chunk}")
-            else:
-                await turn_context.send_activity(assistant_response)
-        
-        # Mark thread as no longer busy (thread-safe)
-        with conversation_states_lock:
-            state["active_run"] = False
-            current_session_id = state.get("session_id")
-        
-        if current_session_id in active_runs:
-            del active_runs[current_session_id]
-        
-        # Check for queued messages - use the improved approach for queued messages
-        with pending_messages_lock:
-            if conversation_id in pending_messages and pending_messages[conversation_id]:
-                next_message = pending_messages[conversation_id].popleft()
-                await turn_context.send_activity("Now addressing your follow-up message...")
-                
-                # Use the new helper function instead of deepcopy
-                await handle_text_message_with_text(turn_context, state, next_message)
-            
-    except Exception as e:
-        # Mark thread as no longer busy even on error (thread-safe)
-        with conversation_states_lock:
-            state["active_run"] = False
-            current_session_id = state.get("session_id")
-            
-        if current_session_id in active_runs:
-            del active_runs[current_session_id]
-            
-        # Don't show raw error details to users
-        logging.error(f"Error in handle_text_message for user {user_id}: {str(e)}")
-        traceback.print_exc()
-        await turn_context.send_activity("I'm sorry, I encountered a problem while processing your message. Please try again.")
 
 # Modified handle_text_message with thread summarization
 async def handle_text_message(turn_context: TurnContext, state):
@@ -1419,12 +1291,22 @@ async def handle_text_message(turn_context: TurnContext, state):
         # Check for queued messages
         with pending_messages_lock:
             if conversation_id in pending_messages and pending_messages[conversation_id]:
+                # FIXED: Instead of deep copying the context, create a new Turn Context with necessary info
                 next_message = pending_messages[conversation_id].popleft()
                 await turn_context.send_activity("Now addressing your follow-up message...")
                 
-                # Instead of deep copying, just process the message with the original context
-                logging.info(f"Processing queued message: {next_message}")
-                await handle_text_message_with_text(turn_context, state, next_message)
+                # Process the message directly without copying the context
+                # Just pass the original context and update the message text
+                activity = turn_context.activity
+                original_text = activity.text
+                activity.text = next_message
+                
+                try:
+                    # Process with modified activity
+                    await handle_text_message(turn_context, state)
+                finally:
+                    # Restore original text in case the context is reused
+                    activity.text = original_text
             
     except Exception as e:
         # Mark thread as no longer busy even on error (thread-safe)
@@ -1674,304 +1556,288 @@ async def send_message(turn_context: TurnContext, state):
         logger.error(f"Error in send_message: {str(e)}")
         traceback.print_exc()
 
+# Stream response to Teams
+# Stream response to Teams
 async def stream_response_to_teams(turn_context: TurnContext, state, user_message):
-    """
-    Improved function to properly stream responses to Teams.
-    Uses a more reliable approach to send incremental updates.
-    """
     try:
         client = create_client()
+        
+        # Initialize our Teams-specific streaming handler
+        teams_streamer = TeamsStreamingResponse(turn_context)
+        
+        # Create a run with streaming=True
         thread_id = state["session_id"]
         assistant_id = state["assistant_id"]
         
         # Mark run as active in state
-        with conversation_states_lock:
-            state["active_run"] = True
-            active_runs[thread_id] = True
+        state["active_run"] = True
+        active_runs[thread_id] = True
         
         # Send an initial typing indicator
-        await turn_context.send_activity(create_typing_activity())
+        await teams_streamer.send_typing_indicator()
         
-        # Add the user message to the thread
-        if user_message:
-            try:
-                # Check for existing active runs and cancel them
+        try:
+            # First, add the user message to the thread
+            if user_message:
                 try:
-                    runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
-                    if runs.data:
-                        latest_run = runs.data[0]
-                        if latest_run.status in ["in_progress", "queued", "requires_action"]:
-                            active_run_id = latest_run.id
-                            logging.info(f"Found existing active run {active_run_id} with status {latest_run.status}")
-                            
-                            # Cancel the active run
-                            client.beta.threads.runs.cancel(thread_id=thread_id, run_id=active_run_id)
-                            logging.info(f"Requested cancellation of pre-existing run {active_run_id}")
-                            
-                            # Wait briefly for cancellation to take effect
-                            await asyncio.sleep(3)
-                except Exception as check_e:
-                    logging.warning(f"Error checking for existing runs: {check_e}")
-                
-                # Now add the message
-                client.beta.threads.messages.create(
-                    thread_id=thread_id,
-                    role="user",
-                    content=user_message
-                )
-                logging.info(f"Added user message to thread {thread_id}")
-            except Exception as msg_e:
-                if "while a run" in str(msg_e) or "already has an active run" in str(msg_e):
-                    logging.warning(f"Could not add message due to active run: {msg_e}")
-                    # Create a new thread as fallback
-                    new_thread = client.beta.threads.create()
-                    thread_id = new_thread.id
-                    state["session_id"] = thread_id
-                    logging.info(f"Created new thread {thread_id} due to message add failure")
+                    # Check for any existing active runs on this thread first
+                    try:
+                        runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
+                        if runs.data:
+                            latest_run = runs.data[0]
+                            if latest_run.status in ["in_progress", "queued", "requires_action"]:
+                                active_run_id = latest_run.id
+                                logging.info(f"Found existing active run {active_run_id} with status {latest_run.status}")
+                                
+                                # Cancel the active run
+                                client.beta.threads.runs.cancel(thread_id=thread_id, run_id=active_run_id)
+                                logging.info(f"Requested cancellation of pre-existing run {active_run_id}")
+                                
+                                # Wait briefly for cancellation to take effect
+                                await asyncio.sleep(3)
+                    except Exception as check_e:
+                        logging.warning(f"Error checking for existing runs: {check_e}")
                     
-                    # Add the message to the new thread
+                    # Now try to add the message
                     client.beta.threads.messages.create(
                         thread_id=thread_id,
                         role="user",
                         content=user_message
                     )
-                    logging.info(f"Added user message to new thread {thread_id}")
-                else:
-                    logging.error(f"Error adding message to thread: {msg_e}")
-                    await turn_context.send_activity("I'm having trouble processing your request. Please try again.")
-                    raise
-        
-        # Setup for message handling
-        accumulated_text = ""
-        message_sent = False
-        last_typing_time = time.time()
-        
-        # Teams requires periodic activity to maintain the conversation
-        typing_interval = 3  # seconds
-        
-        # Create a preliminary message that we'll update incrementally
-        preliminary_message = await turn_context.send_activity("Thinking...")
-        activity_id = preliminary_message.id
-        
-        # Create a run with streaming enabled
-        try:
-            logging.info(f"Creating streaming run for thread {thread_id}")
+                    logging.info(f"Added user message to thread {thread_id}")
+                except Exception as msg_e:
+                    if "while a run" in str(msg_e):
+                        logging.warning(f"Could not add message due to active run: {msg_e}")
+                        # Create a new thread as fallback
+                        new_thread = client.beta.threads.create()
+                        thread_id = new_thread.id
+                        state["session_id"] = thread_id
+                        logging.info(f"Created new thread {thread_id} due to message add failure")
+                        
+                        # Add the message to the new thread
+                        client.beta.threads.messages.create(
+                            thread_id=thread_id,
+                            role="user",
+                            content=user_message
+                        )
+                        logging.info(f"Added user message to new thread {thread_id}")
+                    else:
+                        logging.error(f"Error adding message to thread: {msg_e}")
+                        await turn_context.send_activity("I'm having trouble processing your request. Please try again.")
+                        raise
+            
+            # Send a typing indicator to show we're working
+            await teams_streamer.send_typing_indicator()
+            
+            # Create a single run that we'll use for both streaming attempt and polling fallback
+            logging.info(f"Creating run for thread {thread_id}")
+            
+            # Create a non-streaming run first to have a guaranteed run ID
             run = client.beta.threads.runs.create(
                 thread_id=thread_id,
-                assistant_id=assistant_id,
-                stream=True
+                assistant_id=assistant_id
             )
+            run_id = run.id
+            logging.info(f"Created run with ID: {run_id}")
             
-            # Handle the stream based on the OpenAI SDK implementation
-            if hasattr(run, "iter_chunks"):
-                # Using iter_chunks with manual stream handling
-                logging.info("Using iter_chunks() for streaming to Teams")
-                
-                update_chunk_size = 50  # Number of chunks to accumulate before sending update
-                chunks_since_update = 0
-                update_text = ""
-                
-                for chunk in run.iter_chunks():
-                    # Extract any text from the chunk
-                    text_piece = ""
-                    
-                    if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
-                        delta = chunk.data.delta
-                        if hasattr(delta, "content") and delta.content:
-                            for content in delta.content:
-                                if content.type == "text" and hasattr(content.text, "value"):
-                                    text_piece = content.text.value
-                    
-                    # Accumulate text if we got some
-                    if text_piece:
-                        accumulated_text += text_piece
-                        update_text += text_piece
-                        chunks_since_update += 1
-                        
-                        # Update the message periodically to show progress
-                        if chunks_since_update >= update_chunk_size:
-                            # Update the message incrementally
-                            try:
-                                # Limit message size to avoid Teams API limitations
-                                if len(accumulated_text) <= 28000:  # Teams has around 28000 character limit
-                                    updated_activity = MessageFactory.text(accumulated_text)
-                                    updated_activity.id = activity_id
-                                    await turn_context.update_activity(updated_activity)
-                                else:
-                                    # If we exceed message size, start a new message
-                                    await turn_context.send_activity("(continued)")
-                                    preliminary_message = await turn_context.send_activity(text_piece)
-                                    activity_id = preliminary_message.id
-                                    accumulated_text = text_piece  # Reset for the new message
-                            except Exception as update_e:
-                                logging.warning(f"Failed to update activity: {update_e}")
-                                # If update fails, we'll just continue and send the final result at the end
-                            
-                            chunks_since_update = 0
-                            update_text = ""
-                        
-                        # Send typing indicator periodically to maintain connection
-                        current_time = time.time()
-                        if current_time - last_typing_time >= typing_interval:
-                            await turn_context.send_activity(create_typing_activity())
-                            last_typing_time = current_time
-                
-                # Send the final message if we have accumulated text
-                if accumulated_text:
-                    message_sent = True
-                    # Delete the preliminary message
-                    try:
-                        delete_activity = Activity(
-                            type="deleteActivity",
-                            id=activity_id
-                        )
-                        await turn_context.delete_activity(activity_id)
-                    except Exception as del_e:
-                        logging.warning(f"Failed to delete preliminary activity: {del_e}")
-                    
-                    # Send the complete message
-                    if len(accumulated_text) > 7000:
-                        chunks = [accumulated_text[i:i+7000] for i in range(0, len(accumulated_text), 7000)]
-                        for i, chunk in enumerate(chunks):
-                            if i == 0:
-                                await turn_context.send_activity(chunk)
-                            else:
-                                await turn_context.send_activity(f"(continued) {chunk}")
-                    else:
-                        await turn_context.send_activity(accumulated_text)
+            # Set up polling with typing indicators
+            max_wait_time = 120  # seconds
+            wait_interval = 2   # seconds
+            elapsed_time = 0
+            last_typing_time = time.time()
+            typing_interval = 3  # seconds
             
-            else:
-                # Fallback to non-streaming approach if streaming not supported
-                logging.info("Streaming run creation not fully supported, using fallback method")
+            # Poll for completion with periodic typing indicators
+            accumulated_text = ""
+            
+            while elapsed_time < max_wait_time:
+                # Send typing indicator periodically
+                current_time = time.time()
+                if current_time - last_typing_time >= typing_interval:
+                    await teams_streamer.send_typing_indicator()
+                    last_typing_time = current_time
                 
-                # Delete the preliminary message
-                try:
-                    delete_activity = Activity(
-                        type="deleteActivity",
-                        id=activity_id
-                    )
-                    await turn_context.delete_activity(activity_id)
-                except Exception as del_e:
-                    logging.warning(f"Failed to delete preliminary activity: {del_e}")
+                # Check run status
+                run_status = client.beta.threads.runs.retrieve(
+                    thread_id=thread_id,
+                    run_id=run_id
+                )
                 
-                # Create a non-streaming run
-                run_id = run.id if hasattr(run, 'id') else None
-                
-                if not run_id:
-                    # Create a new run if we don't have one
-                    regular_run = client.beta.threads.runs.create(
+                if run_status.status == "completed":
+                    logging.info(f"Run {run_id} completed successfully")
+                    
+                    # Send one final typing indicator before fetching the result
+                    await teams_streamer.send_typing_indicator()
+                    
+                    # Get the complete message
+                    messages = client.beta.threads.messages.list(
                         thread_id=thread_id,
-                        assistant_id=assistant_id
-                    )
-                    run_id = regular_run.id
-                
-                # Poll for completion
-                max_wait_time = 120  # seconds
-                wait_interval = 3    # seconds
-                elapsed_time = 0
-                
-                while elapsed_time < max_wait_time:
-                    # Send typing indicator periodically
-                    current_time = time.time()
-                    if current_time - last_typing_time >= typing_interval:
-                        await turn_context.send_activity(create_typing_activity())
-                        last_typing_time = current_time
-                    
-                    # Check run status
-                    run_status = client.beta.threads.runs.retrieve(
-                        thread_id=thread_id,
-                        run_id=run_id
+                        order="desc",
+                        limit=1
                     )
                     
-                    if run_status.status == "completed":
-                        # Get the complete message
-                        messages = client.beta.threads.messages.list(
-                            thread_id=thread_id,
-                            order="desc",
-                            limit=1
-                        )
+                    if messages.data:
+                        latest_message = messages.data[0]
+                        for content_part in latest_message.content:
+                            if content_part.type == 'text':
+                                accumulated_text += content_part.text.value
                         
-                        if messages.data:
-                            latest_message = messages.data[0]
-                            response_text = ""
-                            for content_part in latest_message.content:
-                                if content_part.type == 'text':
-                                    response_text += content_part.text.value
-                            
-                            # Send the response
-                            message_sent = True
-                            if len(response_text) > 7000:
-                                chunks = [response_text[i:i+7000] for i in range(0, len(response_text), 7000)]
-                                for i, chunk in enumerate(chunks):
-                                    if i == 0:
-                                        await turn_context.send_activity(chunk)
-                                    else:
-                                        await turn_context.send_activity(f"(continued) {chunk}")
-                            else:
-                                await turn_context.send_activity(response_text)
-                        break
-                    
-                    elif run_status.status in ["failed", "cancelled", "expired"]:
-                        message_sent = True
-                        await turn_context.send_activity(f"I encountered an issue processing your request. Status: {run_status.status}")
-                        break
-                    
-                    # Wait before checking again
-                    await asyncio.sleep(wait_interval)
-                    elapsed_time += wait_interval
-                
-                # Handle timeout
-                if elapsed_time >= max_wait_time and not message_sent:
-                    await turn_context.send_activity("It's taking longer than expected to generate a response. Please try again.")
-                    message_sent = True
-        
-        except Exception as stream_e:
-            logging.error(f"Error in streaming run: {stream_e}")
-            
-            # If we haven't sent a message yet, send a fallback message
-            if not message_sent:
-                await turn_context.send_activity("I encountered an issue while processing your message. Let me try again differently.")
-                
-                # Fallback to non-streaming approach
-                try:
-                    result = await process_conversation_internal(
-                        client=client,
-                        session=thread_id,
-                        prompt=None,  # Don't add the message again
-                        assistant=assistant_id,
-                        stream_output=False
-                    )
-                    
-                    if isinstance(result, dict) and "response" in result:
-                        response_text = result["response"]
-                        
-                        # Send the response
-                        if len(response_text) > 7000:
-                            chunks = [response_text[i:i+7000] for i in range(0, len(response_text), 7000)]
+                        # Send the final message directly
+                        if len(accumulated_text) > 7000:
+                            chunks = [accumulated_text[i:i+7000] for i in range(0, len(accumulated_text), 7000)]
                             for i, chunk in enumerate(chunks):
                                 if i == 0:
                                     await turn_context.send_activity(chunk)
                                 else:
                                     await turn_context.send_activity(f"(continued) {chunk}")
                         else:
-                            await turn_context.send_activity(response_text)
+                            await turn_context.send_activity(accumulated_text)
+                    else:
+                        await turn_context.send_activity("I processed your request, but couldn't generate a response.")
+                    
+                    break
+                
+                elif run_status.status in ["failed", "cancelled", "expired"]:
+                    logging.error(f"Run ended with status: {run_status.status}")
+                    await turn_context.send_activity("I encountered an issue processing your request. Please try again.")
+                    break
+                
+                # Wait before checking again
+                await asyncio.sleep(wait_interval)
+                elapsed_time += wait_interval
+            
+            # If we timed out
+            if elapsed_time >= max_wait_time:
+                logging.warning(f"Run {run_id} timed out after {max_wait_time} seconds")
+                await turn_context.send_activity("It's taking longer than expected to generate a response. Please try again.")
+            
+            # No matter what happened with the run, make sure we mark it complete
+            state["active_run"] = False
+            if thread_id in active_runs:
+                del active_runs[thread_id]
+            
+        except Exception as inner_e:
+            # Log the error but don't show technical details to the user
+            logging.error(f"Error in streaming response: {str(inner_e)}")
+            traceback.print_exc()
+            
+            # Continue processing and try to generate a response anyway
+            try:
+                # Only inform the user if the next steps also fail
+                handled = False
+                
+                # Create a new run with different thread/assistant if needed
+                if "while a run" in str(inner_e) or "already has an active run" in str(inner_e):
+                    # Create a new thread
+                    try:
+                        new_thread = client.beta.threads.create()
+                        old_thread = thread_id
+                        thread_id = new_thread.id
+                        state["session_id"] = thread_id
+                        logging.info(f"Created recovery thread {thread_id} to replace {old_thread}")
+                        
+                        # Add the message to the new thread
+                        if user_message:
+                            client.beta.threads.messages.create(
+                                thread_id=thread_id,
+                                role="user",
+                                content=user_message
+                            )
+                            logging.info(f"Added user message to recovery thread {thread_id}")
+                        
+                        # Create a new run
+                        recovery_run = client.beta.threads.runs.create(
+                            thread_id=thread_id,
+                            assistant_id=assistant_id
+                        )
+                        
+                        # Wait for completion
+                        max_recovery_attempts = 30  # 60 seconds
+                        for _ in range(max_recovery_attempts):
+                            # Send typing indicator
+                            await teams_streamer.send_typing_indicator()
+                            
+                            run_status = client.beta.threads.runs.retrieve(
+                                thread_id=thread_id,
+                                run_id=recovery_run.id
+                            )
+                            
+                            if run_status.status == "completed":
+                                # Get messages from the recovery thread
+                                messages = client.beta.threads.messages.list(
+                                    thread_id=thread_id,
+                                    order="desc",
+                                    limit=1
+                                )
+                                
+                                if messages.data:
+                                    latest_message = messages.data[0]
+                                    response_text = ""
+                                    for content_part in latest_message.content:
+                                        if content_part.type == 'text':
+                                            response_text += content_part.text.value
+                                    
+                                    # Send the response
+                                    if len(response_text) > 7000:
+                                        chunks = [response_text[i:i+7000] for i in range(0, len(response_text), 7000)]
+                                        for i, chunk in enumerate(chunks):
+                                            if i == 0:
+                                                await turn_context.send_activity(chunk)
+                                            else:
+                                                await turn_context.send_activity(f"(continued) {chunk}")
+                                    else:
+                                        await turn_context.send_activity(response_text)
+                                    handled = True
+                                    break
+                            
+                            elif run_status.status in ["failed", "cancelled", "expired"]:
+                                break
+                            
+                            await asyncio.sleep(2)
+                        
+                        if not handled:
+                            await turn_context.send_activity("I'm sorry, I couldn't process your request. Please try again.")
+                            handled = True
+                    except Exception as recovery_e:
+                        logging.error(f"Recovery attempt failed: {recovery_e}")
+                
+                # If no special handling worked, fall back to the standard approach
+                if not handled:
+                    # Try the standard process_conversation_internal as a final fallback
+                    result = await process_conversation_internal(
+                        client=client,
+                        session=state["session_id"],
+                        prompt=user_message,
+                        assistant=state["assistant_id"],
+                        stream_output=False
+                    )
+                    
+                    if isinstance(result, dict) and "response" in result:
+                        await turn_context.send_activity(result["response"])
                     else:
                         await turn_context.send_activity("I'm sorry, I couldn't process your request at this time.")
-                except Exception as fallback_e:
-                    logging.error(f"Fallback processing failed: {fallback_e}")
-                    await turn_context.send_activity("I'm sorry, I couldn't complete your request. Please try again.")
+            
+            except Exception as fallback_e:
+                logging.error(f"Final fallback failed: {fallback_e}")
+                await turn_context.send_activity("I'm sorry, I couldn't process your request. Please try again later.")
+        
+        finally:
+            # Ensure run is marked as complete
+            state["active_run"] = False
+            if thread_id in active_runs:
+                del active_runs[thread_id]
     
     except Exception as outer_e:
-        logging.error(f"Outer error in stream_response_to_teams: {outer_e}")
+        logging.error(f"Outer error in stream_response_to_teams: {str(outer_e)}")
         traceback.print_exc()
-        await turn_context.send_activity("I encountered a problem processing your request. Please try again.")
-    
-    finally:
-        # Always mark the run as complete even if there was an error
-        with conversation_states_lock:
-            state["active_run"] = False
-        if thread_id in active_runs:
-            del active_runs[thread_id]
+        
+        # User-friendly error message
+        await turn_context.send_activity("I encountered a problem while processing your request. Please try again or start a new chat.")
+        
+        # Ensure we mark run as complete even on error
+        state["active_run"] = False
+        if state.get("session_id") in active_runs:
+            del active_runs[state.get("session_id", "")]
 # Send welcome message when bot is added
 async def send_welcome_message(turn_context: TurnContext):
     welcome_text = (
@@ -2748,6 +2614,8 @@ async def upload_file(
         logging.error(f"Error in /upload-file endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
+# Internal implementation of process_conversation
+# Internal implementation of process_conversation
 async def process_conversation_internal(
     client: AzureOpenAI,
     session: Optional[str] = None,
@@ -2756,13 +2624,13 @@ async def process_conversation_internal(
     stream_output: bool = True
 ):
     """
-    Improved core function to process conversation with the assistant.
-    This function handles both streaming and non-streaming modes with better error handling.
+    Core function to process conversation with the assistant.
+    This function handles both streaming and non-streaming modes with robust Stream object handling.
     """
     try:
         # Create defaults if not provided
         if not assistant:
-            logging.warning("No assistant ID provided, creating a default one.")
+            logging.warning(f"No assistant ID provided, creating a default one.")
             try:
                 assistant_obj = client.beta.assistants.create(
                     name="default_conversation_assistant",
@@ -2775,7 +2643,7 @@ async def process_conversation_internal(
                 raise HTTPException(status_code=500, detail="Failed to create default assistant")
 
         if not session:
-            logging.warning("No session (thread) ID provided, creating a new one.")
+            logging.warning(f"No session (thread) ID provided, creating a new one.")
             try:
                 thread = client.beta.threads.create()
                 session = thread.id
@@ -2812,38 +2680,79 @@ async def process_conversation_internal(
                 logging.error(f"Failed to create recovery assistant: {e}")
                 raise HTTPException(status_code=500, detail="Failed to create a valid assistant")
         
-        # Check for active runs and handle them
+        # Check if there's an active run before adding a message
+        active_run = False
+        run_id = None
         try:
             # List runs to check for active ones
             runs = client.beta.threads.runs.list(thread_id=session, limit=1)
             if runs.data:
                 latest_run = runs.data[0]
                 if latest_run.status in ["in_progress", "queued", "requires_action"]:
+                    active_run = True
                     run_id = latest_run.id
                     logging.warning(f"Active run {run_id} detected with status {latest_run.status}")
-                    
-                    # Try to cancel the run
-                    try:
-                        client.beta.threads.runs.cancel(thread_id=session, run_id=run_id)
-                        logging.info(f"Requested cancellation of active run {run_id}")
-                        # Wait briefly for cancellation to complete
-                        await asyncio.sleep(3)
-                    except Exception as cancel_e:
-                        logging.warning(f"Failed to cancel run {run_id}: {cancel_e}")
-                        # If cancellation fails, create a new thread
-                        thread = client.beta.threads.create()
-                        session = thread.id
-                        logging.info(f"Created new thread {session} after failed run cancellation")
         except Exception as e:
             logging.warning(f"Error checking for active runs: {e}")
             # Continue anyway - we'll handle failure when adding messages
 
         # Add user message to the thread if prompt is given
         if prompt:
-            max_retries = 5
-            retry_delay = 2
-            message_added = False
+            max_retries = 5  # Increased from 3 to 5
+            base_retry_delay = 3  # Increased from 2 to 3 seconds
+            success = False
             
+            # Handle active run if found
+            if active_run and run_id:
+                try:
+                    # Cancel the run
+                    client.beta.threads.runs.cancel(thread_id=session, run_id=run_id)
+                    logging.info(f"Requested cancellation of active run {run_id}")
+                    
+                    # Wait for run to be fully canceled - this is the key improvement
+                    cancel_wait_time = 5  # Wait 5 seconds initially after cancellation request
+                    max_cancel_wait = 30  # Maximum time to wait for cancellation
+                    wait_time = 0
+                    
+                    while wait_time < max_cancel_wait:
+                        await asyncio.sleep(cancel_wait_time)
+                        wait_time += cancel_wait_time
+                        
+                        # Check if run is actually canceled or completed
+                        try:
+                            run_status = client.beta.threads.runs.retrieve(thread_id=session, run_id=run_id)
+                            if run_status.status in ["cancelled", "completed", "failed", "expired"]:
+                                logging.info(f"Run {run_id} is now in state {run_status.status} after waiting {wait_time}s")
+                                break
+                            else:
+                                logging.warning(f"Run {run_id} still in state {run_status.status} after waiting {wait_time}s")
+                                # Gradually increase wait time
+                                cancel_wait_time = min(cancel_wait_time * 1.5, 10)
+                        except Exception as status_e:
+                            logging.warning(f"Error checking run status after cancellation: {status_e}")
+                            break
+                    
+                    # If we've waited the maximum time and run is still active, create a new thread
+                    if wait_time >= max_cancel_wait:
+                        logging.warning(f"Unable to cancel run {run_id} after waiting {wait_time}s, creating new thread")
+                        thread = client.beta.threads.create()
+                        session = thread.id
+                        logging.info(f"Created new thread {session} due to stuck run")
+                        active_run = False
+                except Exception as cancel_e:
+                    logging.error(f"Error canceling run {run_id}: {cancel_e}")
+                    # Create a new thread as fallback
+                    try:
+                        thread = client.beta.threads.create()
+                        session = thread.id
+                        logging.info(f"Created new thread {session} after failed run cancellation")
+                        active_run = False
+                    except Exception as thread_e:
+                        logging.error(f"Failed to create new thread after cancellation error: {thread_e}")
+                        raise HTTPException(status_code=500, detail="Failed to handle active run and create new thread")
+            
+            # Now try to add the message with retries
+            retry_delay = base_retry_delay
             for attempt in range(max_retries):
                 try:
                     client.beta.threads.messages.create(
@@ -2852,334 +2761,229 @@ async def process_conversation_internal(
                         content=prompt
                     )
                     logging.info(f"Added user message to thread {session} (attempt {attempt+1})")
-                    message_added = True
+                    success = True
                     break
                 except Exception as e:
-                    if "while a run" in str(e) or "already has an active run" in str(e):
-                        logging.warning(f"Failed to add message (attempt {attempt+1}), run is still active: {e}")
+                    if "while a run" in str(e) and attempt < max_retries - 1:
+                        logging.warning(f"Failed to add message (attempt {attempt+1}), run is still active. Retrying in {retry_delay}s: {e}")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
                         
-                        if attempt == max_retries - 1:
-                            # Last attempt, create a new thread
+                        # If we're still having issues after multiple attempts, create a new thread
+                        if attempt >= 2:  # After 3rd attempt
                             try:
+                                logging.warning("Creating new thread due to persistent run issues")
                                 thread = client.beta.threads.create()
+                                old_session = session
                                 session = thread.id
-                                logging.info(f"Created new thread {session} after max retries")
-                                
-                                # Try one last time with the new thread
+                                logging.info(f"Switched from thread {old_session} to new thread {session}")
+                                # Add the message to the new thread
                                 client.beta.threads.messages.create(
                                     thread_id=session,
                                     role="user",
                                     content=prompt
                                 )
-                                logging.info(f"Added user message to new thread {session}")
-                                message_added = True
+                                success = True
                                 break
                             except Exception as new_thread_e:
-                                logging.error(f"Failed to create new thread or add message: {new_thread_e}")
-                                raise HTTPException(
-                                    status_code=500, 
-                                    detail="Failed to add message to conversation thread after all attempts"
-                                )
-                        else:
-                            # Wait before retrying
-                            await asyncio.sleep(retry_delay)
-                            retry_delay *= 1.5  # Increase delay for next retry
+                                logging.error(f"Error creating new thread during retries: {new_thread_e}")
                     else:
                         logging.error(f"Failed to add message to thread {session}: {e}")
                         if attempt == max_retries - 1:
-                            raise HTTPException(
-                                status_code=500, 
-                                detail=f"Failed to add message to conversation thread: {str(e)}"
-                            )
-                        else:
-                            await asyncio.sleep(retry_delay)
-                            retry_delay *= 1.5
+                            raise HTTPException(status_code=500, detail="Failed to add message to conversation thread")
             
-            if not message_added:
-                raise HTTPException(
-                    status_code=500, 
-                    detail="Failed to add message to conversation thread after multiple attempts"
-                )
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to add message to conversation thread after retries")
         
-        # Handle streaming mode
+        # For streaming mode (/conversation endpoint)
         if stream_output:
+            # For API endpoints, we'll use a simpler approach than the Teams integration
             async def async_generator():
                 try:
-                    # First try with explicit stream=True parameter
-                    try:
-                        logging.info(f"Creating streaming run for thread {session}")
-                        run = client.beta.threads.runs.create(
-                            thread_id=session,
-                            assistant_id=assistant,
-                            stream=True
-                        )
-                        
-                        # Check if we have streaming support via iter_chunks
-                        if hasattr(run, "iter_chunks"):
-                            logging.info("Using iter_chunks streaming")
+                    # Create run with stream=True
+                    run = client.beta.threads.runs.create(
+                        thread_id=session,
+                        assistant_id=assistant,
+                        stream=True
+                    )
+                    
+                    # Handle the stream based on available methods
+                    if hasattr(run, "iter_chunks"):
+                        # Using iter_chunks synchronous iterator
+                        logging.info("Using iter_chunks() for API streaming")
+                        for chunk in run.iter_chunks():
+                            text_piece = ""
                             
-                            # Initial buffer of content
-                            yield "Starting to process your request...\n\n"
-                            last_chunk_time = time.time()
-                            
-                            # Iterate through chunks
-                            for chunk in run.iter_chunks():
-                                # Extract text content
-                                text_piece = ""
-                                
-                                if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
-                                    delta = chunk.data.delta
-                                    if hasattr(delta, "content") and delta.content:
-                                        for content in delta.content:
-                                            if content.type == "text" and hasattr(content.text, "value"):
-                                                text_piece = content.text.value
-                                
-                                # Send the text if we have some
-                                if text_piece:
-                                    yield text_piece
-                                    last_chunk_time = time.time()
-                                
-                                # Ensure we send some output periodically to keep connection alive
-                                current_time = time.time()
-                                if current_time - last_chunk_time > 5:
-                                    yield " "  # Send a space to keep connection alive
-                                    last_chunk_time = current_time
-                                
-                                # Add small delay for asyncio to handle other tasks
-                                await asyncio.sleep(0.01)
-                            
-                        elif hasattr(run, "events"):
-                            # Alternative streaming approach using events
-                            logging.info("Using events iterator for streaming")
-                            
-                            yield "Processing your request...\n\n"
-                            last_event_time = time.time()
-                            
-                            # Iterate through events
-                            for event in run.events:
-                                if event.event == "thread.message.delta":
-                                    if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
-                                        for content in event.data.delta.content:
-                                            if content.type == "text" and hasattr(content.text, "value"):
-                                                yield content.text.value
-                                                last_event_time = time.time()
-                                
-                                # Ensure we send some output periodically
-                                current_time = time.time()
-                                if current_time - last_event_time > 5:
-                                    yield " "  # Send a space to keep connection alive
-                                    last_event_time = current_time
-                                
-                                await asyncio.sleep(0.01)
-                        else:
-                            # Fallback to polling if streaming is not supported
-                            yield "Processing your request (streaming not fully supported)...\n\n"
-                            run_id = run.id
-                            
-                            # Polling fallback (directly implemented here instead of a separate function)
-                            max_wait_time = 120  # seconds
-                            wait_interval = 2    # seconds
-                            elapsed_time = 0
-                            last_update_time = time.time()
-                            
-                            while elapsed_time < max_wait_time:
-                                # Send periodic updates to maintain connection
-                                current_time = time.time()
-                                if current_time - last_update_time >= 5:
-                                    yield "."  # Show progress
-                                    last_update_time = current_time
-                                
-                                # Check run status
-                                try:
-                                    run_status = client.beta.threads.runs.retrieve(
-                                        thread_id=session,
-                                        run_id=run_id
-                                    )
-                                    
-                                    if run_status.status == "completed":
-                                        # Get the complete message
-                                        messages = client.beta.threads.messages.list(
-                                            thread_id=session,
-                                            order="desc",
-                                            limit=1
-                                        )
-                                        
-                                        if messages.data:
-                                            latest_message = messages.data[0]
-                                            response_text = ""
+                            if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
+                                delta = chunk.data.delta
+                                if hasattr(delta, "content") and delta.content:
+                                    for content in delta.content:
+                                        if content.type == "text" and hasattr(content.text, "value"):
+                                            text_piece = content.text.value
                                             
-                                            for content_part in latest_message.content:
-                                                if content_part.type == 'text':
-                                                    response_text += content_part.text.value
-                                            
-                                            yield "\n\n" + response_text
-                                        else:
-                                            yield "\n\nNo response was generated."
-                                        break
-                                    
-                                    elif run_status.status in ["failed", "cancelled", "expired"]:
-                                        yield f"\n\nError: Run ended with status {run_status.status}. Please try again."
-                                        break
+                            if text_piece:
+                                yield text_piece
+                                # Small delay to make it work with asyncio
+                                await asyncio.sleep(0.01)
                                 
-                                except Exception as status_e:
-                                    logging.error(f"Error checking run status: {status_e}")
-                                    yield f"\n\nError checking status: {str(status_e)}"
-                                    break
-                                
-                                # Wait before checking again
-                                await asyncio.sleep(wait_interval)
-                                elapsed_time += wait_interval
-                            
-                            # Handle timeout
-                            if elapsed_time >= max_wait_time:
-                                yield "\n\nResponse timed out. Please try again with a simpler query."
-                            
-                    except Exception as stream_e:
-                        logging.error(f"Error in streaming run creation: {stream_e}")
-                        yield "Switching to standard processing mode...\n\n"
-                        
-                        # Fallback to non-streaming run
-                        run = client.beta.threads.runs.create(
-                            thread_id=session,
-                            assistant_id=assistant
-                        )
+                    elif hasattr(run, "events"):
+                        # Using events iterator
+                        logging.info("Using events iterator for API streaming")
+                        for event in run.events:
+                            if event.event == "thread.message.delta":
+                                if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
+                                    for content in event.data.delta.content:
+                                        if content.type == "text" and hasattr(content.text, "value"):
+                                            yield content.text.value
+                                            await asyncio.sleep(0.01)
+                    else:
+                        # Fallback to polling
+                        logging.info("Using fallback polling for API streaming")
+                        yield "Processing your request...\n"
                         
                         run_id = run.id
-                        
-                        # Implement polling fallback inline
-                        max_wait_time = 120  # seconds
-                        wait_interval = 2    # seconds
+                        max_wait_time = 90  # seconds
+                        wait_interval = 2   # seconds
                         elapsed_time = 0
-                        last_update_time = time.time()
                         
                         while elapsed_time < max_wait_time:
-                            # Send periodic updates to maintain connection
-                            current_time = time.time()
-                            if current_time - last_update_time >= 5:
-                                yield "."  # Show progress
-                                last_update_time = current_time
+                            run_status = client.beta.threads.runs.retrieve(
+                                thread_id=session, 
+                                run_id=run_id
+                            )
                             
-                            # Check run status
-                            try:
-                                run_status = client.beta.threads.runs.retrieve(
+                            if run_status.status == "completed":
+                                yield "\n"  # Clear the progress line
+                                
+                                # Get the complete message
+                                messages = client.beta.threads.messages.list(
                                     thread_id=session,
-                                    run_id=run_id
+                                    order="desc",
+                                    limit=1
                                 )
                                 
-                                if run_status.status == "completed":
-                                    # Get the complete message
-                                    messages = client.beta.threads.messages.list(
-                                        thread_id=session,
-                                        order="desc",
-                                        limit=1
-                                    )
-                                    
-                                    if messages.data:
-                                        latest_message = messages.data[0]
-                                        response_text = ""
-                                        
-                                        for content_part in latest_message.content:
-                                            if content_part.type == 'text':
-                                                response_text += content_part.text.value
-                                        
-                                        yield "\n\n" + response_text
-                                    else:
-                                        yield "\n\nNo response was generated."
-                                    break
-                                
-                                elif run_status.status in ["failed", "cancelled", "expired"]:
-                                    yield f"\n\nError: Run ended with status {run_status.status}. Please try again."
-                                    break
-                            
-                            except Exception as status_e:
-                                logging.error(f"Error checking run status: {status_e}")
-                                yield f"\n\nError checking status: {str(status_e)}"
+                                if messages.data:
+                                    latest_message = messages.data[0]
+                                    for content_part in latest_message.content:
+                                        if content_part.type == 'text':
+                                            yield content_part.text.value
                                 break
                             
-                            # Wait before checking again
+                            elif run_status.status in ["failed", "cancelled", "expired"]:
+                                yield f"\nError: Run ended with status {run_status.status}. Please try again."
+                                break
+                            
+                            yield "."  # Show progress
                             await asyncio.sleep(wait_interval)
                             elapsed_time += wait_interval
                         
-                        # Handle timeout
                         if elapsed_time >= max_wait_time:
-                            yield "\n\nResponse timed out. Please try again with a simpler query."
-                    
-                except Exception as outer_e:
-                    logging.error(f"Error in streaming generator: {outer_e}")
-                    yield f"\n\nError: {str(outer_e)}. Please try again."
+                            yield "\nResponse timed out. Please try again."
+                
+                except Exception as e:
+                    logging.error(f"Error in streaming generation: {e}")
+                    yield f"\n[ERROR] An error occurred while generating the response: {str(e)}. Please try again.\n"
             
+            # Return streaming generator
             return async_generator()
         
-        # Handle non-streaming mode (for /chat endpoint)
+        # Handle non-streaming mode (/chat endpoint)
         else:
+            # For non-streaming mode, we'll use a completely different approach
+            full_response = ""
             try:
-                logging.info(f"Creating non-streaming run for thread {session}")
+                # Create a run without streaming
                 run = client.beta.threads.runs.create(
                     thread_id=session,
                     assistant_id=assistant
                 )
-                
                 run_id = run.id
+                logging.info(f"Created run {run_id} for thread {session} (non-streaming mode)")
                 
-                # Poll for completion
-                max_wait_time = 120  # seconds
-                wait_interval = 2    # seconds
-                elapsed_time = 0
+                # Poll for run completion
+                max_poll_attempts = 60  # 5 minute timeout with 5 second intervals
+                poll_interval = 5  # seconds
                 
-                while elapsed_time < max_wait_time:
-                    # Check run status
-                    run_status = client.beta.threads.runs.retrieve(
-                        thread_id=session,
-                        run_id=run_id
-                    )
-                    
-                    if run_status.status == "completed":
-                        # Get the complete message
+                for attempt in range(max_poll_attempts):
+                    try:
+                        run_status = client.beta.threads.runs.retrieve(
+                            thread_id=session,
+                            run_id=run_id
+                        )
+                        
+                        logging.info(f"Run status poll {attempt+1}/{max_poll_attempts}: {run_status.status}")
+                        
+                        # Handle completed run
+                        if run_status.status == "completed":
+                            # Get the latest message
+                            messages = client.beta.threads.messages.list(
+                                thread_id=session,
+                                order="desc",
+                                limit=1
+                            )
+                            
+                            if messages and messages.data:
+                                latest_message = messages.data[0]
+                                for content_part in latest_message.content:
+                                    if content_part.type == 'text':
+                                        full_response += content_part.text.value
+                                
+                                logging.info(f"Successfully retrieved final response")
+                            break  # Exit the polling loop
+                        
+                        # Handle failed/cancelled/expired run
+                        elif run_status.status in ["failed", "cancelled", "expired"]:
+                            logging.error(f"Run ended with status: {run_status.status}")
+                            return {"response": f"Sorry, I encountered an error and couldn't complete your request. Run status: {run_status.status}. Please try again."}
+                        
+                        # Continue polling if still in progress
+                        if attempt < max_poll_attempts - 1:
+                            await asyncio.sleep(poll_interval)
+                            
+                    except Exception as poll_e:
+                        logging.error(f"Error polling run status (attempt {attempt+1}): {poll_e}")
+                        await asyncio.sleep(poll_interval)
+                        
+                # If we still don't have a response, try one more time to get the latest message
+                if not full_response:
+                    try:
                         messages = client.beta.threads.messages.list(
                             thread_id=session,
                             order="desc",
                             limit=1
                         )
                         
-                        if messages.data:
+                        if messages and messages.data:
                             latest_message = messages.data[0]
-                            response_text = ""
-                            
                             for content_part in latest_message.content:
                                 if content_part.type == 'text':
-                                    response_text += content_part.text.value
-                            
-                            return {"response": response_text}
-                        else:
-                            return {"response": "No response was generated."}
-                    
-                    elif run_status.status in ["failed", "cancelled", "expired"]:
-                        return {"response": f"Error: Run ended with status {run_status.status}. Please try again."}
-                    
-                    # Wait before checking again
-                    await asyncio.sleep(wait_interval)
-                    elapsed_time += wait_interval
+                                    full_response += content_part.text.value
+                    except Exception as final_e:
+                        logging.error(f"Error retrieving final message: {final_e}")
                 
-                # Handle timeout
-                return {"response": "Response timed out. Please try again with a simpler query."}
+                # Final fallback if we still don't have a response
+                if not full_response:
+                    full_response = "I processed your request, but couldn't generate a proper response. Please try again or rephrase your question."
+
+                return {"response": full_response}
                 
             except Exception as e:
-                logging.error(f"Error in non-streaming run: {e}")
-                return {"response": f"Error: {str(e)}. Please try again."}
-    
-    except HTTPException as http_e:
-        # Pass through HTTP exceptions
-        raise http_e
+                logging.error(f"Error in non-streaming response generation: {e}")
+                return {
+                    "response": "An error occurred while processing your request. Please try again."
+                }
+        
     except Exception as e:
-        logging.error(f"Error in process_conversation_internal: {e}")
+        endpoint_type = "conversation" if stream_output else "chat"
+        logging.error(f"Error in /{endpoint_type} endpoint setup: {e}")
         if stream_output:
-            # For streaming, return a generator that yields the error
+            # For streaming, we need to return a generator that yields the error
             async def error_generator():
-                yield f"Error: {str(e)}. Please try again."
+                yield f"Error: {str(e)}"
             return error_generator()
         else:
             # For non-streaming, return a JSON response with the error
-            return {"response": f"Error: {str(e)}. Please try again."}
+            return {"response": f"Error: {str(e)}"}
 # FastAPI endpoint for conversation (streaming)
 @app.get("/conversation")
 async def conversation(
