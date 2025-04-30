@@ -114,6 +114,52 @@ def create_client():
         api_key=AZURE_API_KEY,
         api_version=AZURE_API_VERSION,
     )
+class TeamsStreamingResponse:
+    """Handles streaming responses to Teams in a more controlled way"""
+    
+    def __init__(self, turn_context):
+        self.turn_context = turn_context
+        self.message_parts = []
+        self.is_first_update = True
+        self.stream_id = f"stream_{int(time.time())}"
+        self.last_update_time = 0
+        self.min_update_interval = 1.0  # Minimum time between updates in seconds
+        
+    async def send_typing_indicator(self):
+        """Sends a typing indicator to Teams"""
+        await self.turn_context.send_activity(create_typing_activity())
+    
+    async def queue_update(self, text_chunk):
+        """Queues and potentially sends a text update"""
+        # Add to the accumulated text
+        self.message_parts.append(text_chunk)
+        
+        # Check if we should send an update
+        current_time = time.time()
+        if (current_time - self.last_update_time) >= self.min_update_interval:
+            await self.send_typing_indicator()
+            self.last_update_time = current_time
+    
+    def get_full_message(self):
+        """Gets the complete message from all chunks"""
+        return "".join(self.message_parts)
+    
+    async def send_final_message(self):
+        """Sends the final complete message, split if necessary"""
+        complete_message = self.get_full_message()
+        
+        # Split long messages if needed
+        if len(complete_message) > 7000:
+            chunks = [complete_message[i:i+7000] for i in range(0, len(complete_message), 7000)]
+            for i, chunk in enumerate(chunks):
+                if i == 0:
+                    await self.turn_context.send_activity(chunk)
+                else:
+                    await self.turn_context.send_activity(f"(continued) {chunk}")
+        else:
+            await self.turn_context.send_activity(complete_message)
+
+
 async def upload_file_to_openai_thread(client: AzureOpenAI, file_content: bytes, filename: str, thread_id: str, message_content: str = None):
     """
     Uploads a file directly to OpenAI and attaches it to a thread.
@@ -1024,10 +1070,11 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
     try:
         client = create_client()
         
-        # Send typing indicator first
-        await turn_context.send_activity(create_typing_activity())
+        # Initialize our Teams-specific streaming handler
+        teams_streamer = TeamsStreamingResponse(turn_context)
+        await teams_streamer.send_typing_indicator()
         
-        # Create a run with streaming=True but properly handle the stream
+        # Create a run with streaming=True
         thread_id = state["session_id"]
         assistant_id = state["assistant_id"]
         
@@ -1036,132 +1083,138 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
         active_runs[thread_id] = True
         
         try:
-            # Using the updated streaming approach
-            stream = client.beta.threads.runs.create(
+            # Create the OpenAI streaming run
+            logging.info(f"Creating streaming run for thread {thread_id} with assistant {assistant_id}")
+            
+            run = client.beta.threads.runs.create(
                 thread_id=thread_id,
                 assistant_id=assistant_id,
                 stream=True
             )
             
-            # Teams requires proper streaming protocol
-            # First, send beginning of stream
-            current_text = ""
-            
-            # Create a unique stream ID for this conversation
-            stream_id = f"stream_{int(time.time())}"
-            
-            # Send first part to start the stream
-            first_chunk_sent = False
+            # Set timeout
             stream_timeout = 110  # Max streaming time in seconds
             start_time = time.time()
+            accumulated_text = ""
             
-            # Start collecting chunks - handle both async and non-async Stream objects
-            try:
-                # Try to use as async generator
-                if hasattr(stream, "__aiter__"):
-                    async for chunk in stream:
-                        if time.time() - start_time > stream_timeout:
-                            logger.warning("Stream timeout reached")
-                            break
-                        
-                        if not chunk:
-                            continue
-                            
-                        # Handle different event types
-                        if chunk.event == "thread.message.delta" and hasattr(chunk.data, "delta"):
-                            delta = chunk.data.delta
-                            if hasattr(delta, "content") and delta.content:
-                                for content in delta.content:
-                                    if content.type == "text" and hasattr(content.text, "value"):
-                                        current_text += content.text.value
-                                        await turn_context.send_activity(create_typing_activity())
-                                        await asyncio.sleep(0.5)  # Rate limiting
-                                        
-                                        # Send partial response for longer generations
-                                        if len(current_text) > 500 and not first_chunk_sent:
-                                            await turn_context.send_activity(f"{current_text}...")
-                                            first_chunk_sent = True
-                elif hasattr(stream, "iter_chunks"):
-                    # Use the non-async iterator with asyncio to make it work with async
-                    for chunk in stream.iter_chunks():
-                        if time.time() - start_time > stream_timeout:
-                            logger.warning("Stream timeout reached")
-                            break
-                        
-                        if not chunk:
-                            continue
-                        
-                        # Parse the chunk data
-                        if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
-                            delta = chunk.data.delta
-                            if hasattr(delta, "content") and delta.content:
-                                for content in delta.content:
-                                    if content.type == "text" and hasattr(content.text, "value"):
-                                        current_text += content.text.value
-                                        
-                        # Send typing indicator regularly
-                        await turn_context.send_activity(create_typing_activity())
-                        await asyncio.sleep(0.5)  # Rate limiting
-                                
-                        # Send partial response for longer generations
-                        if len(current_text) > 500 and not first_chunk_sent:
-                            await turn_context.send_activity(f"{current_text}...")
-                            first_chunk_sent = True
-                else:
-                    # Fallback for incompatible stream format
-                    logger.warning(f"Stream object {type(stream)} doesn't support iteration, falling back")
-                    # Fall back to non-streaming approach
-                    run = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=stream.id)
+            # Handle the stream based on what methods it supports
+            if hasattr(run, "iter_chunks"):
+                # Method 1: Using iter_chunks() (synchronous iteration)
+                logging.info("Using iter_chunks() for streaming")
+                
+                for chunk in run.iter_chunks():
+                    # Check timeout
+                    if time.time() - start_time > stream_timeout:
+                        logging.warning("Stream timeout reached")
+                        break
                     
-                    # Wait for completion (with timeout)
-                    max_wait_time = 60  # seconds
-                    wait_interval = 2  # seconds
-                    elapsed_time = 0
+                    # Extract text from the chunk if available
+                    text_piece = ""
                     
-                    while run.status in ["queued", "in_progress"] and elapsed_time < max_wait_time:
-                        await asyncio.sleep(wait_interval)
-                        elapsed_time += wait_interval
-                        run = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+                    if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
+                        delta = chunk.data.delta
+                        if hasattr(delta, "content") and delta.content:
+                            for content in delta.content:
+                                if content.type == "text" and hasattr(content.text, "value"):
+                                    text_piece = content.text.value
+                    
+                    # Update the Teams response if we got text
+                    if text_piece:
+                        await teams_streamer.queue_update(text_piece)
+                        accumulated_text += text_piece
+                
+                # Add some delay before final message
+                await asyncio.sleep(0.5)
+                
+            elif hasattr(run, "events"):
+                # Method 2: Using events iterator
+                logging.info("Using events iterator for streaming")
+                
+                for event in run.events:
+                    # Check timeout
+                    if time.time() - start_time > stream_timeout:
+                        logging.warning("Stream timeout reached")
+                        break
+                    
+                    # Process different event types
+                    if event.event == "thread.message.delta":
+                        if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
+                            for content in event.data.delta.content:
+                                if content.type == "text" and hasattr(content.text, "value"):
+                                    text_piece = content.text.value
+                                    await teams_streamer.queue_update(text_piece)
+                                    accumulated_text += text_piece
+                
+                # Add some delay before final message
+                await asyncio.sleep(0.5)
+                
+            else:
+                # Fallback: Poll for completion
+                logging.info("Using fallback polling approach for completion")
+                run_id = run.id
+                
+                # Send initial message
+                await turn_context.send_activity("I'm processing your request...")
+                
+                # Wait for completion with periodic typing indicators
+                max_wait_time = 60  # seconds
+                wait_interval = 2   # seconds
+                elapsed_time = 0
+                
+                while elapsed_time < max_wait_time:
+                    # Send typing indicator
+                    await teams_streamer.send_typing_indicator()
+                    
+                    # Check run status
+                    run_status = client.beta.threads.runs.retrieve(
+                        thread_id=thread_id,
+                        run_id=run_id
+                    )
+                    
+                    if run_status.status == "completed":
+                        # Get the complete message
+                        messages = client.beta.threads.messages.list(
+                            thread_id=thread_id,
+                            order="desc",
+                            limit=1
+                        )
                         
-                        # Send typing indicator while waiting
-                        await turn_context.send_activity(create_typing_activity())
-                    
-                    # Get the messages once complete
-                    if run.status == "completed":
-                        messages = client.beta.threads.messages.list(thread_id=thread_id, order="desc", limit=1)
                         if messages.data:
                             latest_message = messages.data[0]
                             for content_part in latest_message.content:
                                 if content_part.type == 'text':
-                                    current_text += content_part.text.value
-                    else:
-                        current_text = f"I couldn't complete the response (status: {run.status}). Please try again."
+                                    accumulated_text += content_part.text.value
+                        break
+                    
+                    elif run_status.status in ["failed", "cancelled", "expired"]:
+                        accumulated_text = f"I encountered an issue (status: {run_status.status}). Please try again."
+                        break
+                    
+                    # Wait before checking again
+                    await asyncio.sleep(wait_interval)
+                    elapsed_time += wait_interval
+                
+                # If we timed out
+                if elapsed_time >= max_wait_time and not accumulated_text:
+                    accumulated_text = "It's taking longer than expected to generate a response. Please try again or ask a different question."
             
-            except Exception as stream_error:
-                logger.error(f"Error during streaming: {stream_error}")
-                traceback.print_exc()
-                current_text += f"\n\nI encountered an issue while responding. Please try again or start a new chat if the problem persists."
+            # Set the final accumulated text and send the message
+            for chunk in accumulated_text.split("\n"):
+                if chunk:
+                    await teams_streamer.queue_update(chunk + "\n")
             
-            # When done, send the complete message
-            # For longer responses, split into chunks
-            if len(current_text) > 7000:
-                chunks = [current_text[i:i+7000] for i in range(0, len(current_text), 7000)]
-                for i, chunk in enumerate(chunks):
-                    if i == 0:
-                        await turn_context.send_activity(chunk)
-                    else:
-                        await turn_context.send_activity(f"(continued) {chunk}")
-            else:
-                await turn_context.send_activity(current_text)
+            # Send the final complete message
+            await teams_streamer.send_final_message()
                 
         except Exception as e:
-            logger.error(f"Error in stream_response_to_teams: {str(e)}")
+            error_msg = f"Error during streaming: {str(e)}"
+            logging.error(error_msg)
             traceback.print_exc()
-            await turn_context.send_activity(f"Error processing your request: {str(e)}")
+            await turn_context.send_activity(f"I encountered a technical issue: {str(e)}")
             
             # Fallback to non-streaming
             try:
-                client = create_client()
+                logging.info("Falling back to non-streaming approach")
                 result = await process_conversation_internal(
                     client=client,
                     session=state["session_id"],
@@ -1172,7 +1225,8 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
                 
                 if isinstance(result, dict) and "response" in result:
                     await turn_context.send_activity(result["response"])
-            except:
+            except Exception as fallback_e:
+                logging.error(f"Fallback also failed: {fallback_e}")
                 await turn_context.send_activity("I'm sorry, I couldn't process your request due to a technical issue.")
         finally:
             # Mark run as complete
@@ -1181,15 +1235,14 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
                 del active_runs[thread_id]
             
     except Exception as outer_e:
-        logger.error(f"Outer error in stream_response_to_teams: {str(outer_e)}")
+        logging.error(f"Outer error in stream_response_to_teams: {str(outer_e)}")
         traceback.print_exc()
         await turn_context.send_activity("I encountered a technical issue. Please try again or start a new chat.")
         
         # Ensure we mark run as complete even on error
         state["active_run"] = False
-        if state["session_id"] in active_runs:
+        if state.get("session_id") in active_runs:
             del active_runs[state["session_id"]]
-
 
 # Send welcome message when bot is added
 async def send_welcome_message(turn_context: TurnContext):
@@ -1977,38 +2030,60 @@ async def process_conversation_internal(
 ):
     """
     Core function to process conversation with the assistant.
-    This function handles both streaming and non-streaming modes, with improved support for Stream object handling.
+    This function handles both streaming and non-streaming modes with robust Stream object handling.
     """
     try:
+        # Create defaults if not provided
+        if not assistant:
+            logging.warning(f"No assistant ID provided, creating a default one.")
+            try:
+                assistant_obj = client.beta.assistants.create(
+                    name="default_conversation_assistant",
+                    model="gpt-4o-mini",
+                    instructions="You are a helpful conversation assistant.",
+                )
+                assistant = assistant_obj.id
+            except Exception as e:
+                logging.error(f"Failed to create default assistant: {e}")
+                raise HTTPException(status_code=500, detail="Failed to create default assistant")
+
+        if not session:
+            logging.warning(f"No session (thread) ID provided, creating a new one.")
+            try:
+                thread = client.beta.threads.create()
+                session = thread.id
+            except Exception as e:
+                logging.error(f"Failed to create default thread: {e}")
+                raise HTTPException(status_code=500, detail="Failed to create default thread")
+        
         # Validate resources if provided 
-        if session or assistant:
-            validation = await validate_resources(client, session, assistant)
-            
-            # Create new thread if invalid
-            if session and not validation["thread_valid"]:
-                logging.warning(f"Invalid thread ID: {session}, creating a new one")
-                try:
-                    thread = client.beta.threads.create()
-                    session = thread.id
-                    logging.info(f"Created recovery thread: {session}")
-                except Exception as e:
-                    logging.error(f"Failed to create recovery thread: {e}")
-                    raise HTTPException(status_code=500, detail="Failed to create a valid conversation thread")
-            
-            # Create new assistant if invalid
-            if assistant and not validation["assistant_valid"]:
-                logging.warning(f"Invalid assistant ID: {assistant}, creating a new one")
-                try:
-                    assistant_obj = client.beta.assistants.create(
-                        name=f"recovery_assistant_{int(time.time())}",
-                        model="gpt-4o-mini",
-                        instructions="You are a helpful assistant recovering from a system error.",
-                    )
-                    assistant = assistant_obj.id
-                    logging.info(f"Created recovery assistant: {assistant}")
-                except Exception as e:
-                    logging.error(f"Failed to create recovery assistant: {e}")
-                    raise HTTPException(status_code=500, detail="Failed to create a valid assistant")
+        validation = await validate_resources(client, session, assistant)
+        
+        # Create new thread if invalid
+        if not validation["thread_valid"]:
+            logging.warning(f"Invalid thread ID: {session}, creating a new one")
+            try:
+                thread = client.beta.threads.create()
+                session = thread.id
+                logging.info(f"Created recovery thread: {session}")
+            except Exception as e:
+                logging.error(f"Failed to create recovery thread: {e}")
+                raise HTTPException(status_code=500, detail="Failed to create a valid conversation thread")
+        
+        # Create new assistant if invalid
+        if not validation["assistant_valid"]:
+            logging.warning(f"Invalid assistant ID: {assistant}, creating a new one")
+            try:
+                assistant_obj = client.beta.assistants.create(
+                    name=f"recovery_assistant_{int(time.time())}",
+                    model="gpt-4o-mini",
+                    instructions="You are a helpful assistant recovering from a system error.",
+                )
+                assistant = assistant_obj.id
+                logging.info(f"Created recovery assistant: {assistant}")
+            except Exception as e:
+                logging.error(f"Failed to create recovery assistant: {e}")
+                raise HTTPException(status_code=500, detail="Failed to create a valid assistant")
         
         # Check if there's an active run before adding a message
         active_run = False
@@ -2081,73 +2156,89 @@ async def process_conversation_internal(
         
         # For streaming mode (/conversation endpoint)
         if stream_output:
+            # For API endpoints, we'll use a simpler approach than the Teams integration
             async def async_generator():
                 try:
-                    # Create run with Stream=True
-                    stream = client.beta.threads.runs.create(
+                    # Create run with stream=True
+                    run = client.beta.threads.runs.create(
                         thread_id=session,
                         assistant_id=assistant,
                         stream=True
                     )
                     
-                    # Try different approaches to handle the Stream object
-                    if hasattr(stream, "__aiter__"):
-                        # Native async iteration
-                        async for chunk in stream:
-                            if chunk.event == "thread.message.delta" and hasattr(chunk.data, "delta"):
-                                delta = chunk.data.delta
-                                if hasattr(delta, "content") and delta.content:
-                                    for content in delta.content:
-                                        if content.type == "text" and hasattr(content.text, "value"):
-                                            yield content.text.value
-                    elif hasattr(stream, "iter_chunks"):
-                        # Non-async iteration with iter_chunks
-                        for chunk in stream.iter_chunks():
+                    # Handle the stream based on available methods
+                    if hasattr(run, "iter_chunks"):
+                        # Using iter_chunks synchronous iterator
+                        logging.info("Using iter_chunks() for API streaming")
+                        for chunk in run.iter_chunks():
+                            text_piece = ""
+                            
                             if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
                                 delta = chunk.data.delta
                                 if hasattr(delta, "content") and delta.content:
                                     for content in delta.content:
                                         if content.type == "text" and hasattr(content.text, "value"):
+                                            text_piece = content.text.value
+                                            
+                            if text_piece:
+                                yield text_piece
+                                # Small delay to make it work with asyncio
+                                await asyncio.sleep(0.01)
+                                
+                    elif hasattr(run, "events"):
+                        # Using events iterator
+                        logging.info("Using events iterator for API streaming")
+                        for event in run.events:
+                            if event.event == "thread.message.delta":
+                                if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
+                                    for content in event.data.delta.content:
+                                        if content.type == "text" and hasattr(content.text, "value"):
                                             yield content.text.value
-                                            # Add a small sleep to make it work with asyncio
                                             await asyncio.sleep(0.01)
                     else:
-                        # Fallback for incompatible stream object
-                        logging.warning(f"Stream object does not support iteration: {type(stream)}")
-                        yield "The assistant is processing your request..."
+                        # Fallback to polling
+                        logging.info("Using fallback polling for API streaming")
+                        yield "Processing your request...\n"
                         
-                        # Poll for completion
-                        run_id = stream.id if hasattr(stream, "id") else None
-                        if not run_id:
-                            yield "\nError: Could not retrieve run ID from stream object."
-                            return
-                            
-                        # Get run status
-                        run = client.beta.threads.runs.retrieve(thread_id=session, run_id=run_id)
-                        
-                        # Wait for completion (with timeout)
+                        run_id = run.id
                         max_wait_time = 60  # seconds
-                        wait_interval = 2  # seconds
+                        wait_interval = 2   # seconds
                         elapsed_time = 0
                         
-                        while run.status in ["queued", "in_progress"] and elapsed_time < max_wait_time:
+                        while elapsed_time < max_wait_time:
+                            run_status = client.beta.threads.runs.retrieve(
+                                thread_id=session, 
+                                run_id=run_id
+                            )
+                            
+                            if run_status.status == "completed":
+                                yield "\n"  # Clear the progress line
+                                
+                                # Get the complete message
+                                messages = client.beta.threads.messages.list(
+                                    thread_id=session,
+                                    order="desc",
+                                    limit=1
+                                )
+                                
+                                if messages.data:
+                                    latest_message = messages.data[0]
+                                    for content_part in latest_message.content:
+                                        if content_part.type == 'text':
+                                            yield content_part.text.value
+                                break
+                            
+                            elif run_status.status in ["failed", "cancelled", "expired"]:
+                                yield f"\nError: Run ended with status {run_status.status}. Please try again."
+                                break
+                            
+                            yield "."  # Show progress
                             await asyncio.sleep(wait_interval)
                             elapsed_time += wait_interval
-                            run = client.beta.threads.runs.retrieve(thread_id=session, run_id=run.id)
-                            yield "."  # Indicate progress
                         
-                        # Get the response
-                        if run.status == "completed":
-                            yield "\n\n"  # Clear the progress indicators
-                            messages = client.beta.threads.messages.list(thread_id=session, order="desc", limit=1)
-                            if messages.data:
-                                latest_message = messages.data[0]
-                                for content_part in latest_message.content:
-                                    if content_part.type == 'text':
-                                        yield content_part.text.value
-                        else:
-                            yield f"\n\nThe assistant encountered an issue (status: {run.status}). Please try again."
-                                
+                        if elapsed_time >= max_wait_time:
+                            yield "\nResponse timed out. Please try again."
+                
                 except Exception as e:
                     logging.error(f"Error in streaming generation: {e}")
                     yield f"\n[ERROR] An error occurred while generating the response: {str(e)}. Please try again.\n"
@@ -2252,7 +2343,6 @@ async def process_conversation_internal(
         else:
             # For non-streaming, return a JSON response with the error
             return {"response": f"Error: {str(e)}"}
-        
 # FastAPI endpoint for conversation (streaming)
 @app.get("/conversation")
 async def conversation(
