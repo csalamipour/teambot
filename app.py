@@ -242,6 +242,7 @@ def create_typing_activity() -> Activity:
         type=ActivityTypes.typing,
         channel_id="msteams"
     )
+
 async def handle_thread_recovery(turn_context: TurnContext, state, error_message):
     """Handles recovery from thread or assistant errors"""
     # Increment recovery attempts
@@ -886,8 +887,179 @@ async def send_file_to_teams(turn_context: TurnContext, filename: str):
     reply.attachments = [attachment]
     await turn_context.send_activity(reply)
 
-# Function to handle text messages
-# Function to handle text messages
+# Thread summarization helper function
+async def summarize_thread_if_needed(client: AzureOpenAI, thread_id: str, state: dict, threshold: int = 30):
+    """
+    Checks if a thread needs summarization and performs the summarization if necessary.
+    
+    Args:
+        client: Azure OpenAI client
+        thread_id: The thread ID to check
+        state: The conversation state dictionary
+        threshold: Message count threshold before summarization (default: 30)
+    
+    Returns:
+        bool: True if summarization was performed, False otherwise
+    """
+    try:
+        # Check if we've already summarized recently
+        last_summarization = state.get("last_summarization_time", 0)
+        current_time = time.time()
+        
+        # Don't summarize more often than every 10 minutes
+        if current_time - last_summarization < 600:  # 600 seconds = 10 minutes
+            return False
+            
+        # Retrieve thread messages
+        messages = client.beta.threads.messages.list(
+            thread_id=thread_id,
+            order="asc",
+            limit=100  # Get up to 100 messages to check count
+        )
+        
+        # Count messages
+        message_count = len(messages.data)
+        logging.info(f"Thread {thread_id} has {message_count} messages")
+        
+        # If below threshold, no need to summarize
+        if message_count < threshold:
+            return False
+            
+        # Determine how many messages to summarize (leave 5-10 recent messages untouched)
+        messages_to_keep = 7  # Keep the 7 most recent messages
+        messages_to_summarize = message_count - messages_to_keep
+        
+        if messages_to_summarize <= 5:  # Not worth summarizing if too few
+            return False
+            
+        # Get messages to summarize (all except the most recent)
+        messages_list = list(messages.data)
+        messages_to_summarize_list = messages_list[:-messages_to_keep]
+        
+        # Convert messages to a format suitable for summarization
+        conversation_text = ""
+        for msg in messages_to_summarize_list:
+            role = "User" if msg.role == "user" else "Assistant"
+            
+            # Extract the text content from the message
+            content_text = ""
+            for content_part in msg.content:
+                if content_part.type == 'text':
+                    content_text += content_part.text.value
+            
+            conversation_text += f"{role}: {content_text}\n\n"
+        
+        # If we have a very long conversation, we need to be selective
+        if len(conversation_text) > 12000:  # Truncate if too long
+            conversation_text = conversation_text[:4000] + "\n...[middle of conversation omitted]...\n" + conversation_text[-8000:]
+        
+        # Create a new thread for summarization to avoid conflicts
+        summary_thread = client.beta.threads.create()
+        
+        # Add the conversation to summarize
+        client.beta.threads.messages.create(
+            thread_id=summary_thread.id,
+            role="user",
+            content=f"Please create a concise but comprehensive summary of the following conversation. Focus on key points, decisions, and important context that would be needed for continuing the conversation effectively:\n\n{conversation_text}"
+        )
+        
+        # Run the summarization with a different assistant
+        summary_run = client.beta.threads.runs.create(
+            thread_id=summary_thread.id,
+            assistant_id=state["assistant_id"],  # Use the same assistant
+            instructions="Create a concise but comprehensive summary of the conversation provided. Focus on extracting key points, decisions, and important context that would be needed for continuing the conversation effectively. Format the summary in clear sections with bullet points where appropriate."
+        )
+        
+        # Wait for completion
+        max_wait = 60  # Maximum wait time in seconds
+        wait_interval = 2  # Check interval in seconds
+        elapsed = 0
+        
+        while elapsed < max_wait:
+            run_status = client.beta.threads.runs.retrieve(
+                thread_id=summary_thread.id,
+                run_id=summary_run.id
+            )
+            
+            if run_status.status == "completed":
+                # Get the summary
+                summary_messages = client.beta.threads.messages.list(
+                    thread_id=summary_thread.id,
+                    order="desc",
+                    limit=1
+                )
+                
+                if summary_messages.data:
+                    # Extract the summary text
+                    summary_text = ""
+                    for content_part in summary_messages.data[0].content:
+                        if content_part.type == 'text':
+                            summary_text += content_part.text.value
+                    
+                    # Create a new thread with the summary as context
+                    new_thread = client.beta.threads.create()
+                    
+                    # Add the summary as a system message in the new thread
+                    client.beta.threads.messages.create(
+                        thread_id=new_thread.id,
+                        role="user",
+                        content=f"CONVERSATION SUMMARY: {summary_text}\n\nPlease acknowledge this conversation summary and continue the conversation based on this context.",
+                        metadata={"type": "conversation_summary"}
+                    )
+                    
+                    # Get a response acknowledging the summary
+                    acknowledgement_run = client.beta.threads.runs.create(
+                        thread_id=new_thread.id,
+                        assistant_id=state["assistant_id"]
+                    )
+                    
+                    # Wait for acknowledgement
+                    await asyncio.sleep(5)
+                    
+                    # Add the most recent messages to the new thread to maintain continuity
+                    for recent_msg in messages_list[-messages_to_keep:]:
+                        # Extract content
+                        content_text = ""
+                        for content_part in recent_msg.content:
+                            if content_part.type == 'text':
+                                content_text += content_part.text.value
+                        
+                        # Add to new thread
+                        client.beta.threads.messages.create(
+                            thread_id=new_thread.id,
+                            role=recent_msg.role,
+                            content=content_text
+                        )
+                    
+                    # Update the state with the new thread ID
+                    old_thread_id = state["session_id"]
+                    state["session_id"] = new_thread.id
+                    state["last_summarization_time"] = current_time
+                    state["active_run"] = False
+                    
+                    # Update active_runs dictionary
+                    if old_thread_id in active_runs:
+                        del active_runs[old_thread_id]
+                    
+                    logging.info(f"Summarized thread {old_thread_id} and created new thread {new_thread.id}")
+                    return True
+            
+            elif run_status.status in ["failed", "cancelled", "expired"]:
+                logging.error(f"Summary generation failed with status: {run_status.status}")
+                return False
+            
+            await asyncio.sleep(wait_interval)
+            elapsed += wait_interval
+        
+        logging.warning(f"Summary generation timed out after {max_wait} seconds")
+        return False
+        
+    except Exception as e:
+        logging.error(f"Error summarizing thread: {str(e)}")
+        traceback.print_exc()
+        return False
+
+# Modified handle_text_message with thread summarization
 async def handle_text_message(turn_context: TurnContext, state):
     user_message = turn_context.activity.text.strip()
     conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
@@ -900,6 +1072,14 @@ async def handle_text_message(turn_context: TurnContext, state):
     
     # Send typing indicator
     await turn_context.send_activity(create_typing_activity())
+    
+    # Check if thread needs summarization
+    if state["session_id"]:
+        client = create_client()
+        summarized = await summarize_thread_if_needed(client, state["session_id"], state, threshold=30)
+        
+        if summarized:
+            await turn_context.send_activity("I've summarized our previous conversation to maintain context while keeping the conversation focused.")
     
     # Mark thread as busy
     state["active_run"] = True
