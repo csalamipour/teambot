@@ -250,12 +250,31 @@ async def bot_logic(turn_context: TurnContext):
     
     # Handle different activity types
     if turn_context.activity.type == ActivityTypes.message:
-        # Handle file attachments
+        # Check if we have text content first
+        has_text = turn_context.activity.text and turn_context.activity.text.strip()
+        
+        # Check for file attachments
+        has_file_attachments = False
         if turn_context.activity.attachments and len(turn_context.activity.attachments) > 0:
-            await handle_file_upload(turn_context, state)
-        # Handle text messages
-        elif turn_context.activity.text:
+            for attachment in turn_context.activity.attachments:
+                if hasattr(attachment, 'content_type') and attachment.content_type == ContentType.FILE_DOWNLOAD_INFO:
+                    has_file_attachments = True
+                    break
+        
+        # Prioritize text processing if we have text content (even if there are non-file attachments)
+        if has_text and not has_file_attachments:
             await handle_text_message(turn_context, state)
+        # Only process file attachments if we have them
+        elif has_file_attachments:
+            await handle_file_upload(turn_context, state)
+        # Fallback for messages with neither text nor file attachments
+        else:
+            # This handles cases where Teams might send empty messages or special activities
+            logger.info(f"Received message without text or file attachments: {turn_context.activity}")
+            if not state["assistant_id"]:
+                await initialize_chat(turn_context, state)
+            else:
+                await turn_context.send_activity("I didn't receive any text or files. How can I help you?")
     
     # Handle Teams file consent card responses
     elif turn_context.activity.type == ActivityTypes.invoke:
@@ -390,8 +409,24 @@ async def handle_file_upload(turn_context: TurnContext, state):
                 # Process the file as normal with direct function calls
                 await process_uploaded_file(turn_context, state, file_path, attachment.name)
             else:
-                # Not a valid file attachment
-                await turn_context.send_activity("Please upload a file using the file upload feature in Teams.")
+                # Only prompt for file uploads if this is actually a file-related attachment
+                # but not in the expected format (prevents the message when dealing with non-file attachments)
+                file_related_types = [
+                    ContentType.FILE_CONSENT_CARD,
+                    ContentType.FILE_INFO_CARD,
+                    "application/vnd.microsoft.teams.file."
+                ]
+                
+                is_file_related = False
+                if hasattr(attachment, 'content_type'):
+                    for file_type in file_related_types:
+                        if file_type in attachment.content_type:
+                            is_file_related = True
+                            break
+                
+                if is_file_related:
+                    await turn_context.send_activity("Please upload a file using the file upload feature in Teams.")
+                # If it's not file-related, we don't need to send any message
                 
         except Exception as e:
             logger.error(f"Error processing file: {str(e)}")
@@ -656,6 +691,9 @@ async def initialize_chat(turn_context: TurnContext, state, context=None):
         # Send typing indicator
         await turn_context.send_activity(create_typing_activity())
         
+        # Log initialization attempt
+        logger.info(f"Initializing chat with context: {context}")
+        
         # Call internal function directly
         client = create_client()
         result = await initiate_chat_internal(client, context=context)
@@ -664,6 +702,9 @@ async def initialize_chat(turn_context: TurnContext, state, context=None):
             state["assistant_id"] = result.get("assistant")
             state["session_id"] = result.get("session")
             state["vector_store_id"] = result.get("vector_store")
+            
+            # Log successful initialization
+            logger.info(f"Chat initialized: assistant={state['assistant_id']}, session={state['session_id']}")
             
             # Tell the user chat was initialized
             await turn_context.send_activity("Hi! I'm the Product Management Bot. I'm ready to help you with your product management tasks.")
@@ -674,6 +715,7 @@ async def initialize_chat(turn_context: TurnContext, state, context=None):
                 await send_message(turn_context, state)
         else:
             await turn_context.send_activity(f"Failed to initialize chat. Please try again.")
+            logger.error(f"Failed to initialize chat: {result}")
             if isinstance(result, str):
                 await turn_context.send_activity(f"Error details: {result}")
     
@@ -681,7 +723,6 @@ async def initialize_chat(turn_context: TurnContext, state, context=None):
         await turn_context.send_activity(f"Error initializing chat: {str(e)}")
         logger.error(f"Error in initialize_chat: {str(e)}")
         traceback.print_exc()
-
 # Send a message without user input (used after file upload or initialization)
 async def send_message(turn_context: TurnContext, state):
     try:
