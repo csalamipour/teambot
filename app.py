@@ -144,7 +144,10 @@ async def upload_file_to_openai_thread(client: AzureOpenAI, file_content: bytes,
                 thread_id=thread_id,
                 role="user",
                 content=message_text,
-                file_ids=[file_id]
+                attachments=[{
+                    "file_id": file_id,
+                    "tools": [{"type": "file_search"}]
+                  }]
             )
             
             logging.info(f"File {filename} (ID: {file_id}) attached to thread {thread_id}")
@@ -764,22 +767,11 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
     try:
         client = create_client()
         
-        # First, send an informative update
+        # Send typing indicator to show we're processing
         await turn_context.send_activity(create_typing_activity())
-        informative_activity = Activity(
-            type="message",
-            text="Searching through documents...",
-            channel_id="msteams",
-            entities=[{
-                "type": "streaminfo",
-                "streamType": "informative",
-                "streamSequence": 1
-            }]
-        )
-        await turn_context.send_activity(informative_activity)
         
-        # Start streaming process by calling internal function
-        stream_generator = await process_conversation_internal(
+        # Get the streaming response generator
+        stream_result = await process_conversation_internal(
             client=client,
             session=state["session_id"],
             prompt=user_message,
@@ -787,70 +779,51 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
             stream_output=True
         )
         
-        # Process the streaming response
-        if hasattr(stream_generator, "__aiter__"):
-            stream_id = f"a-{int(time.time())}"
-            sequence = 2
-            current_text = ""
-            
-            # Keep track of time to avoid exceeding streaming time limits
-            start_time = time.time()
-            max_stream_time = 110  # Maximum streaming time in seconds
-            
-            async for chunk in stream_generator:
-                if time.time() - start_time > max_stream_time:
-                    logger.warning("Streaming exceeded maximum time limit - sending final message")
-                    break
-                    
-                # Add chunk to current text
+        # For Teams, we need to collect the full response and send it non-streaming
+        # as Teams has specific requirements for streaming that our current implementation doesn't meet
+        full_response = ""
+        
+        # Check if we got a streaming generator
+        if hasattr(stream_result, "__aiter__"):
+            # Collect all chunks from the streaming generator
+            async for chunk in stream_result:
                 if chunk:
-                    current_text += chunk
-                    
-                    # Send update every 500ms or so (rate limit-aware)
-                    streaming_activity = Activity(
-                        type="typing",
-                        text=current_text,
-                        channel_id="msteams",
-                        entities=[{
-                            "type": "streaminfo",
-                            "streamId": stream_id,
-                            "streamType": "streaming",
-                            "streamSequence": sequence
-                        }]
-                    )
-                    await turn_context.send_activity(streaming_activity)
-                    sequence += 1
-                    
-                    # Slow down to avoid rate limiting
-                    await asyncio.sleep(0.75)
-            
-            # Send final message
-            final_activity = Activity(
-                type="message",
-                text=current_text,
-                channel_id="msteams",
-                entities=[{
-                    "type": "streaminfo",
-                    "streamId": stream_id,
-                    "streamType": "final"
-                }]
-            )
-            await turn_context.send_activity(final_activity)
+                    full_response += chunk
+                    # Periodically show typing indicator to indicate progress
+                    # but don't do this too frequently to avoid rate limiting
+                    if len(full_response) % 500 == 0:  
+                        await turn_context.send_activity(create_typing_activity())
+                        await asyncio.sleep(0.5)
+        elif isinstance(stream_result, dict) and "response" in stream_result:
+            # Handle non-streaming response
+            full_response = stream_result["response"]
         else:
-            # Fallback to non-streaming
-            if isinstance(stream_generator, dict) and "response" in stream_generator:
-                await turn_context.send_activity(stream_generator["response"])
+            # Fallback for unexpected response format
+            full_response = "I've processed your request, but encountered an issue with the response format."
+        
+        # Send the complete response, splitting if needed
+        if full_response:
+            # Teams has message size limits, so split long responses
+            if len(full_response) > 7000:
+                chunks = [full_response[i:i+7000] for i in range(0, len(full_response), 7000)]
+                for i, chunk in enumerate(chunks):
+                    if i == 0:
+                        await turn_context.send_activity(chunk)
+                    else:
+                        await turn_context.send_activity(f"(continued) {chunk}")
             else:
-                await turn_context.send_activity("I've processed your request, but encountered an issue with streaming. Please try again.")
+                await turn_context.send_activity(full_response)
+        else:
+            await turn_context.send_activity("I'm sorry, I couldn't process your request.")
                 
     except Exception as e:
         logger.error(f"Error in stream_response_to_teams: {str(e)}")
         traceback.print_exc()
         await turn_context.send_activity(f"Error processing streaming response: {str(e)}")
         
-        # Fallback to non-streaming
+        # Fallback to non-streaming mode
         try:
-            client = create_client()
+            logger.info("Falling back to non-streaming mode")
             result = await process_conversation_internal(
                 client=client,
                 session=state["session_id"],
@@ -860,9 +833,22 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
             )
             
             if isinstance(result, dict) and "response" in result:
-                await turn_context.send_activity(result["response"])
-        except:
-            await turn_context.send_activity("I'm sorry, I couldn't process your request due to a technical issue.")
+                response_text = result["response"]
+                # Split long responses
+                if len(response_text) > 7000:
+                    chunks = [response_text[i:i+7000] for i in range(0, len(response_text), 7000)]
+                    for i, chunk in enumerate(chunks):
+                        if i == 0:
+                            await turn_context.send_activity(chunk)
+                        else:
+                            await turn_context.send_activity(f"(continued) {chunk}")
+                else:
+                    await turn_context.send_activity(response_text)
+            else:
+                await turn_context.send_activity("I'm sorry, I couldn't process your request due to a technical issue.")
+        except Exception as fallback_error:
+            logger.error(f"Fallback error: {str(fallback_error)}")
+            await turn_context.send_activity("I'm sorry, I couldn't process your request.")
 
 # Send welcome message when bot is added
 async def send_welcome_message(turn_context: TurnContext):
