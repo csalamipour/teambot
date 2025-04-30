@@ -1618,7 +1618,7 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
             logging.info(f"Created run with ID: {run_id}")
             
             # Set up polling with typing indicators
-            max_wait_time = 90  # seconds
+            max_wait_time = 120  # seconds
             wait_interval = 2   # seconds
             elapsed_time = 0
             last_typing_time = time.time()
@@ -1908,7 +1908,7 @@ async def image_analysis_internal(image_data: bytes, filename: str, prompt: Opti
                     {"type": "image_url", "image_url": {"url": data_url, "detail": "high"}}
                 ]
             }],
-            max_tokens=1000  # Increased max_tokens for potentially more detailed analysis
+            max_tokens=5000  # Increased max_tokens for potentially more detailed analysis
         )
 
         analysis_text = response.choices[0].message.content
@@ -2819,7 +2819,7 @@ async def process_conversation_internal(
                         yield "Processing your request...\n"
                         
                         run_id = run.id
-                        max_wait_time = 60  # seconds
+                        max_wait_time = 90  # seconds
                         wait_interval = 2   # seconds
                         elapsed_time = 0
                         
