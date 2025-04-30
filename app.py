@@ -9,6 +9,7 @@ import mimetypes
 import traceback
 import time
 import re
+import copy
 import sys
 from io import StringIO
 from typing import Optional, List, Dict, Any, Tuple, Union
@@ -48,7 +49,17 @@ from botbuilder.schema.teams import (
     FileInfoCard,
 )
 from botbuilder.schema.teams.additional_properties import ContentType
+import uuid
+from typing import Dict, List, Deque
+from collections import deque
+import threading
 
+# Dictionary to store pending messages for each conversation
+pending_messages = {}
+# Lock for thread-safe operations on the pending_messages dict
+pending_messages_lock = threading.Lock()
+# Dictionary for tracking active runs
+active_runs = {}
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -185,7 +196,129 @@ def create_typing_activity() -> Activity:
         type=ActivityTypes.typing,
         channel_id="msteams"
     )
-
+async def handle_thread_recovery(turn_context: TurnContext, state, error_message):
+    """Handles recovery from thread or assistant errors"""
+    # Increment recovery attempts
+    state["recovery_attempts"] = state.get("recovery_attempts", 0) + 1
+    state["last_error"] = error_message
+    
+    # If too many recovery attempts, suggest a fresh start
+    if state["recovery_attempts"] >= 3:
+        # Reset the recovery counter
+        state["recovery_attempts"] = 0
+        # Send error message with new chat card
+        await turn_context.send_activity(f"I'm having trouble maintaining our conversation. Let's start a new chat session.")
+        await send_new_chat_card(turn_context)
+        return
+    
+    # Try to recover the thread
+    try:
+        # Check if session and assistant are valid
+        client = create_client()
+        validation = await validate_resources(client, state["session_id"], state["assistant_id"])
+        
+        needs_new_thread = not validation["thread_valid"]
+        needs_new_assistant = not validation["assistant_valid"]
+        
+        recovery_message = "I encountered an issue with our conversation. "
+        
+        # Create new resources as needed
+        if needs_new_thread and needs_new_assistant:
+            # Complete restart
+            await turn_context.send_activity(f"{recovery_message}Let me restart our conversation.")
+            await initialize_chat(turn_context, state)
+        elif needs_new_thread:
+            # Just need a new thread
+            recovery_message += "I've created a new conversation thread while keeping our previous context."
+            thread = client.beta.threads.create()
+            state["session_id"] = thread.id
+            state["active_run"] = False
+            await turn_context.send_activity(recovery_message)
+        elif needs_new_assistant:
+            # Just need a new assistant
+            recovery_message += "I've created a new assistant while keeping our conversation history."
+            assistant_obj = client.beta.assistants.create(
+                name=f"recovery_assistant_{int(time.time())}",
+                model="gpt-4o-mini",
+                instructions="You are a helpful assistant recovering from a system error. Please continue the conversation naturally.",
+            )
+            state["assistant_id"] = assistant_obj.id
+            state["active_run"] = False
+            await turn_context.send_activity(recovery_message)
+        else:
+            # Resources are valid, but run might be stuck
+            recovery_message += "Let me continue our conversation."
+            state["active_run"] = False
+            await turn_context.send_activity(recovery_message)
+        
+        # Clear any active runs
+        if state["session_id"] in active_runs:
+            del active_runs[state["session_id"]]
+            
+    except Exception as recovery_error:
+        # If recovery fails, suggest a new chat
+        logging.error(f"Recovery attempt failed: {recovery_error}")
+        await turn_context.send_activity("I'm still having trouble with our conversation. Let's start a new chat session.")
+        await send_new_chat_card(turn_context)
+def create_new_chat_card():
+    """Creates an adaptive card for starting a new chat session"""
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.0",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "Start a New Conversation",
+                "size": "large",
+                "weight": "bolder"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Click the button below to start a fresh conversation with me.",
+                "wrap": True
+            }
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": "Start New Chat",
+                "data": {
+                    "action": "new_chat"
+                }
+            }
+        ]
+    }
+    return CardFactory.adaptive_card(card)
+async def send_new_chat_card(turn_context: TurnContext):
+    """Sends a card with a button to start a new chat session"""
+    reply = _create_reply(turn_context.activity)
+    reply.attachments = [create_new_chat_card()]
+    await turn_context.send_activity(reply)
+async def handle_card_actions(turn_context: TurnContext, action_data):
+    """Handles actions from adaptive cards"""
+    try:
+        if action_data.get("action") == "new_chat":
+            # Get conversation ID
+            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+            conversation_id = conversation_reference.conversation.id
+            
+            # Reset conversation state
+            if conversation_id in conversation_states:
+                # Clear any pending messages
+                with pending_messages_lock:
+                    if conversation_id in pending_messages:
+                        pending_messages[conversation_id].clear()
+                
+                # Send typing indicator
+                await turn_context.send_activity(create_typing_activity())
+                
+                # Initialize new chat
+                await initialize_chat(turn_context, None)  # Pass None to force new state creation
+            else:
+                await initialize_chat(turn_context, None)
+    except Exception as e:
+        logging.error(f"Error handling card action: {e}")
+        await turn_context.send_activity(f"I couldn't start a new chat. Please try again later.")
 # ----- Teams Bot Logic Functions -----
 
 # Catch-all for errors
@@ -246,36 +379,80 @@ async def bot_logic(turn_context: TurnContext):
             "assistant_id": None,
             "session_id": None,
             "vector_store_id": None,
-            "uploaded_files": []
+            "uploaded_files": [],
+            "recovery_attempts": 0,  # Track recovery attempts
+            "last_error": None,      # Track last error
+            "active_run": False      # Track if a run is active
         }
     
     state = conversation_states[conversation_id]
     
     # Handle different activity types
     if turn_context.activity.type == ActivityTypes.message:
+        # Initialize pending messages queue if not exists
+        with pending_messages_lock:
+            if conversation_id not in pending_messages:
+                pending_messages[conversation_id] = deque()
+        
         # Check if we have text content first
         has_text = turn_context.activity.text and turn_context.activity.text.strip()
         
         # Check for file attachments
         has_file_attachments = False
+        has_file_content_message = False
+        file_caption = None
+        
         if turn_context.activity.attachments and len(turn_context.activity.attachments) > 0:
             for attachment in turn_context.activity.attachments:
                 if hasattr(attachment, 'content_type') and attachment.content_type == ContentType.FILE_DOWNLOAD_INFO:
                     has_file_attachments = True
+                    # Check if there's also a message with the file (caption)
+                    if has_text:
+                        has_file_content_message = True
+                        file_caption = turn_context.activity.text.strip()
                     break
+        
+        # Track if thread is currently processing
+        is_thread_busy = state.get("active_run", False)
+        
+        # If thread is busy and we have a text message, queue it
+        if is_thread_busy and has_text and not has_file_attachments:
+            with pending_messages_lock:
+                pending_messages[conversation_id].append(turn_context.activity.text.strip())
+            await turn_context.send_activity("I'm still working on your previous request. I'll address this message next.")
+            return
         
         # Prioritize text processing if we have text content (even if there are non-file attachments)
         if has_text and not has_file_attachments:
-            await handle_text_message(turn_context, state)
-        # Only process file attachments if we have them
+            try:
+                await handle_text_message(turn_context, state)
+            except Exception as e:
+                logging.error(f"Error in handle_text_message: {e}")
+                traceback.print_exc()
+                # Attempt recovery
+                await handle_thread_recovery(turn_context, state, str(e))
+        
+        # Process file attachments with or without caption
         elif has_file_attachments:
-            await handle_file_upload(turn_context, state)
+            try:
+                await handle_file_upload(turn_context, state, file_caption)
+            except Exception as e:
+                logging.error(f"Error in handle_file_upload: {e}")
+                traceback.print_exc()
+                # Attempt recovery
+                await handle_thread_recovery(turn_context, state, str(e))
+        
         # Fallback for messages with neither text nor file attachments
         else:
             # This handles cases where Teams might send empty messages or special activities
             logger.info(f"Received message without text or file attachments: {turn_context.activity}")
             if not state["assistant_id"]:
-                await initialize_chat(turn_context, state)
+                try:
+                    await initialize_chat(turn_context, state)
+                except Exception as e:
+                    logging.error(f"Error in initialize_chat: {e}")
+                    # Attempt recovery
+                    await handle_thread_recovery(turn_context, state, str(e))
             else:
                 await turn_context.send_activity("I didn't receive any text or files. How can I help you?")
     
@@ -283,13 +460,16 @@ async def bot_logic(turn_context: TurnContext):
     elif turn_context.activity.type == ActivityTypes.invoke:
         if turn_context.activity.name == "fileConsent/invoke":
             await handle_file_consent_response(turn_context, turn_context.activity.value)
+        elif turn_context.activity.name == "adaptiveCard/action":
+            # Handle adaptive card actions (for new chat button)
+            await handle_card_actions(turn_context, turn_context.activity.value)
     
     # Handle conversation update (bot added to conversation)
     elif turn_context.activity.type == ActivityTypes.conversation_update:
         if turn_context.activity.members_added:
             for member in turn_context.activity.members_added:
                 if member.id != turn_context.activity.recipient.id:
-                    # Bot was added - send welcome message
+                    # Bot was added - send welcome message with new chat card
                     await send_welcome_message(turn_context)
 
 async def handle_file_consent_response(turn_context: TurnContext, file_consent_response: FileConsentCardResponse):
@@ -386,8 +566,8 @@ async def download_file(turn_context: TurnContext, attachment: Attachment):
         return None
 
 # Function to handle file uploads
-async def handle_file_upload(turn_context: TurnContext, state):
-    """Handle file uploads from Teams"""
+async def handle_file_upload(turn_context: TurnContext, state, message_text=None):
+    """Handle file uploads from Teams with optional message text"""
     
     for attachment in turn_context.activity.attachments:
         try:
@@ -409,8 +589,8 @@ async def handle_file_upload(turn_context: TurnContext, state):
                     await turn_context.send_activity("Sorry, CSV and Excel files are not supported. Please upload PDF, DOC, DOCX, or TXT files only.")
                     continue
                 
-                # Process the file as normal with direct function calls
-                await process_uploaded_file(turn_context, state, file_path, attachment.name)
+                # Process the file with message text if provided
+                await process_uploaded_file(turn_context, state, file_path, attachment.name, message_text)
             else:
                 # Only prompt for file uploads if this is actually a file-related attachment
                 # but not in the expected format (prevents the message when dealing with non-file attachments)
@@ -436,10 +616,13 @@ async def handle_file_upload(turn_context: TurnContext, state):
             traceback.print_exc()
             await turn_context.send_activity(f"Error processing file: {str(e)}")
 
-async def process_uploaded_file(turn_context: TurnContext, state, file_path: str, filename: str):
-    """Process an uploaded file after it's been downloaded"""
+async def process_uploaded_file(turn_context: TurnContext, state, file_path: str, filename: str, message_text: str = None):
+    """Process an uploaded file after it's been downloaded, with optional message text"""
     # Message user that file is being processed
-    await turn_context.send_activity(f"Processing file: '{filename}'...")
+    if message_text:
+        await turn_context.send_activity(f"Processing file: '{filename}' with your message: '{message_text}'...")
+    else:
+        await turn_context.send_activity(f"Processing file: '{filename}'...")
     
     # If no assistant yet, initialize chat first
     if not state["assistant_id"]:
@@ -464,15 +647,22 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
             client = create_client()
             
             if is_image:
-                # Analyze image - same as before
+                # Analyze image - same as before but add message text if provided
                 analysis_text = await image_analysis_internal(file_content, filename)
                 
                 # Add analysis to the thread
                 if state["session_id"]:
+                    # Create content with analysis and optional message
+                    content_text = f"Analysis result for uploaded image '{filename}':\n{analysis_text}"
+                    
+                    # If there's a message, include it first
+                    if message_text:
+                        content_text = f"User message: {message_text}\n\n{content_text}"
+                        
                     client.beta.threads.messages.create(
                         thread_id=state["session_id"],
                         role="user",
-                        content=f"Analysis result for uploaded image '{filename}':\n{analysis_text}"
+                        content=content_text
                     )
                     
                     # Add image file awareness
@@ -481,7 +671,8 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                         {
                             "name": filename,
                             "type": "image",
-                            "processing_method": "thread_message"
+                            "processing_method": "thread_message",
+                            "with_message": message_text is not None
                         }
                     )
                     
@@ -498,7 +689,10 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                     await turn_context.send_activity(create_typing_activity())
                     
                     # Upload the file directly to the thread
-                    message_content = f"I've uploaded a document named '{filename}'. Please use this document to answer my questions."
+                    if message_text:
+                        message_content = f"{message_text}\n\nI've also uploaded a document named '{filename}'. Please use this document to answer my questions."
+                    else:
+                        message_content = f"I've uploaded a document named '{filename}'. Please use this document to answer my questions."
                     
                     # Use the new OpenAI direct file upload approach
                     try:
@@ -519,7 +713,8 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                             {
                                 "name": filename,
                                 "type": file_ext[1:] if file_ext else "document",
-                                "processing_method": "thread_attachment"
+                                "processing_method": "thread_attachment",
+                                "with_message": message_text is not None
                             }
                         )
                         
@@ -553,6 +748,14 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                                     files=[file_stream]
                                 )
                             
+                            # Add user message separately if provided
+                            if message_text:
+                                client.beta.threads.messages.create(
+                                    thread_id=state["session_id"],
+                                    role="user",
+                                    content=message_text
+                                )
+                            
                             # Update assistant with file_search tool
                             assistant_obj = client.beta.assistants.retrieve(assistant_id=state["assistant_id"])
                             has_file_search = False
@@ -578,7 +781,8 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                                 {
                                     "name": filename,
                                     "type": file_ext[1:] if file_ext else "document",
-                                    "processing_method": "vector_store"
+                                    "processing_method": "vector_store",
+                                    "with_message": message_text is not None
                                 }
                             )
                             
@@ -639,6 +843,8 @@ async def send_file_to_teams(turn_context: TurnContext, filename: str):
 # Function to handle text messages
 async def handle_text_message(turn_context: TurnContext, state):
     user_message = turn_context.activity.text.strip()
+    conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+    conversation_id = conversation_reference.conversation.id
     
     # If no assistant yet, initialize chat with the message as context
     if not state["assistant_id"]:
@@ -647,6 +853,11 @@ async def handle_text_message(turn_context: TurnContext, state):
     
     # Send typing indicator
     await turn_context.send_activity(create_typing_activity())
+    
+    # Mark thread as busy
+    state["active_run"] = True
+    if state["session_id"]:
+        active_runs[state["session_id"]] = True
     
     try:
         # Use streaming if supported by the channel
@@ -683,13 +894,56 @@ async def handle_text_message(turn_context: TurnContext, state):
             else:
                 await turn_context.send_activity(assistant_response)
             
+        # Mark thread as no longer busy
+        state["active_run"] = False
+        if state["session_id"] in active_runs:
+            del active_runs[state["session_id"]]
+        
+        # Check for queued messages
+        with pending_messages_lock:
+            if conversation_id in pending_messages and pending_messages[conversation_id]:
+                next_message = pending_messages[conversation_id].popleft()
+                await turn_context.send_activity("Now addressing your follow-up message...")
+                
+                # Process the next message
+                next_turn_context = copy.deepcopy(turn_context)
+                next_turn_context.activity.text = next_message
+                await handle_text_message(next_turn_context, state)
+            
     except Exception as e:
+        # Mark thread as no longer busy even on error
+        state["active_run"] = False
+        if state["session_id"] in active_runs:
+            del active_runs[state["session_id"]]
+            
         await turn_context.send_activity(f"Error processing your message: {str(e)}")
         logger.error(f"Error in handle_text_message: {str(e)}")
         traceback.print_exc()
-
 # Initialize chat with the backend
-async def initialize_chat(turn_context: TurnContext, state, context=None):
+async def initialize_chat(turn_context: TurnContext, state=None, context=None):
+    """Initialize a new chat session with the backend"""
+    # Get the conversation ID
+    conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+    conversation_id = conversation_reference.conversation.id
+    
+    # If state is None, create a new one (used for new chat button)
+    if state is None:
+        conversation_states[conversation_id] = {
+            "assistant_id": None,
+            "session_id": None,
+            "vector_store_id": None,
+            "uploaded_files": [],
+            "recovery_attempts": 0,
+            "last_error": None,
+            "active_run": False
+        }
+        state = conversation_states[conversation_id]
+        
+        # Clear any pending messages
+        with pending_messages_lock:
+            if conversation_id in pending_messages:
+                pending_messages[conversation_id].clear()
+    
     try:
         # Send typing indicator
         await turn_context.send_activity(create_typing_activity())
@@ -705,6 +959,8 @@ async def initialize_chat(turn_context: TurnContext, state, context=None):
             state["assistant_id"] = result.get("assistant")
             state["session_id"] = result.get("session")
             state["vector_store_id"] = result.get("vector_store")
+            state["active_run"] = False
+            state["recovery_attempts"] = 0
             
             # Log successful initialization
             logger.info(f"Chat initialized: assistant={state['assistant_id']}, session={state['session_id']}")
@@ -726,6 +982,7 @@ async def initialize_chat(turn_context: TurnContext, state, context=None):
         await turn_context.send_activity(f"Error initializing chat: {str(e)}")
         logger.error(f"Error in initialize_chat: {str(e)}")
         traceback.print_exc()
+
 # Send a message without user input (used after file upload or initialization)
 async def send_message(turn_context: TurnContext, state):
     try:
@@ -770,17 +1027,22 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
         # Send typing indicator first
         await turn_context.send_activity(create_typing_activity())
         
-        # Get streaming generator from backend
-        stream_generator = await process_conversation_internal(
-            client=client,
-            session=state["session_id"],
-            prompt=user_message,
-            assistant=state["assistant_id"],
-            stream_output=True
-        )
+        # Create a run with streaming=True but properly handle the stream
+        thread_id = state["session_id"]
+        assistant_id = state["assistant_id"]
         
-        # Check if we have a streaming generator
-        if hasattr(stream_generator, "__aiter__"):
+        # Mark run as active in state
+        state["active_run"] = True
+        active_runs[thread_id] = True
+        
+        try:
+            # Using the updated streaming approach
+            stream = client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                stream=True
+            )
+            
             # Teams requires proper streaming protocol
             # First, send beginning of stream
             current_text = ""
@@ -793,29 +1055,92 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
             stream_timeout = 110  # Max streaming time in seconds
             start_time = time.time()
             
-            # Start collecting chunks
-            async for chunk in stream_generator:
-                # Check time limit
-                if time.time() - start_time > stream_timeout:
-                    logger.warning("Stream timeout reached")
-                    break
-                
-                if not chunk:
-                    continue
+            # Start collecting chunks - handle both async and non-async Stream objects
+            try:
+                # Try to use as async generator
+                if hasattr(stream, "__aiter__"):
+                    async for chunk in stream:
+                        if time.time() - start_time > stream_timeout:
+                            logger.warning("Stream timeout reached")
+                            break
+                        
+                        if not chunk:
+                            continue
+                            
+                        # Handle different event types
+                        if chunk.event == "thread.message.delta" and hasattr(chunk.data, "delta"):
+                            delta = chunk.data.delta
+                            if hasattr(delta, "content") and delta.content:
+                                for content in delta.content:
+                                    if content.type == "text" and hasattr(content.text, "value"):
+                                        current_text += content.text.value
+                                        await turn_context.send_activity(create_typing_activity())
+                                        await asyncio.sleep(0.5)  # Rate limiting
+                                        
+                                        # Send partial response for longer generations
+                                        if len(current_text) > 500 and not first_chunk_sent:
+                                            await turn_context.send_activity(f"{current_text}...")
+                                            first_chunk_sent = True
+                elif hasattr(stream, "iter_chunks"):
+                    # Use the non-async iterator with asyncio to make it work with async
+                    for chunk in stream.iter_chunks():
+                        if time.time() - start_time > stream_timeout:
+                            logger.warning("Stream timeout reached")
+                            break
+                        
+                        if not chunk:
+                            continue
+                        
+                        # Parse the chunk data
+                        if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
+                            delta = chunk.data.delta
+                            if hasattr(delta, "content") and delta.content:
+                                for content in delta.content:
+                                    if content.type == "text" and hasattr(content.text, "value"):
+                                        current_text += content.text.value
+                                        
+                        # Send typing indicator regularly
+                        await turn_context.send_activity(create_typing_activity())
+                        await asyncio.sleep(0.5)  # Rate limiting
+                                
+                        # Send partial response for longer generations
+                        if len(current_text) > 500 and not first_chunk_sent:
+                            await turn_context.send_activity(f"{current_text}...")
+                            first_chunk_sent = True
+                else:
+                    # Fallback for incompatible stream format
+                    logger.warning(f"Stream object {type(stream)} doesn't support iteration, falling back")
+                    # Fall back to non-streaming approach
+                    run = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=stream.id)
                     
-                current_text += chunk
-                
-                # Update Teams - we have two options:
-                
-                # Option 1: Simple typing indicators
-                await turn_context.send_activity(create_typing_activity())
-                await asyncio.sleep(0.5)  # Rate limiting
-                
-                # Option 2: Plain messages that get replaced (this doesn't use streaming API)
-                if len(current_text) > 500 and not first_chunk_sent:
-                    # Send a partial response if we have enough content
-                    await turn_context.send_activity(f"{current_text}...")
-                    first_chunk_sent = True
+                    # Wait for completion (with timeout)
+                    max_wait_time = 60  # seconds
+                    wait_interval = 2  # seconds
+                    elapsed_time = 0
+                    
+                    while run.status in ["queued", "in_progress"] and elapsed_time < max_wait_time:
+                        await asyncio.sleep(wait_interval)
+                        elapsed_time += wait_interval
+                        run = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+                        
+                        # Send typing indicator while waiting
+                        await turn_context.send_activity(create_typing_activity())
+                    
+                    # Get the messages once complete
+                    if run.status == "completed":
+                        messages = client.beta.threads.messages.list(thread_id=thread_id, order="desc", limit=1)
+                        if messages.data:
+                            latest_message = messages.data[0]
+                            for content_part in latest_message.content:
+                                if content_part.type == 'text':
+                                    current_text += content_part.text.value
+                    else:
+                        current_text = f"I couldn't complete the response (status: {run.status}). Please try again."
+            
+            except Exception as stream_error:
+                logger.error(f"Error during streaming: {stream_error}")
+                traceback.print_exc()
+                current_text += f"\n\nI encountered an issue while responding. Please try again or start a new chat if the problem persists."
             
             # When done, send the complete message
             # For longer responses, split into chunks
@@ -829,43 +1154,42 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
             else:
                 await turn_context.send_activity(current_text)
                 
-        elif isinstance(stream_generator, dict) and "response" in stream_generator:
-            # Handle non-streaming response
-            response_text = stream_generator["response"]
+        except Exception as e:
+            logger.error(f"Error in stream_response_to_teams: {str(e)}")
+            traceback.print_exc()
+            await turn_context.send_activity(f"Error processing your request: {str(e)}")
             
-            # For longer responses, split into chunks
-            if len(response_text) > 7000:
-                chunks = [response_text[i:i+7000] for i in range(0, len(response_text), 7000)]
-                for i, chunk in enumerate(chunks):
-                    if i == 0:
-                        await turn_context.send_activity(chunk)
-                    else:
-                        await turn_context.send_activity(f"(continued) {chunk}")
-            else:
-                await turn_context.send_activity(response_text)
-        else:
-            await turn_context.send_activity("I processed your request, but encountered an issue with the response format.")
+            # Fallback to non-streaming
+            try:
+                client = create_client()
+                result = await process_conversation_internal(
+                    client=client,
+                    session=state["session_id"],
+                    prompt=user_message,
+                    assistant=state["assistant_id"],
+                    stream_output=False
+                )
+                
+                if isinstance(result, dict) and "response" in result:
+                    await turn_context.send_activity(result["response"])
+            except:
+                await turn_context.send_activity("I'm sorry, I couldn't process your request due to a technical issue.")
+        finally:
+            # Mark run as complete
+            state["active_run"] = False
+            if thread_id in active_runs:
+                del active_runs[thread_id]
             
-    except Exception as e:
-        logger.error(f"Error in stream_response_to_teams: {str(e)}")
+    except Exception as outer_e:
+        logger.error(f"Outer error in stream_response_to_teams: {str(outer_e)}")
         traceback.print_exc()
-        await turn_context.send_activity(f"Error processing your request: {str(e)}")
+        await turn_context.send_activity("I encountered a technical issue. Please try again or start a new chat.")
         
-        # Fallback to non-streaming
-        try:
-            client = create_client()
-            result = await process_conversation_internal(
-                client=client,
-                session=state["session_id"],
-                prompt=user_message,
-                assistant=state["assistant_id"],
-                stream_output=False
-            )
-            
-            if isinstance(result, dict) and "response" in result:
-                await turn_context.send_activity(result["response"])
-        except:
-            await turn_context.send_activity("I'm sorry, I couldn't process your request due to a technical issue.")
+        # Ensure we mark run as complete even on error
+        state["active_run"] = False
+        if state["session_id"] in active_runs:
+            del active_runs[state["session_id"]]
+
 
 # Send welcome message when bot is added
 async def send_welcome_message(turn_context: TurnContext):
@@ -884,6 +1208,9 @@ async def send_welcome_message(turn_context: TurnContext):
     )
     
     await turn_context.send_activity(welcome_text)
+    
+    # Also send the new chat card
+    await send_new_chat_card(turn_context)
 
 # ----- Common API Functions -----
 
@@ -1650,17 +1977,7 @@ async def process_conversation_internal(
 ):
     """
     Core function to process conversation with the assistant.
-    This function handles both streaming and non-streaming modes.
-    
-    Args:
-        client: Azure OpenAI client instance
-        session: Thread ID
-        prompt: User message
-        assistant: Assistant ID
-        stream_output: If True, returns a streaming response, otherwise collects and returns full response
-        
-    Returns:
-        Either a streaming response generator or a dictionary with the full response
+    This function handles both streaming and non-streaming modes, with improved support for Stream object handling.
     """
     try:
         # Validate resources if provided 
@@ -1693,29 +2010,6 @@ async def process_conversation_internal(
                     logging.error(f"Failed to create recovery assistant: {e}")
                     raise HTTPException(status_code=500, detail="Failed to create a valid assistant")
         
-        # Create defaults if not provided
-        if not assistant:
-            logging.warning(f"No assistant ID provided for /{('conversation' if stream_output else 'chat')}, creating a default one.")
-            try:
-                assistant_obj = client.beta.assistants.create(
-                    name="default_conversation_assistant",
-                    model="gpt-4o-mini",
-                    instructions="You are a helpful conversation assistant.",
-                )
-                assistant = assistant_obj.id
-            except Exception as e:
-                logging.error(f"Failed to create default assistant: {e}")
-                raise HTTPException(status_code=500, detail="Failed to create default assistant")
-
-        if not session:
-            logging.warning(f"No session (thread) ID provided for /{('conversation' if stream_output else 'chat')}, creating a new one.")
-            try:
-                thread = client.beta.threads.create()
-                session = thread.id
-            except Exception as e:
-                logging.error(f"Failed to create default thread: {e}")
-                raise HTTPException(status_code=500, detail="Failed to create default thread")
-
         # Check if there's an active run before adding a message
         active_run = False
         run_id = None
@@ -1785,8 +2079,84 @@ async def process_conversation_internal(
             if not success:
                 raise HTTPException(status_code=500, detail="Failed to add message to conversation thread after retries")
         
+        # For streaming mode (/conversation endpoint)
+        if stream_output:
+            async def async_generator():
+                try:
+                    # Create run with Stream=True
+                    stream = client.beta.threads.runs.create(
+                        thread_id=session,
+                        assistant_id=assistant,
+                        stream=True
+                    )
+                    
+                    # Try different approaches to handle the Stream object
+                    if hasattr(stream, "__aiter__"):
+                        # Native async iteration
+                        async for chunk in stream:
+                            if chunk.event == "thread.message.delta" and hasattr(chunk.data, "delta"):
+                                delta = chunk.data.delta
+                                if hasattr(delta, "content") and delta.content:
+                                    for content in delta.content:
+                                        if content.type == "text" and hasattr(content.text, "value"):
+                                            yield content.text.value
+                    elif hasattr(stream, "iter_chunks"):
+                        # Non-async iteration with iter_chunks
+                        for chunk in stream.iter_chunks():
+                            if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
+                                delta = chunk.data.delta
+                                if hasattr(delta, "content") and delta.content:
+                                    for content in delta.content:
+                                        if content.type == "text" and hasattr(content.text, "value"):
+                                            yield content.text.value
+                                            # Add a small sleep to make it work with asyncio
+                                            await asyncio.sleep(0.01)
+                    else:
+                        # Fallback for incompatible stream object
+                        logging.warning(f"Stream object does not support iteration: {type(stream)}")
+                        yield "The assistant is processing your request..."
+                        
+                        # Poll for completion
+                        run_id = stream.id if hasattr(stream, "id") else None
+                        if not run_id:
+                            yield "\nError: Could not retrieve run ID from stream object."
+                            return
+                            
+                        # Get run status
+                        run = client.beta.threads.runs.retrieve(thread_id=session, run_id=run_id)
+                        
+                        # Wait for completion (with timeout)
+                        max_wait_time = 60  # seconds
+                        wait_interval = 2  # seconds
+                        elapsed_time = 0
+                        
+                        while run.status in ["queued", "in_progress"] and elapsed_time < max_wait_time:
+                            await asyncio.sleep(wait_interval)
+                            elapsed_time += wait_interval
+                            run = client.beta.threads.runs.retrieve(thread_id=session, run_id=run.id)
+                            yield "."  # Indicate progress
+                        
+                        # Get the response
+                        if run.status == "completed":
+                            yield "\n\n"  # Clear the progress indicators
+                            messages = client.beta.threads.messages.list(thread_id=session, order="desc", limit=1)
+                            if messages.data:
+                                latest_message = messages.data[0]
+                                for content_part in latest_message.content:
+                                    if content_part.type == 'text':
+                                        yield content_part.text.value
+                        else:
+                            yield f"\n\nThe assistant encountered an issue (status: {run.status}). Please try again."
+                                
+                except Exception as e:
+                    logging.error(f"Error in streaming generation: {e}")
+                    yield f"\n[ERROR] An error occurred while generating the response: {str(e)}. Please try again.\n"
+            
+            # Return streaming generator
+            return async_generator()
+        
         # Handle non-streaming mode (/chat endpoint)
-        if not stream_output:
+        else:
             # For non-streaming mode, we'll use a completely different approach
             full_response = ""
             try:
@@ -1871,29 +2241,6 @@ async def process_conversation_internal(
                     "response": "An error occurred while processing your request. Please try again."
                 }
         
-        # For streaming mode (/conversation endpoint)
-        # Create run and stream the response
-        async def async_generator():
-            try:
-                streaming_run = client.beta.threads.runs.create(
-                    thread_id=session,
-                    assistant_id=assistant,
-                    stream=True
-                )
-                
-                async for event in streaming_run:
-                    if event.event == "thread.message.delta" and hasattr(event.data, "delta") and hasattr(event.data.delta, "content") and event.data.delta.content:
-                        for content in event.data.delta.content:
-                            if content.type == "text" and hasattr(content.text, "value"):
-                                yield content.text.value
-                                
-            except Exception as e:
-                logging.error(f"Error in streaming generation: {e}")
-                yield "\n[ERROR] An error occurred while generating the response. Please try again.\n"
-        
-        # Return streaming response
-        return async_generator()
-        
     except Exception as e:
         endpoint_type = "conversation" if stream_output else "chat"
         logging.error(f"Error in /{endpoint_type} endpoint setup: {e}")
@@ -1905,7 +2252,7 @@ async def process_conversation_internal(
         else:
             # For non-streaming, return a JSON response with the error
             return {"response": f"Error: {str(e)}"}
-
+        
 # FastAPI endpoint for conversation (streaming)
 @app.get("/conversation")
 async def conversation(
