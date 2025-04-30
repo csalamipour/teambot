@@ -2748,11 +2748,6 @@ async def upload_file(
         logging.error(f"Error in /upload-file endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
-# Internal implementation of process_conversation
-# Internal implementation of process_conversation
-# Improve the process_conversation_internal function to better handle streaming
-# This function is used by the endpoints and should be updated for better streaming support
-
 async def process_conversation_internal(
     client: AzureOpenAI,
     session: Optional[str] = None,
@@ -2980,7 +2975,64 @@ async def process_conversation_internal(
                             # Fallback to polling if streaming is not supported
                             yield "Processing your request (streaming not fully supported)...\n\n"
                             run_id = run.id
-                            await polling_fallback(session, run_id, assistant, yield)
+                            
+                            # Polling fallback (directly implemented here instead of a separate function)
+                            max_wait_time = 120  # seconds
+                            wait_interval = 2    # seconds
+                            elapsed_time = 0
+                            last_update_time = time.time()
+                            
+                            while elapsed_time < max_wait_time:
+                                # Send periodic updates to maintain connection
+                                current_time = time.time()
+                                if current_time - last_update_time >= 5:
+                                    yield "."  # Show progress
+                                    last_update_time = current_time
+                                
+                                # Check run status
+                                try:
+                                    run_status = client.beta.threads.runs.retrieve(
+                                        thread_id=session,
+                                        run_id=run_id
+                                    )
+                                    
+                                    if run_status.status == "completed":
+                                        # Get the complete message
+                                        messages = client.beta.threads.messages.list(
+                                            thread_id=session,
+                                            order="desc",
+                                            limit=1
+                                        )
+                                        
+                                        if messages.data:
+                                            latest_message = messages.data[0]
+                                            response_text = ""
+                                            
+                                            for content_part in latest_message.content:
+                                                if content_part.type == 'text':
+                                                    response_text += content_part.text.value
+                                            
+                                            yield "\n\n" + response_text
+                                        else:
+                                            yield "\n\nNo response was generated."
+                                        break
+                                    
+                                    elif run_status.status in ["failed", "cancelled", "expired"]:
+                                        yield f"\n\nError: Run ended with status {run_status.status}. Please try again."
+                                        break
+                                
+                                except Exception as status_e:
+                                    logging.error(f"Error checking run status: {status_e}")
+                                    yield f"\n\nError checking status: {str(status_e)}"
+                                    break
+                                
+                                # Wait before checking again
+                                await asyncio.sleep(wait_interval)
+                                elapsed_time += wait_interval
+                            
+                            # Handle timeout
+                            if elapsed_time >= max_wait_time:
+                                yield "\n\nResponse timed out. Please try again with a simpler query."
                             
                     except Exception as stream_e:
                         logging.error(f"Error in streaming run creation: {stream_e}")
@@ -2993,71 +3045,68 @@ async def process_conversation_internal(
                         )
                         
                         run_id = run.id
-                        await polling_fallback(session, run_id, assistant, yield)
+                        
+                        # Implement polling fallback inline
+                        max_wait_time = 120  # seconds
+                        wait_interval = 2    # seconds
+                        elapsed_time = 0
+                        last_update_time = time.time()
+                        
+                        while elapsed_time < max_wait_time:
+                            # Send periodic updates to maintain connection
+                            current_time = time.time()
+                            if current_time - last_update_time >= 5:
+                                yield "."  # Show progress
+                                last_update_time = current_time
+                            
+                            # Check run status
+                            try:
+                                run_status = client.beta.threads.runs.retrieve(
+                                    thread_id=session,
+                                    run_id=run_id
+                                )
+                                
+                                if run_status.status == "completed":
+                                    # Get the complete message
+                                    messages = client.beta.threads.messages.list(
+                                        thread_id=session,
+                                        order="desc",
+                                        limit=1
+                                    )
+                                    
+                                    if messages.data:
+                                        latest_message = messages.data[0]
+                                        response_text = ""
+                                        
+                                        for content_part in latest_message.content:
+                                            if content_part.type == 'text':
+                                                response_text += content_part.text.value
+                                        
+                                        yield "\n\n" + response_text
+                                    else:
+                                        yield "\n\nNo response was generated."
+                                    break
+                                
+                                elif run_status.status in ["failed", "cancelled", "expired"]:
+                                    yield f"\n\nError: Run ended with status {run_status.status}. Please try again."
+                                    break
+                            
+                            except Exception as status_e:
+                                logging.error(f"Error checking run status: {status_e}")
+                                yield f"\n\nError checking status: {str(status_e)}"
+                                break
+                            
+                            # Wait before checking again
+                            await asyncio.sleep(wait_interval)
+                            elapsed_time += wait_interval
+                        
+                        # Handle timeout
+                        if elapsed_time >= max_wait_time:
+                            yield "\n\nResponse timed out. Please try again with a simpler query."
                     
                 except Exception as outer_e:
                     logging.error(f"Error in streaming generator: {outer_e}")
                     yield f"\n\nError: {str(outer_e)}. Please try again."
-            
-            # Helper function for polling fallback
-            async def polling_fallback(session_id, run_id, assistant_id, yield_func):
-                """Helper for polling-based fallback approach when streaming fails"""
-                max_wait_time = 120  # seconds
-                wait_interval = 2    # seconds
-                elapsed_time = 0
-                last_update_time = time.time()
-                
-                while elapsed_time < max_wait_time:
-                    # Send periodic updates to maintain connection
-                    current_time = time.time()
-                    if current_time - last_update_time >= 5:
-                        await yield_func(".")  # Show progress
-                        last_update_time = current_time
-                    
-                    # Check run status
-                    try:
-                        run_status = client.beta.threads.runs.retrieve(
-                            thread_id=session_id,
-                            run_id=run_id
-                        )
-                        
-                        if run_status.status == "completed":
-                            # Get the complete message
-                            messages = client.beta.threads.messages.list(
-                                thread_id=session_id,
-                                order="desc",
-                                limit=1
-                            )
-                            
-                            if messages.data:
-                                latest_message = messages.data[0]
-                                response_text = ""
-                                
-                                for content_part in latest_message.content:
-                                    if content_part.type == 'text':
-                                        response_text += content_part.text.value
-                                
-                                await yield_func("\n\n" + response_text)
-                            else:
-                                await yield_func("\n\nNo response was generated.")
-                            break
-                        
-                        elif run_status.status in ["failed", "cancelled", "expired"]:
-                            await yield_func(f"\n\nError: Run ended with status {run_status.status}. Please try again.")
-                            break
-                    
-                    except Exception as status_e:
-                        logging.error(f"Error checking run status: {status_e}")
-                        await yield_func(f"\n\nError checking status: {str(status_e)}")
-                        break
-                    
-                    # Wait before checking again
-                    await asyncio.sleep(wait_interval)
-                    elapsed_time += wait_interval
-                
-                # Handle timeout
-                if elapsed_time >= max_wait_time:
-                    await yield_func("\n\nResponse timed out. Please try again with a simpler query.")
             
             return async_generator()
         
