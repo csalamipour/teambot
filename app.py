@@ -1066,6 +1066,7 @@ async def send_message(turn_context: TurnContext, state):
         traceback.print_exc()
 
 # Stream response to Teams
+# Stream response to Teams
 async def stream_response_to_teams(turn_context: TurnContext, state, user_message):
     try:
         client = create_client()
@@ -1086,6 +1087,29 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
             # Create the OpenAI streaming run
             logging.info(f"Creating streaming run for thread {thread_id} with assistant {assistant_id}")
             
+            # Store run ID before creating streaming run
+            # This way we can retrieve it later for polling
+            run_creation_response = None
+            try:
+                # First create a normal run to get the ID
+                run_creation_response = client.beta.threads.runs.create(
+                    thread_id=thread_id,
+                    assistant_id=assistant_id
+                )
+                run_id = run_creation_response.id
+                logging.info(f"Created run with ID: {run_id} for later reference")
+                
+                # Cancel this run since we'll create a streaming one
+                client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run_id)
+                logging.info(f"Cancelled initial run {run_id} to prepare for streaming")
+                
+                # Wait briefly for cancellation
+                await asyncio.sleep(1)
+            except Exception as pre_run_error:
+                logging.warning(f"Error in pre-run creation: {pre_run_error}")
+                # Continue without pre-run ID
+            
+            # Now create the streaming run
             run = client.beta.threads.runs.create(
                 thread_id=thread_id,
                 assistant_id=assistant_id,
@@ -1118,6 +1142,11 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
                                 if content.type == "text" and hasattr(content.text, "value"):
                                     text_piece = content.text.value
                     
+                    # Check if we can get run ID from chunk
+                    if not run_id and hasattr(chunk, "data") and hasattr(chunk.data, "id"):
+                        run_id = chunk.data.id
+                        logging.info(f"Extracted run ID from chunk: {run_id}")
+                    
                     # Update the Teams response if we got text
                     if text_piece:
                         await teams_streamer.queue_update(text_piece)
@@ -1136,6 +1165,13 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
                         logging.warning("Stream timeout reached")
                         break
                     
+                    # Try to extract run ID if we don't have it yet
+                    if not run_id and hasattr(event, "id"):
+                        parts = event.id.split("_")
+                        if len(parts) > 1:
+                            run_id = f"run_{parts[1]}"
+                            logging.info(f"Extracted run ID from event: {run_id}")
+                    
                     # Process different event types
                     if event.event == "thread.message.delta":
                         if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
@@ -1151,7 +1187,26 @@ async def stream_response_to_teams(turn_context: TurnContext, state, user_messag
             else:
                 # Fallback: Poll for completion
                 logging.info("Using fallback polling approach for completion")
-                run_id = run.id
+                
+                # We need a run ID for polling - either from our pre-run or we need to create a new one
+                if not run_id:
+                    # We don't have a run ID yet, create a new non-streaming run
+                    logging.info("No run ID available, creating a new non-streaming run for polling")
+                    new_run = client.beta.threads.runs.create(
+                        thread_id=thread_id,
+                        assistant_id=assistant_id
+                    )
+                    run_id = new_run.id
+                    logging.info(f"Created new run with ID: {run_id} for polling")
+                else:
+                    # We have the run ID from pre-run, create a new one since we cancelled the first
+                    logging.info(f"Using pre-obtained run ID: {run_id} for polling")
+                    new_run = client.beta.threads.runs.create(
+                        thread_id=thread_id,
+                        assistant_id=assistant_id
+                    )
+                    run_id = new_run.id
+                    logging.info(f"Created new polling run with ID: {run_id}")
                 
                 # Send initial message
                 await turn_context.send_activity("I'm processing your request...")
