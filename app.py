@@ -2021,6 +2021,7 @@ async def upload_file(
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
 # Internal implementation of process_conversation
+# Internal implementation of process_conversation
 async def process_conversation_internal(
     client: AzureOpenAI,
     session: Optional[str] = None,
@@ -2103,36 +2104,63 @@ async def process_conversation_internal(
 
         # Add user message to the thread if prompt is given
         if prompt:
-            max_retries = 3
-            retry_delay = 2  # seconds
+            max_retries = 5  # Increased from 3 to 5
+            base_retry_delay = 3  # Increased from 2 to 3 seconds
             success = False
             
-            for attempt in range(max_retries):
+            # Handle active run if found
+            if active_run and run_id:
                 try:
-                    if active_run and run_id:
-                        # If there's an active run, check if it's still active or can be cancelled
+                    # Cancel the run
+                    client.beta.threads.runs.cancel(thread_id=session, run_id=run_id)
+                    logging.info(f"Requested cancellation of active run {run_id}")
+                    
+                    # Wait for run to be fully canceled - this is the key improvement
+                    cancel_wait_time = 5  # Wait 5 seconds initially after cancellation request
+                    max_cancel_wait = 30  # Maximum time to wait for cancellation
+                    wait_time = 0
+                    
+                    while wait_time < max_cancel_wait:
+                        await asyncio.sleep(cancel_wait_time)
+                        wait_time += cancel_wait_time
+                        
+                        # Check if run is actually canceled or completed
                         try:
                             run_status = client.beta.threads.runs.retrieve(thread_id=session, run_id=run_id)
-                            if run_status.status in ["in_progress", "queued"]:
-                                # Option 1: Cancel the run
-                                client.beta.threads.runs.cancel(thread_id=session, run_id=run_id)
-                                logging.info(f"Cancelled active run {run_id} to allow new message")
-                                time.sleep(1)  # Brief delay after cancellation
-                            elif run_status.status == "requires_action":
-                                # For requires_action, we can submit empty tool outputs to move forward
-                                client.beta.threads.runs.submit_tool_outputs(
-                                    thread_id=session,
-                                    run_id=run_id,
-                                    tool_outputs=[{"tool_call_id": "dummy", "output": "Cancelled by new request"}]
-                                )
-                                logging.info(f"Submitted empty tool outputs to finish run {run_id}")
-                                time.sleep(1)  # Brief delay after submission
-                            # If run is already completed or failed, we can proceed
-                        except Exception as run_e:
-                            logging.warning(f"Error handling active run: {run_e}")
-                            # Continue anyway - we'll try to add message
-
-                    # Try to add the message
+                            if run_status.status in ["cancelled", "completed", "failed", "expired"]:
+                                logging.info(f"Run {run_id} is now in state {run_status.status} after waiting {wait_time}s")
+                                break
+                            else:
+                                logging.warning(f"Run {run_id} still in state {run_status.status} after waiting {wait_time}s")
+                                # Gradually increase wait time
+                                cancel_wait_time = min(cancel_wait_time * 1.5, 10)
+                        except Exception as status_e:
+                            logging.warning(f"Error checking run status after cancellation: {status_e}")
+                            break
+                    
+                    # If we've waited the maximum time and run is still active, create a new thread
+                    if wait_time >= max_cancel_wait:
+                        logging.warning(f"Unable to cancel run {run_id} after waiting {wait_time}s, creating new thread")
+                        thread = client.beta.threads.create()
+                        session = thread.id
+                        logging.info(f"Created new thread {session} due to stuck run")
+                        active_run = False
+                except Exception as cancel_e:
+                    logging.error(f"Error canceling run {run_id}: {cancel_e}")
+                    # Create a new thread as fallback
+                    try:
+                        thread = client.beta.threads.create()
+                        session = thread.id
+                        logging.info(f"Created new thread {session} after failed run cancellation")
+                        active_run = False
+                    except Exception as thread_e:
+                        logging.error(f"Failed to create new thread after cancellation error: {thread_e}")
+                        raise HTTPException(status_code=500, detail="Failed to handle active run and create new thread")
+            
+            # Now try to add the message with retries
+            retry_delay = base_retry_delay
+            for attempt in range(max_retries):
+                try:
                     client.beta.threads.messages.create(
                         thread_id=session,
                         role="user",
@@ -2143,9 +2171,28 @@ async def process_conversation_internal(
                     break
                 except Exception as e:
                     if "while a run" in str(e) and attempt < max_retries - 1:
-                        logging.warning(f"Failed to add message (attempt {attempt+1}), run is active. Retrying in {retry_delay}s: {e}")
-                        time.sleep(retry_delay)
+                        logging.warning(f"Failed to add message (attempt {attempt+1}), run is still active. Retrying in {retry_delay}s: {e}")
+                        await asyncio.sleep(retry_delay)
                         retry_delay *= 2  # Exponential backoff
+                        
+                        # If we're still having issues after multiple attempts, create a new thread
+                        if attempt >= 2:  # After 3rd attempt
+                            try:
+                                logging.warning("Creating new thread due to persistent run issues")
+                                thread = client.beta.threads.create()
+                                old_session = session
+                                session = thread.id
+                                logging.info(f"Switched from thread {old_session} to new thread {session}")
+                                # Add the message to the new thread
+                                client.beta.threads.messages.create(
+                                    thread_id=session,
+                                    role="user",
+                                    content=prompt
+                                )
+                                success = True
+                                break
+                            except Exception as new_thread_e:
+                                logging.error(f"Error creating new thread during retries: {new_thread_e}")
                     else:
                         logging.error(f"Failed to add message to thread {session}: {e}")
                         if attempt == max_retries - 1:
@@ -2297,11 +2344,11 @@ async def process_conversation_internal(
                         
                         # Continue polling if still in progress
                         if attempt < max_poll_attempts - 1:
-                            time.sleep(poll_interval)
+                            await asyncio.sleep(poll_interval)
                             
                     except Exception as poll_e:
                         logging.error(f"Error polling run status (attempt {attempt+1}): {poll_e}")
-                        time.sleep(poll_interval)
+                        await asyncio.sleep(poll_interval)
                         
                 # If we still don't have a response, try one more time to get the latest message
                 if not full_response:
