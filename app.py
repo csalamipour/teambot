@@ -375,8 +375,22 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             if conversation_id in conversation_states:
                 # Clear any pending messages
                 with pending_messages_lock:
-                    if conversation_id in pending_messages:
+                    if conversation_id in pending_messages and pending_messages[conversation_id]:
+                        # Gather all queued messages into a combined prompt
+                        all_messages = list(pending_messages[conversation_id])
+                        combined_message = "\n\n".join([f"Question {i+1}: {msg}" for i, msg in enumerate(all_messages)])
+                        
+                        # Clear the queue
                         pending_messages[conversation_id].clear()
+                        
+                        # Inform user about combined processing
+                        message_count = len(all_messages)
+                        await turn_context.send_activity(f"Now addressing your {message_count} follow-up message(s) together...")
+                        
+                        # Process all messages in one request
+                        next_turn_context = copy.deepcopy(turn_context)
+                        next_turn_context.activity.text = f"Please answer all of these questions:\n{combined_message}"
+                        await handle_text_message(next_turn_context, state)
                 
                 # Send typing indicator
                 await turn_context.send_activity(create_typing_activity())
