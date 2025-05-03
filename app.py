@@ -868,53 +868,144 @@ def create_email_result_card(email_text):
     return attachment
 
 async def generate_email(turn_context: TurnContext, state, recipient, subject, topic, dos, donts, chain, has_attachments):
-    """Generates an email using AI based on provided parameters"""
+    """Generates an email using AI based on provided parameters with improved loading indicators"""
+    
+    # First, send an explicit "processing" message
+    processing_message = await turn_context.send_activity("📝 Generating your email template...")
+    
     # Send typing indicator
     await turn_context.send_activity(create_typing_activity())
     
-    # Create prompt for the AI
-    prompt = f"Generate a professional email with the following details:\n"
-    prompt += f"To: {recipient or 'Appropriate recipient'}\n"
-    prompt += f"Subject: {subject or 'Appropriate subject based on context'}\n"
-    prompt += f"Topic/Purpose: {topic or 'Unspecified'}\n"
+    # Start a background task to keep sending typing indicators while processing
+    typing_task = None
     
-    if dos:
-        prompt += f"Important points to include: {dos}\n"
-    if donts:
-        prompt += f"Points to avoid: {donts}\n"
-    if chain:
-        prompt += f"This is a reply to the following email thread: {chain}\n"
-    if has_attachments:
-        prompt += f"Mention that there are attachments included.\n"
-    
-    prompt += "Format the email professionally with an appropriate greeting, body, and signature. Make the tone professional yet conversational."
-    
-    # Initialize chat if needed
-    if not state.get("assistant_id"):
-        await initialize_chat(turn_context, state)
-    
-    # Use the existing process_conversation_internal function to get AI response
-    client = create_client()
-    result = await process_conversation_internal(
-        client=client,
-        session=state["session_id"],
-        prompt=prompt,
-        assistant=state["assistant_id"],
-        stream_output=False
-    )
-    
-    # Extract and format the email
-    if isinstance(result, dict) and "response" in result:
-        email_text = result["response"]
+    try:
+        # Create a background task to send typing indicators every few seconds
+        typing_task = asyncio.create_task(send_periodic_typing(turn_context, 3))  # Send every 3 seconds
         
-        # Use the enhanced email result card
-        attachment = create_email_result_card(email_text)
+        # Create prompt for the AI
+        prompt = f"Generate a professional email with the following details:\n"
+        prompt += f"To: {recipient or 'Appropriate recipient'}\n"
+        prompt += f"Subject: {subject or 'Appropriate subject based on context'}\n"
+        prompt += f"Topic/Purpose: {topic or 'Unspecified'}\n"
         
-        reply = _create_reply(turn_context.activity)
-        reply.attachments = [attachment]
-        await turn_context.send_activity(reply)
-    else:
-        await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
+        if dos:
+            prompt += f"Important points to include: {dos}\n"
+        if donts:
+            prompt += f"Points to avoid: {donts}\n"
+        if chain:
+            prompt += f"This is a reply to the following email thread: {chain}\n"
+        if has_attachments:
+            prompt += f"Mention that there are attachments included.\n"
+        
+        prompt += "Format the email professionally with an appropriate greeting, body, and signature. Make the tone professional yet conversational."
+        
+        # Initialize chat if needed
+        if not state.get("assistant_id"):
+            await initialize_chat(turn_context, state)
+        
+        # Use the existing process_conversation_internal function to get AI response
+        client = create_client()
+        result = await process_conversation_internal(
+            client=client,
+            session=state["session_id"],
+            prompt=prompt,
+            assistant=state["assistant_id"],
+            stream_output=False
+        )
+        
+        # Delete the "processing" message if possible
+        try:
+            # Note: Teams might not support message deletion in all contexts
+            if hasattr(processing_message, 'id'):
+                await turn_context.delete_activity(processing_message.id)
+        except Exception:
+            # If we can't delete it, just continue
+            pass
+        
+        # Extract and format the email
+        if isinstance(result, dict) and "response" in result:
+            email_text = result["response"]
+            
+            # Create an email result card with improved styling
+            email_card = {
+                "type": "AdaptiveCard",
+                "version": "1.3",
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "body": [
+                    {
+                        "type": "TextBlock",
+                        "text": "✅ Email Template Generated",
+                        "size": "large",
+                        "weight": "bolder",
+                        "horizontalAlignment": "center",
+                        "color": "good"
+                    },
+                    {
+                        "type": "Container",
+                        "style": "emphasis",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": email_text,
+                                "wrap": True,
+                                "spacing": "medium"
+                            }
+                        ]
+                    }
+                ],
+                "actions": [
+                    {
+                        "type": "Action.Submit",
+                        "title": "Create Another Email",
+                        "style": "positive",
+                        "data": {
+                            "action": "create_email"
+                        }
+                    },
+                    {
+                        "type": "Action.Submit",
+                        "title": "Return to Home",
+                        "data": {
+                            "action": "new_chat"
+                        }
+                    }
+                ]
+            }
+            
+            # Create attachment
+            attachment = Attachment(
+                content_type="application/vnd.microsoft.card.adaptive",
+                content=email_card
+            )
+            
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [attachment]
+            await turn_context.send_activity(reply)
+        else:
+            await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
+    except Exception as e:
+        logging.error(f"Error generating email: {e}")
+        await turn_context.send_activity("I encountered an error while generating your email. Please try again.")
+    finally:
+        # Cancel the typing indicator task if it's running
+        if typing_task and not typing_task.done():
+            typing_task.cancel()
+            try:
+                await typing_task
+            except asyncio.CancelledError:
+                pass  # Expected when we cancel the task
+
+# Helper function to send periodic typing indicators
+async def send_periodic_typing(turn_context: TurnContext, interval_seconds: int):
+    """Sends typing indicators periodically until the task is cancelled"""
+    try:
+        while True:
+            await turn_context.send_activity(create_typing_activity())
+            await asyncio.sleep(interval_seconds)
+    except asyncio.CancelledError:
+        # Task was cancelled, exit cleanly
+        pass
 async def send_new_chat_card(turn_context: TurnContext):
     """Sends a card with a button to start a new chat session"""
     reply = _create_reply(turn_context.activity)
