@@ -1248,27 +1248,31 @@ async def handle_text_message(turn_context: TurnContext, state):
                     next_message = next_messages[0]
                     await turn_context.send_activity("Now addressing your follow-up message...")
                     
-                    # Create modified activity with the next message
-                    modified_activity = copy.deepcopy(turn_context.activity)
-                    modified_activity.text = next_message
-                    modified_context = TurnContext(ADAPTER, modified_activity)
+                    # Instead of creating a new context, use the existing one with modified text
+                    original_text = turn_context.activity.text
+                    turn_context.activity.text = next_message
                     
-                    # Process the follow-up message
-                    await handle_text_message(modified_context, state)
+                    try:
+                        # Process with the same context - just different text
+                        await handle_text_message(turn_context, state)
+                    finally:
+                        # Restore original text when done
+                        turn_context.activity.text = original_text
                 else:
                     # Process multiple messages as a batch
                     await turn_context.send_activity(f"Now addressing your {len(next_messages)} follow-up messages together...")
                     
-                    # Combine messages
+                    # Use existing context with combined messages
+                    original_text = turn_context.activity.text
                     combined_message = "\n\n".join([f"Question {i+1}: {msg}" for i, msg in enumerate(next_messages)])
+                    turn_context.activity.text = f"Please answer all of these questions:\n{combined_message}"
                     
-                    # Create modified activity with the combined messages
-                    modified_activity = copy.deepcopy(turn_context.activity)
-                    modified_activity.text = f"Please answer all of these questions:\n{combined_message}"
-                    modified_context = TurnContext(ADAPTER, modified_activity)
-                    
-                    # Process the batch of messages
-                    await handle_text_message(modified_context, state)
+                    try:
+                        # Process with the same context
+                        await handle_text_message(turn_context, state)
+                    finally:
+                        # Restore original text
+                        turn_context.activity.text = original_text
             
     except Exception as e:
         # Mark thread as no longer busy even on error (thread-safe)
