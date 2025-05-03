@@ -1403,55 +1403,90 @@ async def handle_text_message(turn_context: TurnContext, state):
             logging.error(f"Fallback response also failed: {fallback_error}")
 
 async def process_pending_messages(turn_context: TurnContext, state, conversation_id):
-    """Process any pending messages in the queue"""
+    """Process any pending messages in the queue with improved run handling"""
     with pending_messages_lock:
         if conversation_id in pending_messages and pending_messages[conversation_id]:
-            # Get all the queued messages but DON'T clear the queue yet
+            # Get queued messages but don't clear the queue yet
             next_messages = list(pending_messages[conversation_id])
             
-            # Process first message and only clear after successful processing
+            # Only if we have pending messages
             if next_messages:
+                # Process the first message
                 next_message = next_messages[0]
                 await turn_context.send_activity("Now addressing your follow-up message...")
                 
-                # IMPORTANT: Instead of modifying the existing turn_context, create
-                # a separate request to the bot with the follow-up message content
                 try:
-                    # Process the message as a normal text input by creating a new response
-                    # but don't mutate the original activity
-                    await turn_context.send_activity(f"Your follow-up: {next_message}")
-                    
-                    # Create a fresh direct completion request instead of reusing context
                     client = create_client()
-                    # Get thread and assistant info
-                    thread_id = state["session_id"]
-                    assistant_id = state["assistant_id"]
+                    thread_id = state.get("session_id")
+                    assistant_id = state.get("assistant_id")
                     
-                    # Add the message to the thread directly
                     if thread_id and assistant_id:
-                        client.beta.threads.messages.create(
-                            thread_id=thread_id,
-                            role="user",
-                            content=next_message
-                        )
+                        # IMPORTANT: First check for any active runs and cancel them
+                        try:
+                            # Check for active runs
+                            runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
+                            if runs.data:
+                                for run in runs.data:
+                                    if run.status in ["in_progress", "queued", "requires_action"]:
+                                        # Try to cancel active run
+                                        logging.info(f"Cancelling active run {run.id} before processing follow-up")
+                                        try:
+                                            client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run.id)
+                                            # Wait for cancellation to take effect
+                                            await asyncio.sleep(3)
+                                        except Exception as cancel_e:
+                                            logging.warning(f"Error cancelling run: {cancel_e}")
+                        except Exception as check_e:
+                            logging.warning(f"Error checking for active runs: {check_e}")
                         
-                        # Create a normal run without context reuse
-                        run = client.beta.threads.runs.create(
-                            thread_id=thread_id,
-                            assistant_id=assistant_id
-                        )
-                        
-                        # Wait for completion and send the response
-                        await stream_with_teams_ai(turn_context, state, None)
-                        
-                        # Only now remove this message from the queue
+                        # CRITICAL FIX: Create a new thread instead of reusing the existing one
+                        # This avoids the "already has an active run" error completely
+                        try:
+                            new_thread = client.beta.threads.create()
+                            old_thread_id = thread_id
+                            thread_id = new_thread.id
+                            
+                            # Update the state with the new thread ID
+                            with conversation_states_lock:
+                                state["session_id"] = thread_id
+                                
+                            logging.info(f"Created new thread {thread_id} for follow-up message (replacing {old_thread_id})")
+                            
+                            # Add the follow-up message to the new thread
+                            client.beta.threads.messages.create(
+                                thread_id=thread_id,
+                                role="user",
+                                content=next_message
+                            )
+                            
+                            # Now use direct processing for clean state
+                            if TEAMS_AI_AVAILABLE:
+                                await stream_with_teams_ai(turn_context, state, None)
+                            else:
+                                await stream_with_custom_implementation(turn_context, state, None)
+                                
+                            # Only remove from queue after successful processing
+                            with pending_messages_lock:
+                                if conversation_id in pending_messages and pending_messages[conversation_id]:
+                                    pending_messages[conversation_id].popleft()
+                                    
+                        except Exception as thread_e:
+                            logging.error(f"Error creating new thread for follow-up: {thread_e}")
+                            raise
+                    else:
+                        await turn_context.send_activity("I can't process your follow-up because the conversation session was lost.")
+                        # Clear the queue to avoid stuck messages
                         with pending_messages_lock:
-                            if conversation_id in pending_messages and pending_messages[conversation_id]:
-                                pending_messages[conversation_id].popleft()
-                    
+                            if conversation_id in pending_messages:
+                                pending_messages[conversation_id].clear()
+                                
                 except Exception as e:
                     logging.error(f"Error processing follow-up message: {e}")
-                    await turn_context.send_activity("I had trouble processing your follow-up question. Please try asking again.")
+                    await turn_context.send_activity("I had trouble processing your follow-up. Please try asking again as a new question.")
+                    # Clear the problematic message from the queue
+                    with pending_messages_lock:
+                        if conversation_id in pending_messages and pending_messages[conversation_id]:
+                            pending_messages[conversation_id].popleft()
 # Add this to the end of handle_text_message function
 # Right before the function returns
 async def cleanup_after_message():
@@ -1477,12 +1512,12 @@ async def cleanup_after_message():
         pass  # Ignore errors with the ready signal
 async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
     """
-    Stream responses using the Teams AI library's StreamingResponse class
+    Stream responses using the Teams AI library's StreamingResponse class with improved run handling
     
     Args:
         turn_context: The TurnContext object
         state: The conversation state
-        user_message: The user's message
+        user_message: The user's message (can be None for follow-up processing)
     """
     try:
         client = create_client()
@@ -1495,114 +1530,288 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
         # Send initial informative update
         streamer.queue_informative_update("Processing your request...")
         
+        # Track the run ID for proper cleanup
+        run_id = None
+        
         try:
             # First, add the user message to the thread if provided
             if user_message:
+                # Always check for and cancel any active runs first
                 try:
-                    # Cancel any active runs to avoid conflicts
+                    runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
+                    if runs.data:
+                        for run in runs.data:
+                            if run.status in ["in_progress", "queued", "requires_action"]:
+                                logging.info(f"Cancelling active run {run.id} before processing new message")
+                                try:
+                                    client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run.id)
+                                    # Wait for cancellation to take effect
+                                    cancel_wait_start = time.time()
+                                    max_cancel_wait = 5  # Maximum seconds to wait
+                                    
+                                    # Poll until cancellation completes or times out
+                                    while time.time() - cancel_wait_start < max_cancel_wait:
+                                        await asyncio.sleep(1)
+                                        try:
+                                            status = client.beta.threads.runs.retrieve(
+                                                thread_id=thread_id, 
+                                                run_id=run.id
+                                            )
+                                            if status.status in ["cancelled", "completed", "failed", "expired"]:
+                                                logging.info(f"Run {run.id} is now in state {status.status}")
+                                                break
+                                        except Exception:
+                                            # If we can't retrieve the run, assume it's gone
+                                            break
+                                except Exception as cancel_e:
+                                    logging.warning(f"Error cancelling run: {cancel_e}")
+                                    # If cancellation fails, create a new thread
+                                    new_thread = client.beta.threads.create()
+                                    old_thread_id = thread_id
+                                    thread_id = new_thread.id
+                                    with conversation_states_lock:
+                                        state["session_id"] = thread_id
+                                    logging.info(f"Created new thread {thread_id} after cancel failure (replacing {old_thread_id})")
+                except Exception as check_e:
+                    logging.warning(f"Error checking for active runs: {check_e}")
+                
+                # Now add the message with retries
+                max_retries = 3
+                added = False
+                
+                for retry in range(max_retries):
                     try:
-                        runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
-                        if runs.data:
-                            latest_run = runs.data[0]
-                            if latest_run.status in ["in_progress", "queued", "requires_action"]:
-                                active_run_id = latest_run.id
-                                logging.info(f"Found existing active run {active_run_id} with status {latest_run.status}")
-                                
-                                # Cancel the active run
-                                client.beta.threads.runs.cancel(thread_id=thread_id, run_id=active_run_id)
-                                logging.info(f"Requested cancellation of pre-existing run {active_run_id}")
-                                
-                                # Wait briefly for cancellation to take effect
-                                await asyncio.sleep(2)
-                    except Exception as check_e:
-                        logging.warning(f"Error checking for existing runs: {check_e}")
-                    
-                    # Add the user message to the thread (with retries)
-                    max_retries = 3
-                    for retry in range(max_retries):
-                        try:
-                            message = client.beta.threads.messages.create(
-                                thread_id=thread_id,
-                                role="user",
-                                content=user_message
-                            )
-                            logging.info(f"Added user message to thread {thread_id}")
-                            break
-                        except Exception as retry_error:
-                            if retry < max_retries - 1:
-                                logging.warning(f"Error adding message (attempt {retry+1}): {retry_error}. Retrying...")
-                                await asyncio.sleep(2)
-                            else:
-                                raise
-                    
-                except Exception as msg_e:
-                    if "while a run" in str(msg_e) or "already has an active run" in str(msg_e):
-                        logging.warning(f"Could not add message due to active run: {msg_e}")
-                        # Create a new thread as fallback
-                        new_thread = client.beta.threads.create()
-                        thread_id = new_thread.id
-                        state["session_id"] = thread_id
-                        logging.info(f"Created new thread {thread_id} due to message add failure")
-                        
-                        # Add message to the new thread
                         client.beta.threads.messages.create(
                             thread_id=thread_id,
                             role="user",
                             content=user_message
                         )
-                        logging.info(f"Added user message to new thread {thread_id}")
-                    else:
-                        raise  # Re-raise other errors
-            
-            # Now use direct streaming from the OpenAI API
+                        logging.info(f"Added user message to thread {thread_id} (attempt {retry+1})")
+                        added = True
+                        break
+                    except Exception as add_e:
+                        if "already has an active run" in str(add_e) and retry < max_retries - 1:
+                            logging.warning(f"Thread busy on attempt {retry+1}, waiting before retry")
+                            await asyncio.sleep(2 * (retry + 1))  # Exponential backoff
+                        elif retry == max_retries - 1:
+                            # Final attempt - create new thread
+                            try:
+                                new_thread = client.beta.threads.create()
+                                old_thread_id = thread_id
+                                thread_id = new_thread.id
+                                with conversation_states_lock:
+                                    state["session_id"] = thread_id
+                                logging.info(f"Created new thread {thread_id} after message add failures (replacing {old_thread_id})")
+                                
+                                # Try adding to the new thread
+                                client.beta.threads.messages.create(
+                                    thread_id=thread_id,
+                                    role="user",
+                                    content=user_message
+                                )
+                                added = True
+                                logging.info(f"Added message to new thread {thread_id}")
+                            except Exception as new_thread_e:
+                                logging.error(f"Error creating new thread for message: {new_thread_e}")
+                                raise
+                        else:
+                            logging.error(f"Error adding message on attempt {retry+1}: {add_e}")
+                
+                if not added:
+                    raise Exception("Failed to add message after multiple attempts")
+
+            # Create a run with proper error handling
+            try:
+                # Send typing indicator
+                await turn_context.send_activity(create_typing_activity())
+                
+                # Create run - with retry logic
+                max_run_retries = 3
+                run_created = False
+                
+                for run_retry in range(max_run_retries):
+                    try:
+                        # Create the run
+                        run = client.beta.threads.runs.create(
+                            thread_id=thread_id,
+                            assistant_id=assistant_id
+                        )
+                        run_id = run.id
+                        logging.info(f"Created run {run_id} for thread {thread_id} (attempt {run_retry+1})")
+                        run_created = True
+                        break
+                    except Exception as run_e:
+                        if "already has an active run" in str(run_e) and run_retry < max_run_retries - 1:
+                            logging.warning(f"Thread has active run on attempt {run_retry+1}, waiting before retry")
+                            await asyncio.sleep(2 * (run_retry + 1))
+                        elif run_retry == max_run_retries - 1:
+                            # Final attempt - create new thread
+                            try:
+                                new_thread = client.beta.threads.create()
+                                old_thread_id = thread_id
+                                thread_id = new_thread.id
+                                with conversation_states_lock:
+                                    state["session_id"] = thread_id
+                                logging.info(f"Created new thread {thread_id} after run creation failures (replacing {old_thread_id})")
+                                
+                                # If we had a user message, add it to the new thread
+                                if user_message:
+                                    client.beta.threads.messages.create(
+                                        thread_id=thread_id,
+                                        role="user",
+                                        content=user_message
+                                    )
+                                
+                                # Now try creating a run on the new thread
+                                run = client.beta.threads.runs.create(
+                                    thread_id=thread_id,
+                                    assistant_id=assistant_id
+                                )
+                                run_id = run.id
+                                run_created = True
+                                logging.info(f"Created run {run_id} on new thread {thread_id}")
+                            except Exception as new_thread_run_e:
+                                logging.error(f"Error creating run on new thread: {new_thread_run_e}")
+                                raise
+                        else:
+                            logging.error(f"Error creating run on attempt {run_retry+1}: {run_e}")
+                
+                if not run_created:
+                    raise Exception("Failed to create run after multiple attempts")
+                        
+            except Exception as run_create_e:
+                logging.error(f"Error creating run: {run_create_e}")
+                raise
+
+            # Now handle the streaming with buffer management
             buffer = []
             last_chunk_time = time.time()
             completed = False
             
             try:
-                # Use run.stream to get a streaming run with events
-                with client.beta.threads.runs.stream(
-                    thread_id=thread_id,
-                    assistant_id=assistant_id,
-                ) as stream:
-                    for event in stream:
-                        # Handle text delta events (streaming text chunks)
-                        if event.event == "thread.message.delta":
-                            if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
-                                for content_part in event.data.delta.content:
-                                    if content_part.type == 'text' and hasattr(content_part.text, "value"):
-                                        text_value = content_part.text.value
-                                        if text_value:
-                                            # Add to buffer
-                                            buffer.append(text_value)
-                                            
-                                            # Only send updates at reasonable intervals for Teams
-                                            current_time = time.time()
-                                            if current_time - last_chunk_time >= 1.5:  # Teams requires 1.5s between msgs
-                                                combined_chunk = "".join(buffer)
-                                                streamer.queue_text_chunk(combined_chunk)
-                                                buffer = []  # Reset buffer after sending
-                                                last_chunk_time = current_time
+                # Poll for the run result instead of streaming to avoid race conditions
+                # This is more reliable than streaming for Teams
+                max_wait_time = 120  # Maximum wait time in seconds
+                wait_interval = 2    # Check interval in seconds
+                elapsed_time = 0
+                
+                # Send initial typing indicator
+                await turn_context.send_activity(create_typing_activity())
+                
+                while elapsed_time < max_wait_time:
+                    # Check run status
+                    try:
+                        run_status = client.beta.threads.runs.retrieve(
+                            thread_id=thread_id,
+                            run_id=run_id
+                        )
                         
-                        # Note completion events
-                        elif event.event == "thread.run.completed":
-                            logging.info(f"Run completed successfully")
+                        # Send typing indicator periodically
+                        if elapsed_time % 8 == 0:
+                            await turn_context.send_activity(create_typing_activity())
+                        
+                        # Check for completion
+                        if run_status.status == "completed":
+                            logging.info(f"Run {run_id} completed successfully")
                             completed = True
+                            
+                            # Get the complete message
+                            messages = client.beta.threads.messages.list(
+                                thread_id=thread_id,
+                                order="desc",
+                                limit=1
+                            )
+                            
+                            if messages.data:
+                                latest_message = messages.data[0]
+                                message_text = ""
+                                
+                                for content_part in latest_message.content:
+                                    if content_part.type == 'text':
+                                        message_text += content_part.text.value
+                                
+                                # Queue the complete message
+                                if message_text:
+                                    streamer.queue_text_chunk(message_text)
+                            
+                            break
+                            
+                        # Check for failure states
+                        elif run_status.status in ["failed", "cancelled", "expired"]:
+                            logging.error(f"Run {run_id} ended with status: {run_status.status}")
+                            streamer.queue_text_chunk(f"\n\nI encountered an issue while processing your request (status: {run_status.status}). Please try again.")
+                            break
+                            
+                        # Check for partial results every 5 seconds during in_progress state
+                        elif run_status.status == "in_progress" and elapsed_time % 5 == 0:
+                            try:
+                                messages = client.beta.threads.messages.list(
+                                    thread_id=thread_id,
+                                    order="desc",
+                                    limit=1
+                                )
+                                
+                                if messages.data and messages.data[0].role == "assistant":
+                                    latest_message = messages.data[0]
+                                    current_text = ""
+                                    
+                                    for content_part in latest_message.content:
+                                        if content_part.type == 'text':
+                                            current_text += content_part.text.value
+                                    
+                                    # Only update if we have new content since last check
+                                    if current_text and current_text != "".join(buffer):
+                                        buffer = [current_text]  # Replace buffer with current full text
+                                        
+                                        # Only send updates at reasonable intervals for Teams
+                                        current_time = time.time()
+                                        if current_time - last_chunk_time >= 1.5:  # Teams requires 1.5s between msgs
+                                            streamer.queue_text_chunk(current_text)
+                                            last_chunk_time = current_time
+                            except Exception as check_e:
+                                logging.warning(f"Error checking for partial messages: {check_e}")
+                                # Continue - don't break the loop for this error
+                    
+                    except Exception as status_e:
+                        logging.warning(f"Error checking run status: {status_e}")
+                        # Continue polling despite the error
+                    
+                    # Wait before next check
+                    await asyncio.sleep(wait_interval)
+                    elapsed_time += wait_interval
                 
-                # Send any remaining buffered text
-                if buffer:
-                    combined_chunk = "".join(buffer)
-                    streamer.queue_text_chunk(combined_chunk)
+                # If we timed out without completing
+                if not completed and elapsed_time >= max_wait_time:
+                    logging.warning(f"Timed out waiting for run {run_id} to complete")
+                    
+                    # Try to get whatever we have so far
+                    try:
+                        messages = client.beta.threads.messages.list(
+                            thread_id=thread_id,
+                            order="desc",
+                            limit=1
+                        )
+                        
+                        if messages.data and messages.data[0].role == "assistant":
+                            current_text = ""
+                            for content_part in messages.data[0].content:
+                                if content_part.type == 'text':
+                                    current_text += content_part.text.value
+                            
+                            if current_text:
+                                streamer.queue_text_chunk("I'm taking longer than expected. Here's what I have so far:\n\n")
+                                streamer.queue_text_chunk(current_text)
+                            else:
+                                streamer.queue_text_chunk("I'm taking longer than expected to generate a response. Please try again with a simpler request.")
+                        else:
+                            streamer.queue_text_chunk("I'm taking longer than expected to generate a response. Please try again.")
+                    except Exception as timeout_e:
+                        logging.error(f"Error retrieving partial message after timeout: {timeout_e}")
+                        streamer.queue_text_chunk("I'm taking longer than expected to generate a response. Please try again.")
                 
-                # If streaming didn't complete properly, fall back to message retrieval
-                if not completed:
-                    # Complete message retrieval as fallback
-                    await poll_for_message(client, thread_id, streamer)
-            
-            except Exception as stream_error:
-                logging.error(f"Error during streaming: {stream_error}")
-                # Fall back to polling if streaming fails
-                await poll_for_message(client, thread_id, streamer)
+            except Exception as poll_e:
+                logging.error(f"Error polling run: {poll_e}")
+                streamer.queue_text_chunk("I encountered an error while generating a response. Please try again.")
             
             # Enable feedback loop for the final message
             streamer.set_feedback_loop(True)
@@ -1611,8 +1820,8 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
             # End the stream
             await streamer.end_stream()
             
-        except Exception as e:
-            logging.error(f"Error in streaming: {e}")
+        except Exception as inner_e:
+            logging.error(f"Error in streaming process: {inner_e}")
             traceback.print_exc()
             
             try:
@@ -1623,10 +1832,30 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
                 logging.error(f"Failed to end stream properly: {end_error}")
                 # At this point, just send a direct message
                 await turn_context.send_activity("I encountered an error while processing your request. Please try again.")
+        
+        finally:
+            # Always clean up active runs to prevent lingering state issues
+            try:
+                # Mark thread as no longer busy in the state
+                with conversation_states_lock:
+                    state["active_run"] = False
                 
-            # Try to provide a fallback response
-            await send_fallback_response(turn_context, user_message)
-            
+                # Remove from active runs tracking
+                with active_runs_lock:
+                    if thread_id in active_runs:
+                        del active_runs[thread_id]
+                
+                # Try to cancel the run if it's still active
+                if run_id:
+                    try:
+                        client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run_id)
+                        logging.info(f"Cancelled run {run_id} during cleanup")
+                    except Exception:
+                        # Ignore cancellation errors during cleanup
+                        pass
+            except Exception as cleanup_e:
+                logging.warning(f"Error during run cleanup: {cleanup_e}")
+                
     except Exception as outer_e:
         logging.error(f"Outer error in stream_with_teams_ai: {str(outer_e)}")
         traceback.print_exc()
@@ -1635,7 +1864,7 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
         await turn_context.send_activity("I encountered a problem while processing your request. Please try again or start a new chat.")
         
         # Try a fallback response
-        await send_fallback_response(turn_context, user_message)
+        await send_fallback_response(turn_context, user_message or "How can I help you?")
 
 async def stream_with_custom_implementation(turn_context: TurnContext, state, user_message):
     """
