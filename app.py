@@ -17,9 +17,9 @@ from http import HTTPStatus
 from datetime import datetime
 
 # FastAPI imports
-from fastapi import FastAPI, Request, Response, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
+from fastAPI import FastAPI, Request, Response, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastAPI.responses import JSONResponse, StreamingResponse
+from fastAPI.middleware.cors import CORSMiddleware
 
 # Azure OpenAI imports
 from openai import AzureOpenAI
@@ -267,21 +267,8 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
                 # Clear any pending messages
                 with pending_messages_lock:
                     if conversation_id in pending_messages and pending_messages[conversation_id]:
-                        # Gather all queued messages into a combined prompt
-                        all_messages = list(pending_messages[conversation_id])
-                        combined_message = "\n\n".join([f"Question {i+1}: {msg}" for i, msg in enumerate(all_messages)])
-                        
-                        # Clear the queue
+                        # Now process pending messages in a smarter way
                         pending_messages[conversation_id].clear()
-                        
-                        # Inform user about combined processing
-                        message_count = len(all_messages)
-                        await turn_context.send_activity(f"Now addressing your {message_count} follow-up message(s) together...")
-                        
-                        # Process all messages in one request
-                        next_turn_context = copy.deepcopy(turn_context)
-                        next_turn_context.activity.text = f"Please answer all of these questions:\n{combined_message}"
-                        await handle_text_message(next_turn_context, state)
                 
                 # Send typing indicator
                 await turn_context.send_activity(create_typing_activity())
@@ -1249,45 +1236,39 @@ async def handle_text_message(turn_context: TurnContext, state):
         if current_session_id in active_runs:
             del active_runs[current_session_id]
         
-        # Check for queued messages
+        # Process any pending messages
         with pending_messages_lock:
             if conversation_id in pending_messages and pending_messages[conversation_id]:
-                # Process queued messages one by one in FIFO order
+                # Process queued messages
                 next_messages = list(pending_messages[conversation_id])
                 pending_messages[conversation_id].clear()
                 
                 if len(next_messages) == 1:
-                    # If only one message, process it directly
+                    # Handle single follow-up message
                     next_message = next_messages[0]
                     await turn_context.send_activity("Now addressing your follow-up message...")
                     
-                    # Process with modified activity
-                    activity = turn_context.activity
-                    original_text = activity.text
-                    activity.text = next_message
+                    # Create modified activity with the next message
+                    modified_activity = copy.deepcopy(turn_context.activity)
+                    modified_activity.text = next_message
+                    modified_context = TurnContext(ADAPTER, modified_activity)
                     
-                    try:
-                        # Process with modified activity
-                        await handle_text_message(turn_context, state)
-                    finally:
-                        # Restore original text in case the context is reused
-                        activity.text = original_text
+                    # Process the follow-up message
+                    await handle_text_message(modified_context, state)
                 else:
-                    # For multiple messages, batch them together
-                    combined_message = "\n\n".join([f"Question {i+1}: {msg}" for i, msg in enumerate(next_messages)])
+                    # Process multiple messages as a batch
                     await turn_context.send_activity(f"Now addressing your {len(next_messages)} follow-up messages together...")
                     
-                    # Process with modified activity for combined messages
-                    activity = turn_context.activity
-                    original_text = activity.text
-                    activity.text = f"Please answer all of these questions:\n{combined_message}"
+                    # Combine messages
+                    combined_message = "\n\n".join([f"Question {i+1}: {msg}" for i, msg in enumerate(next_messages)])
                     
-                    try:
-                        # Process with modified activity
-                        await handle_text_message(turn_context, state)
-                    finally:
-                        # Restore original text in case the context is reused
-                        activity.text = original_text
+                    # Create modified activity with the combined messages
+                    modified_activity = copy.deepcopy(turn_context.activity)
+                    modified_activity.text = f"Please answer all of these questions:\n{combined_message}"
+                    modified_context = TurnContext(ADAPTER, modified_activity)
+                    
+                    # Process the batch of messages
+                    await handle_text_message(modified_context, state)
             
     except Exception as e:
         # Mark thread as no longer busy even on error (thread-safe)
@@ -1394,7 +1375,7 @@ async def stream_response_with_teams_ai(turn_context: TurnContext, state, user_m
             last_message_length = 0
             completed = False
             
-            # Send an initial typing update
+            # Send an initial thinking update
             streamer.queue_informative_update("Thinking...")
             
             # Main polling loop
@@ -1470,13 +1451,17 @@ async def stream_response_with_teams_ai(turn_context: TurnContext, state, user_m
                         logging.warning(f"Error getting partial updates: {stream_e}")
                         # Continue with polling; this is non-fatal
                 
-                # Wait before next poll
+                # Wait before next poll, respecting Teams rate limits
                 await asyncio.sleep(wait_interval)
                 elapsed_time += wait_interval
             
             # If we didn't complete within the time limit
             if not completed:
                 streamer.queue_text_chunk("\n\nI'm still working on your request but it's taking longer than expected. Here's what I have so far, and I'll continue processing in the background.")
+            
+            # Enable feedback loop for the final message
+            streamer.set_feedback_loop(True)
+            streamer.set_generated_by_ai_label(True)
             
             # End the stream
             await streamer.end_stream()
@@ -1487,9 +1472,11 @@ async def stream_response_with_teams_ai(turn_context: TurnContext, state, user_m
             
             try:
                 # Try to end the stream gracefully
+                streamer.queue_text_chunk("I'm sorry, I encountered an error while processing your request.")
                 await streamer.end_stream()
-            except:
+            except Exception as stream_end_error:
                 # If that fails, just send a direct message
+                logging.error(f"Error ending stream: {stream_end_error}")
                 await turn_context.send_activity("I encountered an error while processing your request. Please try again.")
         
         finally:
@@ -1880,30 +1867,37 @@ async def send_message(turn_context: TurnContext, state):
         # Send typing indicator
         await turn_context.send_activity(create_typing_activity())
         
-        # Call internal function directly to get latest message
-        client = create_client()
-        result = await process_conversation_internal(
-            client=client,
-            session=state["session_id"],
-            assistant=state["assistant_id"],
-            prompt=None,
-            stream_output=False
-        )
+        # Use streaming if supported by the channel
+        supports_streaming = turn_context.activity.channel_id == "msteams"
         
-        if isinstance(result, dict) and "response" in result:
-            assistant_response = result.get("response", "")
+        if supports_streaming:
+            # Use streaming for response
+            await stream_response_with_teams_ai(turn_context, state, None)
+        else:
+            # Call internal function directly to get latest message
+            client = create_client()
+            result = await process_conversation_internal(
+                client=client,
+                session=state["session_id"],
+                assistant=state["assistant_id"],
+                prompt=None,
+                stream_output=False
+            )
             
-            if assistant_response:
-                # Split long responses if needed
-                if len(assistant_response) > 7000:
-                    chunks = [assistant_response[i:i+7000] for i in range(0, len(assistant_response), 7000)]
-                    for i, chunk in enumerate(chunks):
-                        if i == 0:
-                            await turn_context.send_activity(chunk)
-                        else:
-                            await turn_context.send_activity(f"(continued) {chunk}")
-                else:
-                    await turn_context.send_activity(assistant_response)
+            if isinstance(result, dict) and "response" in result:
+                assistant_response = result.get("response", "")
+                
+                if assistant_response:
+                    # Split long responses if needed
+                    if len(assistant_response) > 7000:
+                        chunks = [assistant_response[i:i+7000] for i in range(0, len(assistant_response), 7000)]
+                        for i, chunk in enumerate(chunks):
+                            if i == 0:
+                                await turn_context.send_activity(chunk)
+                            else:
+                                await turn_context.send_activity(f"(continued) {chunk}")
+                    else:
+                        await turn_context.send_activity(assistant_response)
             
     except Exception as e:
         await turn_context.send_activity(f"Error getting response: {str(e)}")
