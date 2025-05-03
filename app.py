@@ -12,14 +12,14 @@ import re
 import copy
 import sys
 from io import StringIO
-from typing import Optional, List, Dict, Any, Tuple, Union
+from typing import Optional, List, Dict, Any, Tuple, Union, Callable, Literal
 from http import HTTPStatus
 from datetime import datetime
 
 # FastAPI imports
-from fastapi import FastAPI, Request, Response, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse, StreamingResponse as FastAPIStreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
+from fastAPI import FastAPI, Request, Response, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastAPI.responses import JSONResponse, StreamingResponse
+from fastAPI.middleware.cors import CORSMiddleware
 
 # Azure OpenAI imports
 from openai import AzureOpenAI
@@ -39,6 +39,7 @@ from botbuilder.schema import (
     ConversationReference,
     ChannelAccount,
     ConversationAccount,
+    Entity
 )
 
 from botbuilder.schema.teams import (
@@ -48,19 +49,19 @@ from botbuilder.schema.teams import (
     FileInfoCard,
 )
 from botbuilder.schema.teams.additional_properties import ContentType
+
+# Teams AI imports
+from teams.streaming import StreamingResponse
+from teams.streaming.streaming_channel_data import StreamingChannelData
+from teams.streaming.streaming_entity import StreamingEntity
+from teams.ai.citations.citations import Appearance, SensitivityUsageInfo
+from teams.ai.citations import AIEntity, ClientCitation
+from teams.ai.prompts.message import Citation
+
 import uuid
 from typing import Dict, List, Deque
 from collections import deque
 import threading
-from typing import Dict, List, Optional, Any
-from botbuilder.core import CardFactory, Storage, TurnContext
-from botbuilder.schema import Activity, ActivityTypes, ChannelAccount, ConversationAccount, Attachment
-from teams.state import MemoryBase  # Import MemoryBase from Teams library
-from teams.streaming import StreamingResponse  # Import StreamingResponse from teams-ai
-import logging
-import time
-import threading
-import asyncio
 
 # Dictionary to store pending messages for each conversation
 pending_messages = {}
@@ -68,11 +69,6 @@ pending_messages = {}
 pending_messages_lock = threading.Lock()
 # Dictionary for tracking active runs
 active_runs = {}
-# Active streamers by conversation ID
-active_streamers = {}
-# Lock for thread-safe operations on active_streamers
-active_streamers_lock = threading.Lock()
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -128,136 +124,6 @@ def create_client():
         api_key=AZURE_API_KEY,
         api_version=AZURE_API_VERSION,
     )
-
-def create_message_card(message_text):
-    """Creates an adaptive card for displaying message text"""
-    card = {
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "version": "1.6",
-        "type": "AdaptiveCard",
-        "body": [{"type": "TextBlock", "wrap": True, "text": message_text}]
-    }
-    return CardFactory.adaptive_card(card)
-
-async def end_stream_handler(
-    context: TurnContext,
-    state: MemoryBase,
-    response: Any,  # Using Any instead of PromptResponse[str] for flexibility
-    streamer: StreamingResponse,
-):
-    """
-    Handles the end of streaming by creating an Adaptive Card with the response.
-    Called by the Teams AI framework when streaming is complete.
-    
-    Args:
-        context: The turn context
-        state: The conversation state
-        response: The response from the model
-        streamer: The streaming response object
-    """
-    if not streamer:
-        return
-    
-    try:
-        # Create an adaptive card with the full message
-        card = CardFactory.adaptive_card(
-            {
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.6",
-                "type": "AdaptiveCard",
-                "body": [
-                    {
-                        "type": "TextBlock", 
-                        "wrap": True, 
-                        "text": streamer.message
-                    }
-                ]
-            }
-        )
-        
-        # Set the attachment on the streamer
-        streamer.set_attachments([card])
-        
-        logging.info("End stream handler completed successfully with Adaptive Card")
-    except Exception as e:
-        logging.error(f"Error in end_stream_handler: {e}")
-
-async def upload_file_to_openai_thread(client: AzureOpenAI, file_content: bytes, filename: str, thread_id: str, message_content: str = None):
-    """
-    Uploads a file directly to OpenAI and attaches it to a thread.
-    
-    Args:
-        client: Azure OpenAI client
-        file_content: Raw file content bytes
-        filename: Name of the file
-        thread_id: Thread ID to attach the file to
-        message_content: Optional message content to include with the file
-        
-    Returns:
-        Dictionary with upload result information
-    """
-    try:
-        # Create a temporary file for upload
-        with tempfile.NamedTemporaryFile(delete=False, suffix='_' + filename) as temp:
-            temp.write(file_content)
-            temp_path = temp.name
-        
-        logging.info(f"Uploading file {filename} directly to OpenAI for thread {thread_id}")
-        
-        try:
-            # Upload the file to OpenAI
-            with open(temp_path, "rb") as file_data:
-                file_obj = client.files.create(
-                    file=file_data,
-                    purpose="assistants"
-                )
-            
-            file_id = file_obj.id
-            logging.info(f"File uploaded to OpenAI with ID: {file_id}")
-            
-            # Create a message with the file attachment
-            message_text = message_content or f"I've uploaded a file named '{filename}'. Please analyze this file."
-            
-            # Create a message with the file attachment
-            message = client.beta.threads.messages.create(
-                thread_id=thread_id,
-                role="user",
-                content=message_text,
-                attachments=[{
-                    "file_id": file_id,
-                    "tools": [{"type": "file_search"}]
-                  }]
-            )
-            
-            logging.info(f"File {filename} (ID: {file_id}) attached to thread {thread_id}")
-            
-            return {
-                "message": f"File {filename} uploaded and attached to thread",
-                "filename": filename,
-                "file_id": file_id,
-                "thread_id": thread_id,
-                "processing_method": "thread_attachment"
-            }
-            
-        finally:
-            # Clean up temporary file
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-                
-    except Exception as e:
-        logging.error(f"Error uploading file to OpenAI: {str(e)}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to upload file to OpenAI: {str(e)}")
-
-def update_operation_status(operation_id: str, status: str, progress: float, message: str):
-    """Update the status of a long-running operation."""
-    operation_statuses[operation_id] = {
-        "status": status,
-        "progress": progress,
-        "message": message,
-        "updated_at": time.time()
-    }
-    logging.info(f"Operation {operation_id}: {status} - {progress:.0f}% - {message}")
 
 # Create typing indicator activity for Teams
 def create_typing_activity() -> Activity:
@@ -399,36 +265,36 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             # Reset conversation state
             if conversation_id in conversation_states:
                 # Clear any pending messages
-                # Process any queued messages
                 with pending_messages_lock:
                     if conversation_id in pending_messages and pending_messages[conversation_id]:
-                        # Get the next message
-                        next_message = pending_messages[conversation_id].popleft()
-                        await turn_context.send_activity("Now addressing your follow-up message...")
+                        # Gather all queued messages into a combined prompt
+                        all_messages = list(pending_messages[conversation_id])
+                        combined_message = "\n\n".join([f"Question {i+1}: {msg}" for i, msg in enumerate(all_messages)])
                         
-                        # Save original text
-                        original_text = turn_context.activity.text
+                        # Clear the queue
+                        pending_messages[conversation_id].clear()
                         
-                        try:
-                            # Set the new message text
-                            turn_context.activity.text = next_message
-                            
-                            # Process the message using the same turn context
-                            await handle_text_message(turn_context, state)
-                        finally:
-                            # Restore original text
-                            turn_context.activity.text = original_text
+                        # Inform user about combined processing
+                        message_count = len(all_messages)
+                        await turn_context.send_activity(f"Now addressing your {message_count} follow-up message(s) together...")
                         
-                        # Send typing indicator
-                        await turn_context.send_activity(create_typing_activity())
-                        
-                        # Initialize new chat
-                        await initialize_chat(turn_context, None)  # Pass None to force new state creation
-                    else:
-                        await initialize_chat(turn_context, None)
+                        # Process all messages in one request
+                        next_turn_context = copy.deepcopy(turn_context)
+                        next_turn_context.activity.text = f"Please answer all of these questions:\n{combined_message}"
+                        await handle_text_message(next_turn_context, state)
+                
+                # Send typing indicator
+                await turn_context.send_activity(create_typing_activity())
+                
+                # Initialize new chat
+                await initialize_chat(turn_context, None)  # Pass None to force new state creation
+            else:
+                await initialize_chat(turn_context, None)
     except Exception as e:
         logging.error(f"Error handling card action: {e}")
         await turn_context.send_activity(f"I couldn't start a new chat. Please try again later.")
+
+# ----- Teams Bot Logic Functions -----
 
 # Catch-all for errors
 async def on_error(context: TurnContext, error: Exception):
@@ -475,10 +341,6 @@ def _create_reply(activity, text=None, text_format=None):
         text_format=text_format or None,
         locale=activity.locale,
     )
-
-# Parallel message processing control
-# This is a semaphore that limits parallel message processing to avoid overwhelming the API
-message_processing_semaphore = asyncio.Semaphore(3)  # Allow up to 3 messages to be processed in parallel
 
 # Bot logic handler
 async def bot_logic(turn_context: TurnContext):
@@ -612,87 +474,50 @@ async def bot_logic(turn_context: TurnContext):
         
         # If thread is busy and we have a text message, queue it
         if is_thread_busy and has_text and not has_file_attachments:
-            # Always send a typing indicator first
-            await turn_context.send_activity(create_typing_activity())
-            
             with pending_messages_lock:
                 pending_messages[conversation_id].append(turn_context.activity.text.strip())
-                queue_length = len(pending_messages[conversation_id])
-            
-            # Always let the user know we've queued their message for processing
-            await turn_context.send_activity(f"I'm still working on your previous request. This message has been queued ({queue_length} in queue).")
-            
-            # Check if there's an active streamer for this conversation
-            with active_streamers_lock:
-                active_streamer = active_streamers.get(conversation_id)
-                
-            # If there's an active streamer, update the informative message to show progress
-            if active_streamer and not active_streamer.complete:
-                # Add an informative message to the stream
-                activity = Activity(
-                    type=ActivityTypes.typing,
-                    text=f"Still working... ({queue_length} new message(s) queued)",
-                    channel_id="msteams",
-                    entities=[{
-                        "type": "streaminfo",
-                        "streamType": "continue"
-                    }]
-                )
-                
-                if active_streamer.stream_id:
-                    activity.entities[0]["streamId"] = active_streamer.stream_id
-                    activity.entities[0]["streamSequence"] = active_streamer.sequence_id
-                    active_streamer.sequence_id += 1
-                
-                await turn_context.send_activity(activity)
-            
+            await turn_context.send_activity("I'm still working on your previous request. I'll address this message next.")
             return
         
-        # Acquire the semaphore for parallel processing
-        async with message_processing_semaphore:
-            # Prioritize text processing if we have text content (even if there are non-file attachments)
-            if has_text and not has_file_attachments:
-                try:
-                    # Send typing indicator immediately
-                    await turn_context.send_activity(create_typing_activity())
-                    await handle_text_message(turn_context, state)
-                except Exception as e:
-                    logging.error(f"Error in handle_text_message for user {user_id}: {e}")
-                    traceback.print_exc()
-                    # Attempt recovery
-                    await handle_thread_recovery(turn_context, state, str(e))
+        # Prioritize text processing if we have text content (even if there are non-file attachments)
+        if has_text and not has_file_attachments:
+            try:
+                await handle_text_message(turn_context, state)
+            except Exception as e:
+                logging.error(f"Error in handle_text_message for user {user_id}: {e}")
+                traceback.print_exc()
+                # Attempt recovery
+                await handle_thread_recovery(turn_context, state, str(e))
+        
+        # Process file attachments with or without caption
+        elif has_file_attachments:
+            try:
+                await handle_file_upload(turn_context, state, file_caption)
+            except Exception as e:
+                logging.error(f"Error in handle_file_upload for user {user_id}: {e}")
+                traceback.print_exc()
+                # Attempt recovery
+                await handle_thread_recovery(turn_context, state, str(e))
+        
+        # Fallback for messages with neither text nor file attachments
+        else:
+            # This handles cases where Teams might send empty messages or special activities
+            logger.info(f"Received message without text or file attachments from user {user_id}")
             
-            # Process file attachments with or without caption
-            elif has_file_attachments:
-                try:
-                    # Send typing indicator immediately
-                    await turn_context.send_activity(create_typing_activity())
-                    await handle_file_upload(turn_context, state, file_caption)
-                except Exception as e:
-                    logging.error(f"Error in handle_file_upload for user {user_id}: {e}")
-                    traceback.print_exc()
-                    # Attempt recovery
-                    await handle_thread_recovery(turn_context, state, str(e))
-            
-            # Fallback for messages with neither text nor file attachments
-            else:
-                # This handles cases where Teams might send empty messages or special activities
-                logger.info(f"Received message without text or file attachments from user {user_id}")
+            # Retrieve current assistant_id (thread-safe)
+            current_assistant_id = None
+            with conversation_states_lock:
+                current_assistant_id = state.get("assistant_id")
                 
-                # Retrieve current assistant_id (thread-safe)
-                current_assistant_id = None
-                with conversation_states_lock:
-                    current_assistant_id = state.get("assistant_id")
-                    
-                if not current_assistant_id:
-                    try:
-                        await initialize_chat(turn_context, state)
-                    except Exception as e:
-                        logging.error(f"Error in initialize_chat for user {user_id}: {e}")
-                        # Attempt recovery
-                        await handle_thread_recovery(turn_context, state, str(e))
-                else:
-                    await turn_context.send_activity("I didn't receive any text or files. How can I help you?")
+            if not current_assistant_id:
+                try:
+                    await initialize_chat(turn_context, state)
+                except Exception as e:
+                    logging.error(f"Error in initialize_chat for user {user_id}: {e}")
+                    # Attempt recovery
+                    await handle_thread_recovery(turn_context, state, str(e))
+            else:
+                await turn_context.send_activity("I didn't receive any text or files. How can I help you?")
     
     # Handle Teams file consent card responses
     elif turn_context.activity.type == ActivityTypes.invoke:
@@ -854,18 +679,80 @@ async def handle_file_upload(turn_context: TurnContext, state, message_text=None
             traceback.print_exc()
             await turn_context.send_activity(f"Error processing file: {str(e)}")
 
+async def upload_file_to_openai_thread(client: AzureOpenAI, file_content: bytes, filename: str, thread_id: str, message_content: str = None):
+    """
+    Uploads a file directly to OpenAI and attaches it to a thread.
+    
+    Args:
+        client: Azure OpenAI client
+        file_content: Raw file content bytes
+        filename: Name of the file
+        thread_id: Thread ID to attach the file to
+        message_content: Optional message content to include with the file
+        
+    Returns:
+        Dictionary with upload result information
+    """
+    try:
+        # Create a temporary file for upload
+        with tempfile.NamedTemporaryFile(delete=False, suffix='_' + filename) as temp:
+            temp.write(file_content)
+            temp_path = temp.name
+        
+        logging.info(f"Uploading file {filename} directly to OpenAI for thread {thread_id}")
+        
+        try:
+            # Upload the file to OpenAI
+            with open(temp_path, "rb") as file_data:
+                file_obj = client.files.create(
+                    file=file_data,
+                    purpose="assistants"
+                )
+            
+            file_id = file_obj.id
+            logging.info(f"File uploaded to OpenAI with ID: {file_id}")
+            
+            # Create a message with the file attachment
+            message_text = message_content or f"I've uploaded a file named '{filename}'. Please analyze this file."
+            
+            # Create a message with the file attachment
+            message = client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=message_text,
+                attachments=[{
+                    "file_id": file_id,
+                    "tools": [{"type": "file_search"}]
+                  }]
+            )
+            
+            logging.info(f"File {filename} (ID: {file_id}) attached to thread {thread_id}")
+            
+            return {
+                "message": f"File {filename} uploaded and attached to thread",
+                "filename": filename,
+                "file_id": file_id,
+                "thread_id": thread_id,
+                "processing_method": "thread_attachment"
+            }
+            
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+    except Exception as e:
+        logging.error(f"Error uploading file to OpenAI: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to upload file to OpenAI: {str(e)}")
+
 async def process_uploaded_file(turn_context: TurnContext, state, file_path: str, filename: str, message_text: str = None):
     """Process an uploaded file after it's been downloaded, with optional message text"""
-    # Initialize streaming response
-    streamer = StreamingResponse(turn_context)
-    
-    # Start the stream with loading message
-    streamer.start("Processing your file...")
-    
-    # Register this streamer in active streamers dict
-    conversation_id = TurnContext.get_conversation_reference(turn_context.activity).conversation.id
-    with active_streamers_lock:
-        active_streamers[conversation_id] = streamer
+    # Message user that file is being processed
+    if message_text:
+        await turn_context.send_activity(f"Processing file: '{filename}' with your message: '{message_text}'...")
+    else:
+        await turn_context.send_activity(f"Processing file: '{filename}'...")
     
     # If no assistant yet, initialize chat first
     if not state["assistant_id"]:
@@ -876,9 +763,6 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
         with open(file_path, 'rb') as file:
             file_content = file.read()
             
-            # Update streaming with progress
-            streamer.update("Processing file: '{}'...".format(filename))
-            
             # Check file type
             file_ext = os.path.splitext(filename)[1].lower()
             is_image = file_ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
@@ -886,16 +770,13 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
             is_csv_excel = file_ext in ['.csv', '.xlsx', '.xls', '.xlsm']
             
             if is_csv_excel:
-                streamer.complete("Sorry, CSV and Excel files are not supported. Please upload PDF, DOC, DOCX, or TXT files only.")
+                await turn_context.send_activity("Sorry, CSV and Excel files are not supported. Please upload PDF, DOC, DOCX, or TXT files only.")
                 return
             
             # Process based on file type
             client = create_client()
             
             if is_image:
-                # Update streaming with progress
-                streamer.update("Analyzing image '{}'...".format(filename))
-                
                 # Analyze image - same as before but add message text if provided
                 analysis_text = await image_analysis_internal(file_content, filename)
                 
@@ -925,17 +806,17 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                         }
                     )
                     
-                    # Update streaming with final response
-                    final_message = f"Image '{filename}' processed successfully!\n\nHere's my analysis of the image:\n\n{analysis_text}"
-                    streamer.complete(final_message)
+                    await turn_context.send_activity(f"Image '{filename}' processed successfully!")
+                    await turn_context.send_activity("Here's my analysis of the image:")
+                    await turn_context.send_activity(analysis_text)
                 else:
-                    streamer.complete("Cannot process image: No active conversation session.")
+                    await turn_context.send_activity("Cannot process image: No active conversation session.")
                     
             elif is_document:
                 # Use the new direct file upload approach for documents
                 if state["assistant_id"] and state["session_id"]:
-                    # Update streaming with progress
-                    streamer.update("Uploading document '{}'...".format(filename))
+                    # Send a typing indicator
+                    await turn_context.send_activity(create_typing_activity())
                     
                     # Upload the file directly to the thread
                     if message_text:
@@ -945,8 +826,6 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                     
                     # Use the new OpenAI direct file upload approach
                     try:
-                        streamer.update("Attaching document to conversation...")
-                        
                         result = await upload_file_to_openai_thread(
                             client,
                             file_content,
@@ -969,12 +848,11 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                             }
                         )
                         
-                        # Send final streaming message
-                        streamer.complete(f"Document '{filename}' uploaded successfully! You can now ask questions about it.")
+                        await turn_context.send_activity(f"Document '{filename}' uploaded successfully! You can now ask questions about it.")
                         
                     except Exception as upload_error:
                         logger.error(f"Error uploading file to OpenAI: {str(upload_error)}")
-                        streamer.update("Error uploading document. Trying alternate method...")
+                        await turn_context.send_activity(f"Error uploading document: {str(upload_error)}")
                         
                         # Fall back to vector store approach if direct upload fails
                         logger.info(f"Falling back to vector store approach for document '{filename}'")
@@ -989,13 +867,11 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                             vector_store_id = state["vector_store_id"]
                             if not vector_store_id:
                                 # Create a new vector store if needed
-                                streamer.update("Creating storage for the document...")
                                 vector_store = client.beta.vector_stores.create(name=f"Assistant_{state['assistant_id']}_Store")
                                 vector_store_id = vector_store.id
                                 state["vector_store_id"] = vector_store_id
                             
                             # Upload to vector store
-                            streamer.update("Uploading document to storage...")
                             with open(temp_path, "rb") as file_stream:
                                 file_batch = client.beta.vector_stores.file_batches.upload_and_poll(
                                     vector_store_id=vector_store_id,
@@ -1020,7 +896,6 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                                     break
                             
                             if not has_file_search:
-                                streamer.update("Configuring assistant to access your document...")
                                 current_tools = list(assistant_obj.tools)
                                 current_tools.append({"type": "file_search"})
                                 
@@ -1044,32 +919,22 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                             # Add to the list of uploaded files
                             state["uploaded_files"].append(filename)
                             
-                            # Send final success message
-                            streamer.complete(f"Document '{filename}' uploaded to vector store successfully as a fallback method. You can now ask questions about it.")
+                            await turn_context.send_activity(f"Document '{filename}' uploaded to vector store successfully as a fallback method. You can now ask questions about it.")
                             
                         except Exception as fallback_error:
-                            streamer.complete(f"Failed to upload document via fallback method: {str(fallback_error)}")
+                            await turn_context.send_activity(f"Failed to upload document via fallback method: {str(fallback_error)}")
                         finally:
                             # Clean up temp file
                             if os.path.exists(temp_path):
                                 os.remove(temp_path)
                 else:
-                    streamer.complete("Cannot process document: No active assistant or session.")
+                    await turn_context.send_activity("Cannot process document: No active assistant or session.")
             else:
-                streamer.complete(f"Unsupported file type: {file_ext}. Please upload PDF, DOC, DOCX, TXT files, or images.")
+                await turn_context.send_activity(f"Unsupported file type: {file_ext}. Please upload PDF, DOC, DOCX, TXT files, or images.")
     except Exception as e:
         logger.error(f"Error processing file '{filename}': {e}")
         traceback.print_exc()
-        
-        # Try to send final message through streamer first
-        try:
-            if streamer and not streamer.complete:
-                streamer.complete(f"Error processing file: {str(e)}")
-            else:
-                await turn_context.send_activity(f"Error processing file: {str(e)}")
-        except:
-            # Fallback to regular message
-            await turn_context.send_activity(f"Error processing file: {str(e)}")
+        await turn_context.send_activity(f"Error processing file: {str(e)}")
     finally:
         # Clean up file
         if os.path.exists(file_path):
@@ -1077,11 +942,6 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                 os.remove(file_path)
             except OSError as e:
                 logger.error(f"Error removing file {file_path}: {e}")
-                
-        # Clean up streamer
-        with active_streamers_lock:
-            if conversation_id in active_streamers:
-                del active_streamers[conversation_id]
 
 # Function to send file to Teams
 async def send_file_to_teams(turn_context: TurnContext, filename: str):
@@ -1283,7 +1143,7 @@ async def summarize_thread_if_needed(client: AzureOpenAI, thread_id: str, state:
         traceback.print_exc()
         return False
 
-# Improved handle_text_message with proper streaming support
+# Modified handle_text_message with thread summarization
 async def handle_text_message(turn_context: TurnContext, state):
     user_message = turn_context.activity.text.strip()
     conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
@@ -1309,17 +1169,8 @@ async def handle_text_message(turn_context: TurnContext, state):
     # Record this user's message processing (audit trail)
     logging.info(f"Processing message from user {user_id} in conversation {conversation_id}: {user_message[:50]}...")
     
-    # Initialize streaming response
-    streamer = StreamingResponse(turn_context)
-    streamer.start("Processing your message...")
-    
-    # Register this streamer in active streamers dict
-    with active_streamers_lock:
-        active_streamers[conversation_id] = streamer
-    
     # If no assistant yet, initialize chat with the message as context
     if not stored_assistant_id:
-        streamer.update("Setting up a new conversation...")
         await initialize_chat(turn_context, state, context=user_message)
         return
     
@@ -1330,10 +1181,6 @@ async def handle_text_message(turn_context: TurnContext, state):
     summarized = False
     if stored_session_id:
         client = create_client()
-        
-        # Send informative update about checking context
-        streamer.update("Checking conversation context...")
-        
         summarized = await summarize_thread_if_needed(client, stored_session_id, state, threshold=30)
         
         if summarized:
@@ -1341,7 +1188,7 @@ async def handle_text_message(turn_context: TurnContext, state):
             with conversation_states_lock:
                 stored_session_id = state.get("session_id")
                 
-            streamer.update("Summarized our previous conversation to maintain context while keeping the conversation focused.")
+            await turn_context.send_activity("I've summarized our previous conversation to maintain context while keeping the conversation focused.")
     
     # Mark thread as busy (thread-safe)
     with conversation_states_lock:
@@ -1354,164 +1201,45 @@ async def handle_text_message(turn_context: TurnContext, state):
     try:
         # Double-verify resources before proceeding
         client = create_client()
-        
-        # Send progress update
-        streamer.update("Validating conversation resources...")
-        
         validation = await validate_resources(client, current_session_id, stored_assistant_id)
         
         # If any resource is invalid, force recovery
         if not validation["thread_valid"] or not validation["assistant_valid"]:
             logging.warning(f"Resource validation failed for user {user_id}: thread_valid={validation['thread_valid']}, assistant_valid={validation['assistant_valid']}")
-            
-            # Send error message through streamer and end streaming
-            streamer.complete("I encountered an issue with our conversation resources. Creating a fresh session...")
-            
-            # Force recovery
             raise Exception("Invalid conversation resources detected - forcing recovery")
-        
-        # Send progress update
-        streamer.update("Processing your message...")
-        
-        # Add message to thread
-        client.beta.threads.messages.create(
-            thread_id=current_session_id,
-            role="user",
-            content=user_message
-        )
-        
-        # Create run with proper handling
-        run = client.beta.threads.runs.create(
-            thread_id=current_session_id,
-            assistant_id=stored_assistant_id
-        )
-        
-        run_id = run.id
-        logging.info(f"Created run {run_id} for thread {current_session_id}")
-        
-        # Poll for run completion with streaming updates
-        max_wait_time = 120  # seconds
-        wait_interval = 1   # seconds
-        elapsed_time = 0
-        last_progress_update = 0
-        progress_update_interval = 5  # seconds
-        
-        while elapsed_time < max_wait_time:
-            # Check for cancellation (user sent a new message)
-            with pending_messages_lock:
-                has_pending_messages = conversation_id in pending_messages and len(pending_messages[conversation_id]) > 0
             
-            # If user has sent a new message, consider cancelling this run
-            if has_pending_messages and elapsed_time > 10:  # Only cancel if we've been running for at least 10 seconds
-                logging.info(f"User sent new messages while processing run {run_id}, considering early completion")
-                
-                # Try to get what we have so far
-                try:
-                    # Get the latest message that might be available
-                    messages = client.beta.threads.messages.list(
-                        thread_id=current_session_id,
-                        order="desc",
-                        limit=1
-                    )
-                    
-                    if messages.data and messages.data[0].role == "assistant":
-                        # We have a partial response from the assistant, send it
-                        latest_message = messages.data[0]
-                        partial_response = ""
-                        for content_part in latest_message.content:
-                            if content_part.type == 'text':
-                                partial_response += content_part.text.value
-                        
-                        if partial_response.strip():
-                            # We have a partial response to send
-                            partial_response += "\n\n[Note: This is a partial response as you've sent a new message.]"
-                            streamer.complete(partial_response)
-                            
-                            # Update state
-                            with conversation_states_lock:
-                                state["active_run"] = False
-                            if current_session_id in active_runs:
-                                del active_runs[current_session_id]
-                            
-                            # Try to cancel the run
-                            try:
-                                client.beta.threads.runs.cancel(
-                                    thread_id=current_session_id,
-                                    run_id=run_id
-                                )
-                                logging.info(f"Cancelled run {run_id} due to new messages")
-                            except:
-                                pass
-                            
-                            return
-                except Exception as e:
-                    logging.error(f"Error checking for partial response: {e}")
-            
-            # Send periodic progress updates to keep the user informed
-            current_time = time.time()
-            if current_time - last_progress_update >= progress_update_interval:
-                # Update progress message based on elapsed time
-                if elapsed_time < 5:
-                    streamer.update("Processing your message...")
-                elif elapsed_time < 15:
-                    streamer.update("Thinking about your question...")
-                elif elapsed_time < 30:
-                    streamer.update("Still working on a comprehensive response...")
-                else:
-                    streamer.update(f"This is taking longer than expected, but I'm still working on it... ({elapsed_time}s)")
-                
-                last_progress_update = current_time
-            
-            # Check run status
-            run_status = client.beta.threads.runs.retrieve(
-                thread_id=current_session_id, 
-                run_id=run_id
+        # Use streaming if supported by the channel
+        supports_streaming = turn_context.activity.channel_id == "msteams"
+        
+        if supports_streaming:
+            # Use enhanced streaming with Teams AI library
+            await stream_response_with_teams_ai(turn_context, state, user_message)
+        else:
+            # Call the internal function directly without HTTP calls
+            result = await process_conversation_internal(
+                client=client,
+                session=current_session_id,
+                prompt=user_message,
+                assistant=stored_assistant_id,
+                stream_output=False
             )
             
-            if run_status.status == "completed":
-                # Get the complete message
-                messages = client.beta.threads.messages.list(
-                    thread_id=current_session_id,
-                    order="desc",
-                    limit=1
-                )
+            # Extract text from response
+            if isinstance(result, dict) and "response" in result:
+                assistant_response = result["response"]
+            else:
+                assistant_response = "I'm sorry, I couldn't process your request."
                 
-                if messages.data:
-                    latest_message = messages.data[0]
-                    response_text = ""
-                    for content_part in latest_message.content:
-                        if content_part.type == 'text':
-                            response_text += content_part.text.value
-                    
-                    # Complete streamer with full response
-                    streamer.complete(response_text)
-                else:
-                    streamer.complete("I processed your request, but couldn't generate a proper response.")
-                
-                break
-            
-            elif run_status.status in ["failed", "cancelled", "expired"]:
-                logging.error(f"Run ended with status: {run_status.status}")
-                streamer.complete(f"Sorry, I encountered an error and couldn't complete your request. Run status: {run_status.status}. Please try again.")
-                break
-            
-            await asyncio.sleep(wait_interval)
-            elapsed_time += wait_interval
-        
-        # Handle timeout
-        if elapsed_time >= max_wait_time:
-            logging.warning(f"Run {run_id} timed out after {max_wait_time} seconds")
-            streamer.complete("I'm sorry, it's taking longer than expected to generate a response. Please try again or rephrase your question.")
-            
-            # Try to cancel the run
-            try:
-                client.beta.threads.runs.cancel(
-                    thread_id=current_session_id,
-                    run_id=run_id
-                )
-                logging.info(f"Cancelled timed out run {run_id}")
-            except:
-                pass
+            # Split long responses into chunks if needed (Teams has message size limits)
+            if len(assistant_response) > 7000:
+                chunks = [assistant_response[i:i+7000] for i in range(0, len(assistant_response), 7000)]
+                for i, chunk in enumerate(chunks):
+                    if i == 0:
+                        await turn_context.send_activity(chunk)
+                    else:
+                        await turn_context.send_activity(f"(continued) {chunk}")
+            else:
+                await turn_context.send_activity(assistant_response)
         
         # Mark thread as no longer busy (thread-safe)
         with conversation_states_lock:
@@ -1521,25 +1249,45 @@ async def handle_text_message(turn_context: TurnContext, state):
         if current_session_id in active_runs:
             del active_runs[current_session_id]
         
-        # Clean up streamer reference
-        with active_streamers_lock:
-            if conversation_id in active_streamers:
-                del active_streamers[conversation_id]
-        
-        # Process any queued messages
+        # Check for queued messages
         with pending_messages_lock:
             if conversation_id in pending_messages and pending_messages[conversation_id]:
-                # Get the next message
-                next_message = pending_messages[conversation_id].popleft()
-                await turn_context.send_activity("Now addressing your follow-up message...")
+                # Process queued messages one by one in FIFO order
+                next_messages = list(pending_messages[conversation_id])
+                pending_messages[conversation_id].clear()
                 
-                # Create a new turn context for the next message
-                new_activity = copy.deepcopy(turn_context.activity)
-                new_activity.text = next_message
-                new_turn_context = TurnContext(ADAPTER, new_activity)
-                
-                # Process the next message
-                await handle_text_message(new_turn_context, state)
+                if len(next_messages) == 1:
+                    # If only one message, process it directly
+                    next_message = next_messages[0]
+                    await turn_context.send_activity("Now addressing your follow-up message...")
+                    
+                    # Process with modified activity
+                    activity = turn_context.activity
+                    original_text = activity.text
+                    activity.text = next_message
+                    
+                    try:
+                        # Process with modified activity
+                        await handle_text_message(turn_context, state)
+                    finally:
+                        # Restore original text in case the context is reused
+                        activity.text = original_text
+                else:
+                    # For multiple messages, batch them together
+                    combined_message = "\n\n".join([f"Question {i+1}: {msg}" for i, msg in enumerate(next_messages)])
+                    await turn_context.send_activity(f"Now addressing your {len(next_messages)} follow-up messages together...")
+                    
+                    # Process with modified activity for combined messages
+                    activity = turn_context.activity
+                    original_text = activity.text
+                    activity.text = f"Please answer all of these questions:\n{combined_message}"
+                    
+                    try:
+                        # Process with modified activity
+                        await handle_text_message(turn_context, state)
+                    finally:
+                        # Restore original text in case the context is reused
+                        activity.text = original_text
             
     except Exception as e:
         # Mark thread as no longer busy even on error (thread-safe)
@@ -1550,332 +1298,219 @@ async def handle_text_message(turn_context: TurnContext, state):
         if current_session_id in active_runs:
             del active_runs[current_session_id]
             
-        # Clean up streamer reference
-        with active_streamers_lock:
-            if conversation_id in active_streamers:
-                del active_streamers[conversation_id]
-            
         # Don't show raw error details to users
         logging.error(f"Error in handle_text_message for user {user_id}: {str(e)}")
         traceback.print_exc()
-        
-        # Send error through streamer if active
-        if streamer:
-            streamer.complete("I'm sorry, I encountered a problem while processing your message. Please try again.")
-        else:
-            await turn_context.send_activity("I'm sorry, I encountered a problem while processing your message. Please try again.")
+        await turn_context.send_activity("I'm sorry, I encountered a problem while processing your message. Please try again.")
 
-# Initialize chat with the backend
-async def initialize_chat(turn_context: TurnContext, state=None, context=None):
-    """Initialize a new chat session with the backend - with improved user isolation"""
-    # Get the conversation reference including user identity information
-    conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-    conversation_id = conversation_reference.conversation.id
-    user_id = turn_context.activity.from_property.id if hasattr(turn_context.activity, 'from_property') else None
+# Implement streaming with Teams AI integration
+async def stream_response_with_teams_ai(turn_context: TurnContext, state, user_message):
+    """
+    Stream responses using the Teams AI library's StreamingResponse class.
     
-    # Create a unique identifier that includes both conversation and user 
-    unique_user_key = f"{conversation_id}_{user_id}" if user_id else conversation_id
-    
-    # Thread-safe state initialization
-    if state is None:
-        with conversation_states_lock:
-            conversation_states[conversation_id] = {
-                "assistant_id": None,
-                "session_id": None,
-                "vector_store_id": None,
-                "uploaded_files": [],
-                "recovery_attempts": 0,
-                "last_error": None,
-                "active_run": False,
-                "user_id": user_id,  # Store the user ID for additional verification
-                "creation_time": time.time()
-            }
-            state = conversation_states[conversation_id]
-            
-            # Clear any pending messages
-            with pending_messages_lock:
-                if conversation_id in pending_messages:
-                    pending_messages[conversation_id].clear()
-    
-    # Create a streamer for a better user experience
-    streamer = StreamingResponse(turn_context)
-    streamer.start("Creating a new conversation...")
-    
+    Args:
+        turn_context: The TurnContext object
+        state: The conversation state
+        user_message: The user's message
+    """
     try:
-        # Always verify user before proceeding
-        if user_id and state.get("user_id") and state.get("user_id") != user_id:
-            logging.warning(f"User mismatch detected! Expected {state.get('user_id')}, got {user_id}")
-            # Create a fresh state since this appears to be a different user with same conversation ID
-            with conversation_states_lock:
-                conversation_states[conversation_id] = {
-                    "assistant_id": None,
-                    "session_id": None, 
-                    "vector_store_id": None,
-                    "uploaded_files": [],
-                    "recovery_attempts": 0,
-                    "last_error": None,
-                    "active_run": False,
-                    "user_id": user_id,
-                    "creation_time": time.time()
-                }
-                state = conversation_states[conversation_id]
-                
-        # Send typing indicator
-        streamer.update("Creating a new conversation...")
-        
-        # Log initialization attempt with user details for traceability
-        logger.info(f"Initializing chat for user {user_id} in conversation {conversation_id} with context: {context}")
-        
-        # Define system prompt here instead of relying on external variable
-        system_prompt = '''
-You are a Product Management AI Co-Pilot that helps create documentation and analyze various file types. Your capabilities vary based on the type of files uploaded.
-
-### Understanding File Types and Processing Methods:
-
-1. **Documents (PDF, DOC, TXT, etc.)** - When users upload these files, you should:
-   - Use your file_search capability to extract relevant information
-   - Quote information directly from the documents when answering questions
-   - Always reference the specific filename when sharing information from a document
-
-2. **Images** - When users upload images, you should:
-   - Refer to the analysis that was automatically added to the conversation
-   - Use details from the image analysis to answer questions
-   - Acknowledge when information might not be visible in the image
-
-3. **Unsupported File Types**:
-   - CSV and Excel files are not supported by this system
-   - If users ask about analyzing spreadsheets, kindly inform them that this feature is not available
-
-### PRD Generation Excellence:
-
-When creating a PRD (Product Requirements Document), develop a comprehensive and professional document with these mandatory sections:
-
-1. **Product Overview:**
-   - Product Manager: [Name and contact details]
-   - Product Name: [Clear, concise name]
-   - Date: [Current date and version]
-   - Vision Statement: [Compelling, aspirational vision in 1-2 sentences]
-
-2. **Problem and Customer Analysis:**
-   - Customer Problem: [Clearly articulated problem statement]
-   - Market Opportunity: [Quantified TAM/SAM/SOM when possible]
-   - Personas: [Detailed primary and secondary user personas]
-   - User Stories: [Key scenarios from persona perspective]
-
-3. **Strategic Elements:**
-   - Executive Summary: [Brief overview of product and value proposition]
-   - Business Objectives: [Measurable goals with KPIs]
-   - Success Metrics: [Specific metrics to track success]
-
-4. **Detailed Requirements:**
-   - Key Features: [Prioritized feature list with clear descriptions]
-   - Functional Requirements: [Detailed specifications for each feature]
-   - Non-Functional Requirements: [Performance, security, scalability, etc.]
-   - Technical Specifications: [Relevant architecture and technical details]
-
-5. **Implementation Planning:**
-   - Milestones: [Phased delivery timeline with key dates]
-   - Dependencies: [Internal and external dependencies]
-   - Risks and Mitigations: [Potential challenges and contingency plans]
-
-6. **Appendices:**
-   - Supporting Documents: [Research findings, competitive analysis, etc.]
-   - Open Questions: [Items requiring further investigation]
-
-If any information is unavailable, clearly mark sections as "[To be determined]" and request specific clarification from the user. When creating a PRD, maintain a professional, clear, and structured format with appropriate headers and bullet points.
-
-### Professional Assistance Guidelines:
-
-- Demonstrate expertise and professionalism in all responses
-- Proactively seek clarification when details are missing or ambiguous
-- Ask specific questions about file names, requirements, or expectations when needed
-- Provide context for why you need certain information to deliver better results
-- Structure responses clearly with appropriate formatting for readability
-- Always reference files by their exact filenames
-- Use tools appropriately based on file type
-- If asked about CSV/Excel data analysis, politely explain this is not supported
-- Acknowledge limitations and be transparent when information is unavailable
-- Balance detail with conciseness based on the user's needs
-- When in doubt about requirements, ask targeted questions rather than making assumptions
-
-Remember to be thorough yet efficient with your responses, anticipating follow-up needs while addressing the immediate question.
-'''
-        
-        # ALWAYS create a new assistant and thread for this user - never reuse
         client = create_client()
+        thread_id = state["session_id"]
+        assistant_id = state["assistant_id"]
         
-        # Create a vector store
-        try:
-            streamer.update("Creating storage resources...")
-            vector_store = client.beta.vector_stores.create(
-                name=f"user_{user_id}_convo_{conversation_id}_{int(time.time())}"
-            )
-            logging.info(f"Created vector store: {vector_store.id} for user {user_id}")
-        except Exception as e:
-            logging.error(f"Failed to create vector store for user {user_id}: {e}")
-            streamer.complete("I encountered an error while setting up your conversation storage.")
-            raise HTTPException(status_code=500, detail="Failed to create vector store")
-
-        # Include file_search tool
-        assistant_tools = [{"type": "file_search"}]
-        assistant_tool_resources = {
-            "file_search": {"vector_store_ids": [vector_store.id]}
-        }
-
-        # Create the assistant with a unique name including user identifiers
-        try:
-            streamer.update("Creating your personal assistant...")
-            unique_name = f"pm_copilot_user_{user_id}_convo_{conversation_id}_{int(time.time())}"
-            assistant = client.beta.assistants.create(
-                name=unique_name,
-                model="gpt-4o-mini",
-                instructions=system_prompt,  # Now correctly defined
-                tools=assistant_tools,
-                tool_resources=assistant_tool_resources,
-            )
-            logging.info(f'Created assistant {assistant.id} for user {user_id}')
-        except Exception as e:
-            logging.error(f"Failed to create assistant for user {user_id}: {e}")
-            streamer.complete("I encountered an error while creating your personal assistant.")
-            raise HTTPException(status_code=500, detail=f"Failed to create assistant: {e}")
-
-        # Create a thread
-        try:
-            streamer.update("Setting up your conversation...")
-            thread = client.beta.threads.create()
-            logging.info(f"Created thread {thread.id} for user {user_id}")
-        except Exception as e:
-            logging.error(f"Failed to create thread for user {user_id}: {e}")
-            streamer.complete("I encountered an error while setting up your conversation thread.")
-            raise HTTPException(status_code=500, detail=f"Failed to create thread: {e}")
-
-        # Update state with new resources
-        with conversation_states_lock:
-            state["assistant_id"] = assistant.id
-            state["session_id"] = thread.id
-            state["vector_store_id"] = vector_store.id
-            state["active_run"] = False
-            state["recovery_attempts"] = 0
-            state["user_identifier"] = unique_user_key  # Store the unique key for verification
-            
-        # If context is provided, add it as user persona context
-        if context:
-            streamer.update("Adding your context to the conversation...")
-            await update_context_internal(client, thread.id, context)
-            
-        # Compose greeting messages
-        welcome_message = "Hi! I'm the Product Management Bot. I'm ready to help you with your product management tasks."
+        # Mark run as active in state
+        state["active_run"] = True
+        active_runs[thread_id] = True
         
-        if context:
-            welcome_message += f"\n\nI've initialized with your context: '{context}'"
-        
-        # Send final welcome message through streamer
-        streamer.complete(welcome_message)
-            
-        # Also process the first message if context was provided
-        if context:
-            # Process the context as a message
-            await send_message(turn_context, state)
-            
-    except Exception as e:
-        # Try to send error through streamer if active
-        if streamer:
-            streamer.complete(f"Error initializing chat: {str(e)}")
-        else:
-            await turn_context.send_activity(f"Error initializing chat: {str(e)}")
-            
-        logger.error(f"Error in initialize_chat for user {user_id}: {str(e)}")
-        traceback.print_exc()
-
-# Send a message without user input (used after file upload or initialization)
-async def send_message(turn_context: TurnContext, state):
-    try:
-        # Create streaming response handler
+        # Create a StreamingResponse instance from Teams AI
         streamer = StreamingResponse(turn_context)
-        streamer.start("Processing your request...")
         
-        # Call internal function directly to get latest message
-        client = create_client()
+        # Send initial informative update
+        streamer.queue_informative_update("Processing your request...")
         
-        # Create a run to process the current thread state
-        run = client.beta.threads.runs.create(
-            thread_id=state["session_id"],
-            assistant_id=state["assistant_id"]
-        )
-        
-        # Poll for completion
-        max_wait_time = 90  # seconds
-        wait_interval = 1   # seconds
-        elapsed_time = 0
-        last_progress_update = 0
-        progress_update_interval = 5  # seconds
-        
-        while elapsed_time < max_wait_time:
-            # Send periodic progress updates
-            current_time = time.time()
-            if current_time - last_progress_update >= progress_update_interval:
-                if elapsed_time < 10:
-                    streamer.update("Analyzing your request...")
-                elif elapsed_time < 30:
-                    streamer.update("Working on a comprehensive response...")
-                else:
-                    streamer.update(f"Still processing... ({elapsed_time}s)")
-                
-                last_progress_update = current_time
+        try:
+            # First, add the user message to the thread
+            if user_message:
+                try:
+                    # Check for any existing active runs
+                    try:
+                        runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
+                        if runs.data:
+                            latest_run = runs.data[0]
+                            if latest_run.status in ["in_progress", "queued", "requires_action"]:
+                                active_run_id = latest_run.id
+                                logging.info(f"Found existing active run {active_run_id} with status {latest_run.status}")
+                                
+                                # Cancel the active run
+                                client.beta.threads.runs.cancel(thread_id=thread_id, run_id=active_run_id)
+                                logging.info(f"Requested cancellation of pre-existing run {active_run_id}")
+                                
+                                # Wait briefly for cancellation to take effect
+                                await asyncio.sleep(2)
+                    except Exception as check_e:
+                        logging.warning(f"Error checking for existing runs: {check_e}")
+                    
+                    # Add the user message to the thread
+                    client.beta.threads.messages.create(
+                        thread_id=thread_id,
+                        role="user",
+                        content=user_message
+                    )
+                    logging.info(f"Added user message to thread {thread_id}")
+                    
+                except Exception as msg_e:
+                    if "while a run" in str(msg_e):
+                        logging.warning(f"Could not add message due to active run: {msg_e}")
+                        # Create a new thread as fallback
+                        new_thread = client.beta.threads.create()
+                        thread_id = new_thread.id
+                        state["session_id"] = thread_id
+                        logging.info(f"Created new thread {thread_id} due to message add failure")
+                        
+                        # Add message to the new thread
+                        client.beta.threads.messages.create(
+                            thread_id=thread_id,
+                            role="user",
+                            content=user_message
+                        )
+                        logging.info(f"Added user message to new thread {thread_id}")
+                    else:
+                        logging.error(f"Error adding message to thread: {msg_e}")
+                        await streamer.end_stream()
+                        await turn_context.send_activity("I'm having trouble processing your request. Please try again.")
+                        return
             
-            # Check run status
-            run_status = client.beta.threads.runs.retrieve(
-                thread_id=state["session_id"],
-                run_id=run.id
+            # Create a run for the assistant
+            run = client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id
             )
+            run_id = run.id
             
-            if run_status.status == "completed":
-                # Get the complete message
-                messages = client.beta.threads.messages.list(
-                    thread_id=state["session_id"],
-                    order="desc",
-                    limit=1
+            # Poll for run completion with streaming updates
+            max_wait_time = 120  # seconds
+            wait_interval = 1.5  # seconds
+            elapsed_time = 0
+            last_message_length = 0
+            completed = False
+            
+            # Send an initial typing update
+            streamer.queue_informative_update("Thinking...")
+            
+            # Main polling loop
+            while elapsed_time < max_wait_time and not completed:
+                # Get run status
+                run_status = client.beta.threads.runs.retrieve(
+                    thread_id=thread_id,
+                    run_id=run_id
                 )
                 
-                if messages.data:
-                    latest_message = messages.data[0]
+                if run_status.status == "completed":
+                    # Run completed, get the final message
+                    messages = client.beta.threads.messages.list(
+                        thread_id=thread_id,
+                        order="desc",
+                        limit=1
+                    )
                     
-                    # Extract the message text
-                    response_text = ""
-                    for content_part in latest_message.content:
-                        if content_part.type == 'text':
-                            response_text += content_part.text.value
+                    if messages.data:
+                        latest_message = messages.data[0]
+                        message_text = ""
+                        
+                        # Extract text content
+                        for content_part in latest_message.content:
+                            if content_part.type == 'text':
+                                message_text += content_part.text.value
+                        
+                        # Queue the full text as the final chunk
+                        streamer.queue_text_chunk(message_text)
                     
-                    # Complete the stream with the response
-                    streamer.complete(response_text)
-                else:
-                    streamer.complete("I processed your request, but couldn't generate a response.")
+                    completed = True
+                    break
                 
-                break
+                elif run_status.status in ["failed", "cancelled", "expired"]:
+                    streamer.queue_text_chunk(f"I encountered an error with status: {run_status.status}. Please try again.")
+                    completed = True
+                    break
+                
+                elif run_status.status == "requires_action":
+                    # Handle function calling if needed
+                    streamer.queue_informative_update("Performing additional actions...")
+                    # TODO: Implement function calling logic if needed
+                    
+                elif run_status.status == "in_progress":
+                    # Attempt to show partial updates every few seconds
+                    try:
+                        # Get the latest message being generated
+                        messages = client.beta.threads.messages.list(
+                            thread_id=thread_id,
+                            order="desc",
+                            limit=1
+                        )
+                        
+                        if messages.data and messages.data[0].role == "assistant":
+                            latest_message = messages.data[0]
+                            current_text = ""
+                            
+                            # Extract text content
+                            for content_part in latest_message.content:
+                                if content_part.type == 'text':
+                                    current_text += content_part.text.value
+                            
+                            # Only queue an update if we have new content
+                            if len(current_text) > last_message_length:
+                                # Queue only the new part of the message
+                                new_content = current_text[last_message_length:]
+                                streamer.queue_text_chunk(new_content)
+                                last_message_length = len(current_text)
+                        else:
+                            # No assistant message yet, send a typing indicator
+                            streamer.queue_informative_update("Still working...")
+                    except Exception as stream_e:
+                        logging.warning(f"Error getting partial updates: {stream_e}")
+                        # Continue with polling; this is non-fatal
+                
+                # Wait before next poll
+                await asyncio.sleep(wait_interval)
+                elapsed_time += wait_interval
             
-            elif run_status.status in ["failed", "cancelled", "expired"]:
-                logging.error(f"Run ended with status: {run_status.status}")
-                streamer.complete(f"Sorry, I encountered an error processing your request. Run status: {run_status.status}. Please try again.")
-                break
+            # If we didn't complete within the time limit
+            if not completed:
+                streamer.queue_text_chunk("\n\nI'm still working on your request but it's taking longer than expected. Here's what I have so far, and I'll continue processing in the background.")
             
-            # Wait before next check
-            await asyncio.sleep(wait_interval)
-            elapsed_time += wait_interval
+            # End the stream
+            await streamer.end_stream()
+            
+        except Exception as e:
+            logging.error(f"Error in streaming: {e}")
+            traceback.print_exc()
+            
+            try:
+                # Try to end the stream gracefully
+                await streamer.end_stream()
+            except:
+                # If that fails, just send a direct message
+                await turn_context.send_activity("I encountered an error while processing your request. Please try again.")
         
-        # Handle timeout
-        if elapsed_time >= max_wait_time:
-            logging.warning(f"Run timed out after {max_wait_time} seconds")
-            streamer.complete("I'm sorry, it's taking longer than expected to generate a response. Please try again or rephrase your question.")
-            
-    except Exception as e:
-        logging.error(f"Error in send_message: {str(e)}")
+        finally:
+            # Ensure run is marked as complete
+            with conversation_states_lock:
+                state["active_run"] = False
+            if thread_id in active_runs:
+                del active_runs[thread_id]
+    
+    except Exception as outer_e:
+        logging.error(f"Outer error in stream_response_with_teams_ai: {str(outer_e)}")
         traceback.print_exc()
         
-        # Try to send through streamer if active
-        if streamer:
-            streamer.complete(f"Error getting response: {str(e)}")
-        else:
-            await turn_context.send_activity(f"Error getting response: {str(e)}")
+        # Send a user-friendly error message
+        await turn_context.send_activity("I encountered a problem while processing your request. Please try again or start a new chat.")
+        
+        # Mark as complete
+        with conversation_states_lock:
+            state["active_run"] = False
+        if state.get("session_id") in active_runs:
+            del active_runs[state.get("session_id", "")]
 
 async def validate_resources(client: AzureOpenAI, thread_id: Optional[str], assistant_id: Optional[str]) -> Dict[str, bool]:
     """
@@ -2039,6 +1674,242 @@ async def add_file_awareness_internal(thread_id: str, file_info: Dict[str, Any])
         logging.error(f"Error adding file awareness for '{file_name}' to thread {thread_id}: {e}")
         # Continue the flow even if adding awareness fails
 
+# Initialize chat with the backend
+async def initialize_chat(turn_context: TurnContext, state=None, context=None):
+    """Initialize a new chat session with the backend - with improved user isolation"""
+    # Get the conversation reference including user identity information
+    conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+    conversation_id = conversation_reference.conversation.id
+    user_id = turn_context.activity.from_property.id if hasattr(turn_context.activity, 'from_property') else None
+    
+    # Create a unique identifier that includes both conversation and user 
+    unique_user_key = f"{conversation_id}_{user_id}" if user_id else conversation_id
+    
+    # Thread-safe state initialization
+    if state is None:
+        with conversation_states_lock:
+            conversation_states[conversation_id] = {
+                "assistant_id": None,
+                "session_id": None,
+                "vector_store_id": None,
+                "uploaded_files": [],
+                "recovery_attempts": 0,
+                "last_error": None,
+                "active_run": False,
+                "user_id": user_id,  # Store the user ID for additional verification
+                "creation_time": time.time()
+            }
+            state = conversation_states[conversation_id]
+            
+            # Clear any pending messages
+            with pending_messages_lock:
+                if conversation_id in pending_messages:
+                    pending_messages[conversation_id].clear()
+    
+    try:
+        # Always verify user before proceeding
+        if user_id and state.get("user_id") and state.get("user_id") != user_id:
+            logging.warning(f"User mismatch detected! Expected {state.get('user_id')}, got {user_id}")
+            # Create a fresh state since this appears to be a different user with same conversation ID
+            with conversation_states_lock:
+                conversation_states[conversation_id] = {
+                    "assistant_id": None,
+                    "session_id": None, 
+                    "vector_store_id": None,
+                    "uploaded_files": [],
+                    "recovery_attempts": 0,
+                    "last_error": None,
+                    "active_run": False,
+                    "user_id": user_id,
+                    "creation_time": time.time()
+                }
+                state = conversation_states[conversation_id]
+                
+        # Send typing indicator
+        await turn_context.send_activity(create_typing_activity())
+        
+        # Log initialization attempt with user details for traceability
+        logger.info(f"Initializing chat for user {user_id} in conversation {conversation_id} with context: {context}")
+        
+        # Define system prompt here instead of relying on external variable
+        system_prompt = '''
+You are a Product Management AI Co-Pilot that helps create documentation and analyze various file types. Your capabilities vary based on the type of files uploaded.
+
+### Understanding File Types and Processing Methods:
+
+1. **Documents (PDF, DOC, TXT, etc.)** - When users upload these files, you should:
+   - Use your file_search capability to extract relevant information
+   - Quote information directly from the documents when answering questions
+   - Always reference the specific filename when sharing information from a document
+
+2. **Images** - When users upload images, you should:
+   - Refer to the analysis that was automatically added to the conversation
+   - Use details from the image analysis to answer questions
+   - Acknowledge when information might not be visible in the image
+
+3. **Unsupported File Types**:
+   - CSV and Excel files are not supported by this system
+   - If users ask about analyzing spreadsheets, kindly inform them that this feature is not available
+
+### PRD Generation Excellence:
+
+When creating a PRD (Product Requirements Document), develop a comprehensive and professional document with these mandatory sections:
+
+1. **Product Overview:**
+   - Product Manager: [Name and contact details]
+   - Product Name: [Clear, concise name]
+   - Date: [Current date and version]
+   - Vision Statement: [Compelling, aspirational vision in 1-2 sentences]
+
+2. **Problem and Customer Analysis:**
+   - Customer Problem: [Clearly articulated problem statement]
+   - Market Opportunity: [Quantified TAM/SAM/SOM when possible]
+   - Personas: [Detailed primary and secondary user personas]
+   - User Stories: [Key scenarios from persona perspective]
+
+3. **Strategic Elements:**
+   - Executive Summary: [Brief overview of product and value proposition]
+   - Business Objectives: [Measurable goals with KPIs]
+   - Success Metrics: [Specific metrics to track success]
+
+4. **Detailed Requirements:**
+   - Key Features: [Prioritized feature list with clear descriptions]
+   - Functional Requirements: [Detailed specifications for each feature]
+   - Non-Functional Requirements: [Performance, security, scalability, etc.]
+   - Technical Specifications: [Relevant architecture and technical details]
+
+5. **Implementation Planning:**
+   - Milestones: [Phased delivery timeline with key dates]
+   - Dependencies: [Internal and external dependencies]
+   - Risks and Mitigations: [Potential challenges and contingency plans]
+
+6. **Appendices:**
+   - Supporting Documents: [Research findings, competitive analysis, etc.]
+   - Open Questions: [Items requiring further investigation]
+
+If any information is unavailable, clearly mark sections as "[To be determined]" and request specific clarification from the user. When creating a PRD, maintain a professional, clear, and structured format with appropriate headers and bullet points.
+
+### Professional Assistance Guidelines:
+
+- Demonstrate expertise and professionalism in all responses
+- Proactively seek clarification when details are missing or ambiguous
+- Ask specific questions about file names, requirements, or expectations when needed
+- Provide context for why you need certain information to deliver better results
+- Structure responses clearly with appropriate formatting for readability
+- Always reference files by their exact filenames
+- Use tools appropriately based on file type
+- If asked about CSV/Excel data analysis, politely explain this is not supported
+- Acknowledge limitations and be transparent when information is unavailable
+- Balance detail with conciseness based on the user's needs
+- When in doubt about requirements, ask targeted questions rather than making assumptions
+
+Remember to be thorough yet efficient with your responses, anticipating follow-up needs while addressing the immediate question.
+'''
+        
+        # ALWAYS create a new assistant and thread for this user - never reuse
+        client = create_client()
+        
+        # Create a vector store
+        try:
+            vector_store = client.beta.vector_stores.create(
+                name=f"user_{user_id}_convo_{conversation_id}_{int(time.time())}"
+            )
+            logging.info(f"Created vector store: {vector_store.id} for user {user_id}")
+        except Exception as e:
+            logging.error(f"Failed to create vector store for user {user_id}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to create vector store")
+
+        # Include file_search tool
+        assistant_tools = [{"type": "file_search"}]
+        assistant_tool_resources = {
+            "file_search": {"vector_store_ids": [vector_store.id]}
+        }
+
+        # Create the assistant with a unique name including user identifiers
+        try:
+            unique_name = f"pm_copilot_user_{user_id}_convo_{conversation_id}_{int(time.time())}"
+            assistant = client.beta.assistants.create(
+                name=unique_name,
+                model="gpt-4o-mini",
+                instructions=system_prompt,  # Now correctly defined
+                tools=assistant_tools,
+                tool_resources=assistant_tool_resources,
+            )
+            logging.info(f'Created assistant {assistant.id} for user {user_id}')
+        except Exception as e:
+            logging.error(f"Failed to create assistant for user {user_id}: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to create assistant: {e}")
+
+        # Create a thread
+        try:
+            thread = client.beta.threads.create()
+            logging.info(f"Created thread {thread.id} for user {user_id}")
+        except Exception as e:
+            logging.error(f"Failed to create thread for user {user_id}: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to create thread: {e}")
+
+        # Update state with new resources
+        with conversation_states_lock:
+            state["assistant_id"] = assistant.id
+            state["session_id"] = thread.id
+            state["vector_store_id"] = vector_store.id
+            state["active_run"] = False
+            state["recovery_attempts"] = 0
+            state["user_identifier"] = unique_user_key  # Store the unique key for verification
+            
+        # If context is provided, add it as user persona context
+        if context:
+            await update_context_internal(client, thread.id, context)
+            
+        # Tell the user chat was initialized
+        await turn_context.send_activity("Hi! I'm the Product Management Bot. I'm ready to help you with your product management tasks.")
+        
+        if context:
+            await turn_context.send_activity(f"I've initialized with your context: '{context}'")
+            # Also send the first response
+            await send_message(turn_context, state)
+            
+    except Exception as e:
+        await turn_context.send_activity(f"Error initializing chat: {str(e)}")
+        logger.error(f"Error in initialize_chat for user {user_id}: {str(e)}")
+        traceback.print_exc()
+
+# Send a message without user input (used after file upload or initialization)
+async def send_message(turn_context: TurnContext, state):
+    try:
+        # Send typing indicator
+        await turn_context.send_activity(create_typing_activity())
+        
+        # Call internal function directly to get latest message
+        client = create_client()
+        result = await process_conversation_internal(
+            client=client,
+            session=state["session_id"],
+            assistant=state["assistant_id"],
+            prompt=None,
+            stream_output=False
+        )
+        
+        if isinstance(result, dict) and "response" in result:
+            assistant_response = result.get("response", "")
+            
+            if assistant_response:
+                # Split long responses if needed
+                if len(assistant_response) > 7000:
+                    chunks = [assistant_response[i:i+7000] for i in range(0, len(assistant_response), 7000)]
+                    for i, chunk in enumerate(chunks):
+                        if i == 0:
+                            await turn_context.send_activity(chunk)
+                        else:
+                            await turn_context.send_activity(f"(continued) {chunk}")
+                else:
+                    await turn_context.send_activity(assistant_response)
+            
+    except Exception as e:
+        await turn_context.send_activity(f"Error getting response: {str(e)}")
+        logger.error(f"Error in send_message: {str(e)}")
+        traceback.print_exc()
+
 # Send welcome message when bot is added
 async def send_welcome_message(turn_context: TurnContext):
     welcome_text = (
@@ -2060,7 +1931,8 @@ async def send_welcome_message(turn_context: TurnContext):
     # Also send the new chat card
     await send_new_chat_card(turn_context)
 
-# Internal implementation of process_conversation
+# ----- Common API Functions -----
+
 async def process_conversation_internal(
     client: AzureOpenAI,
     session: Optional[str] = None,
@@ -2094,7 +1966,7 @@ async def process_conversation_internal(
                 session = thread.id
             except Exception as e:
                 logging.error(f"Failed to create default thread: {e}")
-                raise HTTPException(status_code=500, detail="Failed to create default thread")
+                raise HTTPException(status_code=500, detail=f"Failed to create default thread: {e}")
         
         # Validate resources if provided 
         validation = await validate_resources(client, session, assistant)
@@ -2143,8 +2015,8 @@ async def process_conversation_internal(
 
         # Add user message to the thread if prompt is given
         if prompt:
-            max_retries = 5  # Increased from 3 to 5
-            base_retry_delay = 3  # Increased from 2 to 3 seconds
+            max_retries = 5
+            base_retry_delay = 3
             success = False
             
             # Handle active run if found
@@ -2154,9 +2026,9 @@ async def process_conversation_internal(
                     client.beta.threads.runs.cancel(thread_id=session, run_id=run_id)
                     logging.info(f"Requested cancellation of active run {run_id}")
                     
-                    # Wait for run to be fully canceled - this is the key improvement
-                    cancel_wait_time = 5  # Wait 5 seconds initially after cancellation request
-                    max_cancel_wait = 30  # Maximum time to wait for cancellation
+                    # Wait for run to be fully canceled
+                    cancel_wait_time = 5
+                    max_cancel_wait = 30
                     wait_time = 0
                     
                     while wait_time < max_cancel_wait:
@@ -2430,433 +2302,7 @@ async def process_conversation_internal(
             # For non-streaming, return a JSON response with the error
             return {"response": f"Error: {str(e)}"}
 
-# ----- API Endpoints -----
-
-# Status endpoint
-@app.get("/operation-status/{operation_id}")
-async def check_operation_status(operation_id: str):
-    """Check the status of a long-running operation."""
-    if operation_id not in operation_statuses:
-        return JSONResponse(
-            status_code=404,
-            content={"error": f"No operation found with ID {operation_id}"}
-        )
-    
-    return JSONResponse(content=operation_statuses[operation_id])
-
-# Internal implementation of initiate_chat that can be called directly
-async def initiate_chat_internal(client: AzureOpenAI, context: Optional[str] = None, file: Optional[UploadFile] = None):
-    """Internal implementation of initiate_chat that can be called directly by the Teams bot."""
-    logging.info("Initiating new chat session...")
-
-    # Create a vector store up front
-    try:
-        vector_store = client.beta.vector_stores.create(name=f"chat_init_store_{int(time.time())}")
-        logging.info(f"Vector store created: {vector_store.id}")
-    except Exception as e:
-        logging.error(f"Failed to create vector store: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create vector store")
-
-    # Include file_search tool
-    assistant_tools = [
-        {"type": "file_search"}
-    ]
-    
-    assistant_tool_resources = {
-        "file_search": {"vector_store_ids": [vector_store.id]}
-    }
-
-    # Use the improved system prompt
-    system_prompt = '''
-You are a Product Management AI Co-Pilot that helps create documentation and analyze various file types. Your capabilities vary based on the type of files uploaded.
-
-### Understanding File Types and Processing Methods:
-
-1. **Documents (PDF, DOC, TXT, etc.)** - When users upload these files, you should:
-   - Use your file_search capability to extract relevant information
-   - Quote information directly from the documents when answering questions
-   - Always reference the specific filename when sharing information from a document
-
-2. **Images** - When users upload images, you should:
-   - Refer to the analysis that was automatically added to the conversation
-   - Use details from the image analysis to answer questions
-   - Acknowledge when information might not be visible in the image
-
-3. **Unsupported File Types**:
-   - CSV and Excel files are not supported by this system
-   - If users ask about analyzing spreadsheets, kindly inform them that this feature is not available
-
-### PRD Generation Excellence:
-
-When creating a PRD (Product Requirements Document), develop a comprehensive and professional document with these mandatory sections:
-
-1. **Product Overview:**
-   - Product Manager: [Name and contact details]
-   - Product Name: [Clear, concise name]
-   - Date: [Current date and version]
-   - Vision Statement: [Compelling, aspirational vision in 1-2 sentences]
-
-2. **Problem and Customer Analysis:**
-   - Customer Problem: [Clearly articulated problem statement]
-   - Market Opportunity: [Quantified TAM/SAM/SOM when possible]
-   - Personas: [Detailed primary and secondary user personas]
-   - User Stories: [Key scenarios from persona perspective]
-
-3. **Strategic Elements:**
-   - Executive Summary: [Brief overview of product and value proposition]
-   - Business Objectives: [Measurable goals with KPIs]
-   - Success Metrics: [Specific metrics to track success]
-
-4. **Detailed Requirements:**
-   - Key Features: [Prioritized feature list with clear descriptions]
-   - Functional Requirements: [Detailed specifications for each feature]
-   - Non-Functional Requirements: [Performance, security, scalability, etc.]
-   - Technical Specifications: [Relevant architecture and technical details]
-
-5. **Implementation Planning:**
-   - Milestones: [Phased delivery timeline with key dates]
-   - Dependencies: [Internal and external dependencies]
-   - Risks and Mitigations: [Potential challenges and contingency plans]
-
-6. **Appendices:**
-   - Supporting Documents: [Research findings, competitive analysis, etc.]
-   - Open Questions: [Items requiring further investigation]
-
-If any information is unavailable, clearly mark sections as "[To be determined]" and request specific clarification from the user. When creating a PRD, maintain a professional, clear, and structured format with appropriate headers and bullet points.
-
-### Professional Assistance Guidelines:
-
-- Demonstrate expertise and professionalism in all responses
-- Proactively seek clarification when details are missing or ambiguous
-- Ask specific questions about file names, requirements, or expectations when needed
-- Provide context for why you need certain information to deliver better results
-- Structure responses clearly with appropriate formatting for readability
-- Always reference files by their exact filenames
-- Use tools appropriately based on file type
-- If asked about CSV/Excel data analysis, politely explain this is not supported
-- Acknowledge limitations and be transparent when information is unavailable
-- Balance detail with conciseness based on the user's needs
-- When in doubt about requirements, ask targeted questions rather than making assumptions
-
-Remember to be thorough yet efficient with your responses, anticipating follow-up needs while addressing the immediate question.
-'''
-    
-    # Create the assistant
-    try:
-        assistant = client.beta.assistants.create(
-            name=f"pm_copilot_{int(time.time())}",
-            model="gpt-4o-mini",  # Ensure this model is deployed
-            instructions=system_prompt,
-            tools=assistant_tools,
-            tool_resources=assistant_tool_resources,
-        )
-        logging.info(f'Assistant created: {assistant.id}')
-    except Exception as e:
-        logging.error(f"An error occurred while creating the assistant: {e}")
-        # Attempt to clean up vector store if assistant creation fails
-        try:
-            client.beta.vector_stores.delete(vector_store_id=vector_store.id)
-            logging.info(f"Cleaned up vector store {vector_store.id} after assistant creation failure.")
-        except Exception as cleanup_e:
-            logging.error(f"Failed to cleanup vector store {vector_store.id} after error: {cleanup_e}")
-        raise HTTPException(status_code=500, detail=f"An error occurred while creating assistant: {e}")
-
-    # Create a thread
-    try:
-        thread = client.beta.threads.create()
-        logging.info(f"Thread created: {thread.id}")
-    except Exception as e:
-        logging.error(f"An error occurred while creating the thread: {e}")
-        # Attempt cleanup
-        try:
-            client.beta.assistants.delete(assistant_id=assistant.id)
-            logging.info(f"Cleaned up assistant {assistant.id} after thread creation failure.")
-        except Exception as cleanup_e:
-            logging.error(f"Failed to cleanup assistant {assistant.id} after error: {cleanup_e}")
-        try:
-            client.beta.vector_stores.delete(vector_store_id=vector_store.id)
-            logging.info(f"Cleaned up vector store {vector_store.id} after thread creation failure.")
-        except Exception as cleanup_e:
-            logging.error(f"Failed to cleanup vector store {vector_store.id} after error: {cleanup_e}")
-        raise HTTPException(status_code=500, detail=f"An error occurred while creating the thread: {e}")
-
-    # If context is provided, add it as user persona context
-    if context:
-        await update_context_internal(client, thread.id, context)
-    # Errors handled within update_context
-
-    # If a file is provided, upload and process it
-    if file:
-        filename = file.filename
-        file_content = await file.read()
-        file_path = os.path.join('/tmp/', filename)  # Use /tmp or a configurable temp dir
-
-        try:
-            with open(file_path, 'wb') as f:
-                f.write(file_content)
-
-            # Determine file type
-            file_ext = os.path.splitext(filename)[1].lower()
-            is_csv_excel = file_ext in ['.csv', '.xlsx', '.xls', '.xlsm']
-            # Check MIME type as well for broader image support
-            mime_type, _ = mimetypes.guess_type(filename)
-            is_image = file_ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'] or (mime_type and mime_type.startswith('image/'))
-            is_document = file_ext in ['.pdf', '.doc', '.docx', '.txt', '.md', '.html', '.json']  # Common types for vector store
-
-            # Reject CSV/Excel files
-            if is_csv_excel:
-                file_info = {
-                    "name": filename,
-                    "type": "unsupported"
-                }
-                
-                # Add unsupported file warning message to thread
-                client.beta.threads.messages.create(
-                    thread_id=thread.id,
-                    role="user",
-                    content=f"Warning: The file '{filename}' is a CSV/Excel file which is not supported. Please upload PDF, DOC, DOCX, or TXT files only."
-                )
-                logging.info(f"Rejected unsupported file type: {filename}")
-            elif is_image:
-                # Analyze image and add analysis text to the thread
-                analysis_text = await image_analysis_internal(file_content, filename, None)
-                client.beta.threads.messages.create(
-                    thread_id=thread.id,
-                    role="user",  # Add analysis as user message for context
-                    content=f"Analysis result for uploaded image '{filename}':\n{analysis_text}"
-                )
-                file_info = {
-                    "name": filename,
-                    "type": "image",
-                    "processing_method": "thread_message"
-                }
-                await add_file_awareness_internal(thread.id, file_info)
-                logging.info(f"Added image analysis for '{filename}' to thread {thread.id}")
-            elif is_document:
-                # Upload to vector store
-                with open(file_path, "rb") as file_stream:
-                    file_batch = client.beta.vector_stores.file_batches.upload_and_poll(
-                        vector_store_id=vector_store.id,
-                        files=[file_stream]
-                    )
-                file_info = {
-                    "name": filename,
-                    "type": file_ext[1:] if file_ext else "document",
-                    "processing_method": "vector_store"
-                }
-                await add_file_awareness_internal(thread.id, file_info)
-                logging.info(f"File '{filename}' uploaded to vector store {vector_store.id}: status={file_batch.status}, count={file_batch.file_counts.total}")
-            else:
-                logging.warning(f"File type for '{filename}' not explicitly handled for upload, skipping specific processing.")
-                file_info = {
-                    "name": filename,
-                    "type": "unknown"
-                }
-
-        except Exception as e:
-            logging.error(f"Error processing uploaded file '{filename}': {e}")
-            # Don't raise HTTPException here, allow response with IDs but log error
-        finally:
-            # Clean up temporary file
-            if os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except OSError as e:
-                    logging.error(f"Error removing temporary file {file_path}: {e}")
-
-    res = {
-        "message": "Chat initiated successfully.",
-        "assistant": assistant.id,
-        "session": thread.id,  # Use 'session' for thread_id consistency with other endpoints
-        "vector_store": vector_store.id
-    }
-
-    return res
-
-# FastAPI endpoint for initiate_chat
-@app.post("/initiate-chat")
-async def initiate_chat(
-    context: Optional[str] = Form(None),
-    file: Optional[UploadFile] = File(None)
-):
-    """
-    Initiates a new assistant, session (thread), and vector store.
-    Optionally uploads a file and sets user context.
-    """
-    try:
-        client = create_client()
-        result = await initiate_chat_internal(client, context, file)
-        return JSONResponse(result, status_code=200)
-    except HTTPException as http_e:
-        raise http_e
-    except Exception as e:
-        logging.error(f"Error in /initiate-chat endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to initiate chat: {str(e)}")
-
-# Internal implementation of co_pilot that can be called directly
-async def co_pilot_internal(client: AzureOpenAI, assistant_id: str, vector_store_id: str, context: Optional[str] = None):
-    """
-    Internal implementation of co_pilot that can be called directly by the Teams bot.
-    
-    Args:
-        client: Azure OpenAI client instance
-        assistant_id: Assistant ID
-        vector_store_id: Vector store ID
-        context: Optional context for the thread
-    
-    Returns:
-        Dictionary with assistant, session, and vector_store IDs
-    """
-    try:
-        # Retrieve the assistant to verify it exists
-        try:
-            assistant_obj = client.beta.assistants.retrieve(assistant_id=assistant_id)
-            logging.info(f"Using existing assistant: {assistant_id}")
-        except Exception as e:
-            logging.error(f"Error retrieving assistant {assistant_id}: {e}")
-            raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
-
-        # Verify the vector store exists
-        try:
-            # Just try to retrieve it to verify it exists
-            client.beta.vector_stores.retrieve(vector_store_id=vector_store_id)
-            logging.info(f"Using existing vector store: {vector_store_id}")
-        except Exception as e:
-            logging.error(f"Error retrieving vector store {vector_store_id}: {e}")
-            raise HTTPException(status_code=404, detail=f"Vector store not found: {vector_store_id}")
-
-        # Ensure assistant has the right tools and vector store is linked
-        current_tools = assistant_obj.tools if assistant_obj.tools else []
-        
-        # Check for file_search tool, add if missing
-        if not any(tool.type == "file_search" for tool in current_tools if hasattr(tool, 'type')):
-            current_tools.append({"type": "file_search"})
-            logging.info(f"Adding file_search tool to assistant {assistant_id}")
-
-        # Prepare tool resources
-        tool_resources = {
-            "file_search": {"vector_store_ids": [vector_store_id]},
-        }
-
-        # Update the assistant with tools and vector store
-        client.beta.assistants.update(
-            assistant_id=assistant_id,
-            tools=current_tools,
-            tool_resources=tool_resources
-        )
-        logging.info(f"Updated assistant {assistant_id} with tools and vector store {vector_store_id}")
-
-        # Create a new thread
-        thread = client.beta.threads.create()
-        thread_id = thread.id
-        logging.info(f"Created new thread: {thread_id} for assistant {assistant_id}")
-
-        # If context is provided, add it to the thread
-        if context:
-            await update_context_internal(client, thread_id, context)
-            logging.info(f"Added context to thread {thread_id}")
-
-        # Return the same structure as initiate-chat
-        return {
-            "message": "Chat initiated successfully.",
-            "assistant": assistant_id,
-            "session": thread_id,
-            "vector_store": vector_store_id
-        }
-
-    except HTTPException:
-        # Re-raise HTTP exceptions to preserve their status codes
-        raise
-    except Exception as e:
-        logging.error(f"Error in co_pilot_internal: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process co-pilot request: {str(e)}")
-
-# FastAPI endpoint for co-pilot
-@app.post("/co-pilot")
-async def co_pilot(
-    assistant: str = Form(...),
-    vector_store: str = Form(...),
-    context: Optional[str] = Form(None)
-):
-    """
-    Sets context for a chatbot, creates a new thread using existing assistant and vector store.
-    Required parameters: assistant_id, vector_store_id
-    Optional parameters: context
-    Returns: Same structure as initiate-chat
-    """
-    try:
-        client = create_client()
-        result = await co_pilot_internal(client, assistant, vector_store, context)
-        return JSONResponse(result, status_code=200)
-    except HTTPException as http_e:
-        raise http_e
-    except Exception as e:
-        logging.error(f"Error in /co-pilot endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process co-pilot request: {str(e)}")
-
-# FastAPI endpoint for upload_file
-@app.post("/upload-file")
-async def upload_file(
-    file: UploadFile = File(...),
-    assistant: str = Form(...),
-    session: Optional[str] = Form(None),
-    context: Optional[str] = Form(None),
-    prompt: Optional[str] = Form(None)
-):
-    """
-    Uploads a file and associates it with the given assistant.
-    Handles different file types appropriately.
-    """
-    try:
-        client = create_client()
-        result = await upload_file_internal(client, file, assistant, session, context, prompt)
-        return JSONResponse(result, status_code=200)
-    except HTTPException as http_e:
-        raise http_e
-    except Exception as e:
-        logging.error(f"Error in /upload-file endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
-
-# FastAPI endpoint for conversation (streaming)
-@app.get("/conversation")
-async def conversation(
-    session: Optional[str] = None,
-    prompt: Optional[str] = None,
-    assistant: Optional[str] = None
-):
-    """
-    Handles conversation queries with streaming response.
-    """
-    try:
-        client = create_client()
-        response_stream = await process_conversation_internal(client, session, prompt, assistant, stream_output=True)
-        return FastAPIStreamingResponse(response_stream, media_type="text/event-stream")
-    except HTTPException as http_e:
-        raise http_e
-    except Exception as e:
-        logging.error(f"Error in /conversation endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process conversation: {str(e)}")
-
-# FastAPI endpoint for chat (non-streaming)
-@app.get("/chat")
-async def chat(
-    session: Optional[str] = None,
-    prompt: Optional[str] = None,
-    assistant: Optional[str] = None
-):
-    """
-    Handles conversation queries and returns the full response as JSON.
-    Uses the same logic as the streaming endpoint but returns the complete response.
-    """
-    try:
-        client = create_client()
-        result = await process_conversation_internal(client, session, prompt, assistant, stream_output=False)
-        return JSONResponse(result)
-    except HTTPException as http_e:
-        raise http_e
-    except Exception as e:
-        logging.error(f"Error in /chat endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process chat: {str(e)}")
+# ----- FastAPI Endpoints -----
 
 # FastAPI endpoint to handle Bot Framework messages
 @app.post("/api/messages")
@@ -2885,6 +2331,7 @@ async def messages(req: Request) -> Response:
         logger.error(f"Error processing message: {str(e)}")
         traceback.print_exc()
         return Response(content=str(e), status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
+
 # Simple health check endpoint
 @app.get("/health")
 async def health_check():
