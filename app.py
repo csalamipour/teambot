@@ -12,7 +12,7 @@ import re
 import copy
 import sys
 from io import StringIO
-from typing import Optional, List, Dict, Any, Tuple, Union, Callable, Literal
+from typing import Optional, List, Dict, Any, Tuple, Union, Callable, Literal, Deque
 from http import HTTPStatus
 from datetime import datetime
 
@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # Azure OpenAI imports
-from openai import AzureOpenAI
+from openai import AzureOpenAI, APIError, APIConnectionError, APITimeoutError
 
 # Bot Framework imports
 from botbuilder.core import (
@@ -50,18 +50,21 @@ from botbuilder.schema.teams import (
 )
 from botbuilder.schema.teams.additional_properties import ContentType
 
-# Teams AI imports
-from teams.streaming import StreamingResponse
-from teams.streaming.streaming_channel_data import StreamingChannelData
-from teams.streaming.streaming_entity import StreamingEntity
-from teams.ai.citations.citations import Appearance, SensitivityUsageInfo
-from teams.ai.citations import AIEntity, ClientCitation
-from teams.ai.prompts.message import Citation
+# Import Teams AI StreamingResponse class if available
+try:
+    from teams.streaming import StreamingResponse
+    from teams.streaming.streaming_channel_data import StreamingChannelData
+    from teams.streaming.streaming_entity import StreamingEntity
+    from teams.ai.citations.citations import Appearance, SensitivityUsageInfo
+    from teams.ai.citations import AIEntity, ClientCitation
+    from teams.ai.prompts.message import Citation
+    TEAMS_AI_AVAILABLE = True
+except ImportError:
+    TEAMS_AI_AVAILABLE = False
+    logging.warning("Teams AI library not available. Using custom streaming implementation.")
 
 import uuid
-from typing import Dict, List, Deque
 from collections import deque
-import threading
 
 # Dictionary to store pending messages for each conversation
 pending_messages = {}
@@ -69,6 +72,8 @@ pending_messages = {}
 pending_messages_lock = threading.Lock()
 # Dictionary for tracking active runs
 active_runs = {}
+# Active runs lock
+active_runs_lock = threading.Lock()
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -124,6 +129,127 @@ def create_client():
         api_key=AZURE_API_KEY,
         api_version=AZURE_API_VERSION,
     )
+
+# Define system prompt here instead of relying on external variable
+SYSTEM_PROMPT = '''
+You are a Product Management AI Co-Pilot that helps create documentation and analyze various file types. Your capabilities vary based on the type of files uploaded.
+
+### Understanding File Types and Processing Methods:
+
+1. **Documents (PDF, DOC, TXT, etc.)** - When users upload these files, you should:
+   - Use your file_search capability to extract relevant information
+   - Quote information directly from the documents when answering questions
+   - Always reference the specific filename when sharing information from a document
+
+2. **Images** - When users upload images, you should:
+   - Refer to the analysis that was automatically added to the conversation
+   - Use details from the image analysis to answer questions
+   - Acknowledge when information might not be visible in the image
+
+3. **Unsupported File Types**:
+   - CSV and Excel files are not supported by this system
+   - If users ask about analyzing spreadsheets, kindly inform them that this feature is not available
+
+### PRD Generation Excellence:
+
+When creating a PRD (Product Requirements Document), develop a comprehensive and professional document with these mandatory sections:
+
+1. **Product Overview:**
+   - Product Manager: [Name and contact details]
+   - Product Name: [Clear, concise name]
+   - Date: [Current date and version]
+   - Vision Statement: [Compelling, aspirational vision in 1-2 sentences]
+
+2. **Problem and Customer Analysis:**
+   - Customer Problem: [Clearly articulated problem statement]
+   - Market Opportunity: [Quantified TAM/SAM/SOM when possible]
+   - Personas: [Detailed primary and secondary user personas]
+   - User Stories: [Key scenarios from persona perspective]
+
+3. **Strategic Elements:**
+   - Executive Summary: [Brief overview of product and value proposition]
+   - Business Objectives: [Measurable goals with KPIs]
+   - Success Metrics: [Specific metrics to track success]
+
+4. **Detailed Requirements:**
+   - Key Features: [Prioritized feature list with clear descriptions]
+   - Functional Requirements: [Detailed specifications for each feature]
+   - Non-Functional Requirements: [Performance, security, scalability, etc.]
+   - Technical Specifications: [Relevant architecture and technical details]
+
+5. **Implementation Planning:**
+   - Milestones: [Phased delivery timeline with key dates]
+   - Dependencies: [Internal and external dependencies]
+   - Risks and Mitigations: [Potential challenges and contingency plans]
+
+6. **Appendices:**
+   - Supporting Documents: [Research findings, competitive analysis, etc.]
+   - Open Questions: [Items requiring further investigation]
+
+If any information is unavailable, clearly mark sections as "[To be determined]" and request specific clarification from the user. When creating a PRD, maintain a professional, clear, and structured format with appropriate headers and bullet points.
+
+### Professional Assistance Guidelines:
+
+- Demonstrate expertise and professionalism in all responses
+- Proactively seek clarification when details are missing or ambiguous
+- Ask specific questions about file names, requirements, or expectations when needed
+- Provide context for why you need certain information to deliver better results
+- Structure responses clearly with appropriate formatting for readability
+- Always reference files by their exact filenames
+- Use tools appropriately based on file type
+- If asked about CSV/Excel data analysis, politely explain this is not supported
+- Acknowledge limitations and be transparent when information is unavailable
+- Balance detail with conciseness based on the user's needs
+- When in doubt about requirements, ask targeted questions rather than making assumptions
+
+Remember to be thorough yet efficient with your responses, anticipating follow-up needs while addressing the immediate question.
+'''
+
+# Custom TeamsStreamingResponse for better control when official library not available
+class TeamsStreamingResponse:
+    """Handles streaming responses to Teams in a more controlled way"""
+    
+    def __init__(self, turn_context):
+        self.turn_context = turn_context
+        self.message_parts = []
+        self.is_first_update = True
+        self.stream_id = f"stream_{int(time.time())}"
+        self.last_update_time = 0
+        self.min_update_interval = 1.5  # Minimum time between updates in seconds (Teams requirement)
+        
+    async def send_typing_indicator(self):
+        """Sends a typing indicator to Teams"""
+        await self.turn_context.send_activity(create_typing_activity())
+    
+    async def queue_update(self, text_chunk):
+        """Queues and potentially sends a text update"""
+        # Add to the accumulated text
+        self.message_parts.append(text_chunk)
+        
+        # Check if we should send an update
+        current_time = time.time()
+        if (current_time - self.last_update_time) >= self.min_update_interval:
+            await self.send_typing_indicator()
+            self.last_update_time = current_time
+    
+    def get_full_message(self):
+        """Gets the complete message from all chunks"""
+        return "".join(self.message_parts)
+    
+    async def send_final_message(self):
+        """Sends the final complete message, split if necessary"""
+        complete_message = self.get_full_message()
+        
+        # Split long messages if needed (Teams has message size limits)
+        if len(complete_message) > 7000:
+            chunks = [complete_message[i:i+7000] for i in range(0, len(complete_message), 7000)]
+            for i, chunk in enumerate(chunks):
+                if i == 0:
+                    await self.turn_context.send_activity(chunk)
+                else:
+                    await self.turn_context.send_activity(f"(continued) {chunk}")
+        else:
+            await self.turn_context.send_activity(complete_message)
 
 # Create typing indicator activity for Teams
 def create_typing_activity() -> Activity:
@@ -194,9 +320,10 @@ async def handle_thread_recovery(turn_context: TurnContext, state, error_message
                 state["vector_store_id"] = vector_store.id
                 state["active_run"] = False
             
-            # Clear any active runs
-            if old_thread in active_runs:
-                del active_runs[old_thread]
+            # Clear any active runs (thread safe)
+            with active_runs_lock:
+                if old_thread in active_runs:
+                    del active_runs[old_thread]
             
             logging.info(f"Recovery successful for user {user_id}: Created new assistant {assistant_obj.id} and thread {thread.id}")
             
@@ -217,6 +344,47 @@ async def handle_thread_recovery(turn_context: TurnContext, state, error_message
         logging.error(f"Recovery attempt failed for user {user_id}: {recovery_error}")
         await turn_context.send_activity("I'm still having trouble with our conversation. Let's start a new chat session.")
         await send_new_chat_card(turn_context)
+
+        # FALLBACK: Use direct completion API if everything else fails
+        try:
+            await send_fallback_response(turn_context, "I'm having trouble with our conversation system. Let me try to help directly. What can I assist you with?")
+        except Exception as fallback_error:
+            logging.error(f"Even fallback failed for user {user_id}: {fallback_error}")
+
+async def send_fallback_response(turn_context: TurnContext, user_message: str):
+    """Last resort fallback using direct completion API"""
+    try:
+        client = create_client()
+        
+        # Send a typing indicator first
+        await turn_context.send_activity(create_typing_activity())
+        
+        # Get user's message if not provided
+        if not user_message:
+            if hasattr(turn_context.activity, 'text'):
+                user_message = turn_context.activity.text.strip()
+            else:
+                user_message = "Hello, I need your help."
+        
+        # Create a simple completion request with minimal context
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a helpful product management assistant. Keep your response concise and helpful."},
+                {"role": "user", "content": user_message}
+            ],
+            max_tokens=1000
+        )
+        
+        # Send the response back
+        if response.choices and response.choices[0].message.content:
+            await turn_context.send_activity(response.choices[0].message.content)
+        else:
+            await turn_context.send_activity("I'm sorry, I'm having trouble generating a response right now. Please try again later.")
+    
+    except Exception as e:
+        logging.error(f"Fallback response generation failed: {e}")
+        await turn_context.send_activity("I'm experiencing technical difficulties right now. Please try again in a moment.")
 
 def create_new_chat_card():
     """Creates an adaptive card for starting a new chat session"""
@@ -266,8 +434,7 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             if conversation_id in conversation_states:
                 # Clear any pending messages
                 with pending_messages_lock:
-                    if conversation_id in pending_messages and pending_messages[conversation_id]:
-                        # Now process pending messages in a smarter way
+                    if conversation_id in pending_messages:
                         pending_messages[conversation_id].clear()
                 
                 # Send typing indicator
@@ -305,6 +472,12 @@ async def on_error(context: TurnContext, error: Exception):
         )
         # Send a trace activity, which will be displayed in Bot Framework Emulator
         await context.send_activity(trace_activity)
+
+    # Try to recover with fallback response
+    try:
+        await send_fallback_response(context, None)
+    except:
+        pass  # If even this fails, just continue
 
 # Assign the error handler
 ADAPTER.on_turn_error = on_error
@@ -361,9 +534,13 @@ async def bot_logic(turn_context: TurnContext):
                 "user_id": user_id,
                 "tenant_id": tenant_id,
                 "security_fingerprint": user_security_fingerprint,
-                "creation_time": time.time()
+                "creation_time": time.time(),
+                "last_activity_time": time.time()
             }
         else:
+            # Update last activity time
+            conversation_states[conversation_id]["last_activity_time"] = time.time()
+            
             # Verify user identity to prevent cross-contamination
             stored_user_id = conversation_states[conversation_id].get("user_id")
             stored_fingerprint = conversation_states[conversation_id].get("security_fingerprint")
@@ -384,7 +561,8 @@ async def bot_logic(turn_context: TurnContext):
                     "user_id": user_id,
                     "tenant_id": tenant_id,
                     "security_fingerprint": user_security_fingerprint,
-                    "creation_time": time.time()
+                    "creation_time": time.time(),
+                    "last_activity_time": time.time()
                 }
                 
                 # Clear any pending messages for security
@@ -446,6 +624,7 @@ async def bot_logic(turn_context: TurnContext):
                 state["uploaded_files"] = []
                 state["recovery_attempts"] = 0
                 state["creation_time"] = current_time
+                state["last_activity_time"] = current_time
                 
                 # Clear any pending messages
                 with pending_messages_lock:
@@ -458,6 +637,18 @@ async def bot_logic(turn_context: TurnContext):
         is_thread_busy = False
         with conversation_states_lock:
             is_thread_busy = state.get("active_run", False)
+            
+            # Double-check with active_runs for consistency
+            with active_runs_lock:
+                thread_id = state.get("session_id")
+                if thread_id:
+                    if thread_id in active_runs:
+                        is_thread_busy = True
+                        state["active_run"] = True
+                    elif state.get("active_run", False):
+                        # State says active but active_runs doesn't have it - fix the inconsistency
+                        state["active_run"] = False
+                        is_thread_busy = False
         
         # If thread is busy and we have a text message, queue it
         if is_thread_busy and has_text and not has_file_attachments:
@@ -930,34 +1121,6 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
             except OSError as e:
                 logger.error(f"Error removing file {file_path}: {e}")
 
-# Function to send file to Teams
-async def send_file_to_teams(turn_context: TurnContext, filename: str):
-    """Sends a file to the user in Teams using file consent card."""
-    file_path = os.path.join(FILE_DIRECTORY, filename)
-    if not os.path.exists(file_path):
-        await file_upload_failed(turn_context, "File not found.")
-        return
-
-    file_size = os.path.getsize(file_path)
-    consent_context = {"filename": filename}
-
-    file_card = FileConsentCard(
-        description="This is the file I want to send you",
-        size_in_bytes=file_size,
-        accept_context=consent_context,
-        decline_context=consent_context
-    )
-
-    attachment = Attachment(
-        content=file_card.serialize(),
-        content_type=ContentType.FILE_CONSENT_CARD,
-        name=filename
-    )
-
-    reply = _create_reply(turn_context.activity)
-    reply.attachments = [attachment]
-    await turn_context.send_activity(reply)
-
 # Thread summarization helper function
 async def summarize_thread_if_needed(client: AzureOpenAI, thread_id: str, state: dict, threshold: int = 30):
     """
@@ -1108,9 +1271,10 @@ async def summarize_thread_if_needed(client: AzureOpenAI, thread_id: str, state:
                     state["last_summarization_time"] = current_time
                     state["active_run"] = False
                     
-                    # Update active_runs dictionary
-                    if old_thread_id in active_runs:
-                        del active_runs[old_thread_id]
+                    # Update active_runs dictionary (thread-safe)
+                    with active_runs_lock:
+                        if old_thread_id in active_runs:
+                            del active_runs[old_thread_id]
                     
                     logging.info(f"Summarized thread {old_thread_id} and created new thread {new_thread.id}")
                     return True
@@ -1178,12 +1342,14 @@ async def handle_text_message(turn_context: TurnContext, state):
             await turn_context.send_activity("I've summarized our previous conversation to maintain context while keeping the conversation focused.")
     
     # Mark thread as busy (thread-safe)
+    current_session_id = None
     with conversation_states_lock:
         state["active_run"] = True
         current_session_id = state.get("session_id")
     
     if current_session_id:
-        active_runs[current_session_id] = True
+        with active_runs_lock:
+            active_runs[current_session_id] = True
     
     try:
         # Double-verify resources before proceeding
@@ -1195,84 +1361,25 @@ async def handle_text_message(turn_context: TurnContext, state):
             logging.warning(f"Resource validation failed for user {user_id}: thread_valid={validation['thread_valid']}, assistant_valid={validation['assistant_valid']}")
             raise Exception("Invalid conversation resources detected - forcing recovery")
             
-        # Use streaming if supported by the channel
-        supports_streaming = turn_context.activity.channel_id == "msteams"
-        
-        if supports_streaming:
+        # Use the optimal streaming approach based on available libraries and preferences
+        if TEAMS_AI_AVAILABLE:
             # Use enhanced streaming with Teams AI library
-            await stream_response_with_teams_ai(turn_context, state, user_message)
+            await stream_with_teams_ai(turn_context, state, user_message)
         else:
-            # Call the internal function directly without HTTP calls
-            result = await process_conversation_internal(
-                client=client,
-                session=current_session_id,
-                prompt=user_message,
-                assistant=stored_assistant_id,
-                stream_output=False
-            )
-            
-            # Extract text from response
-            if isinstance(result, dict) and "response" in result:
-                assistant_response = result["response"]
-            else:
-                assistant_response = "I'm sorry, I couldn't process your request."
-                
-            # Split long responses into chunks if needed (Teams has message size limits)
-            if len(assistant_response) > 7000:
-                chunks = [assistant_response[i:i+7000] for i in range(0, len(assistant_response), 7000)]
-                for i, chunk in enumerate(chunks):
-                    if i == 0:
-                        await turn_context.send_activity(chunk)
-                    else:
-                        await turn_context.send_activity(f"(continued) {chunk}")
-            else:
-                await turn_context.send_activity(assistant_response)
+            # Use custom TeamsStreamingResponse if Teams AI library is not available
+            await stream_with_custom_implementation(turn_context, state, user_message)
         
         # Mark thread as no longer busy (thread-safe)
         with conversation_states_lock:
             state["active_run"] = False
             current_session_id = state.get("session_id")
         
-        if current_session_id in active_runs:
-            del active_runs[current_session_id]
+        with active_runs_lock:
+            if current_session_id in active_runs:
+                del active_runs[current_session_id]
         
         # Process any pending messages
-        with pending_messages_lock:
-            if conversation_id in pending_messages and pending_messages[conversation_id]:
-                # Process queued messages
-                next_messages = list(pending_messages[conversation_id])
-                pending_messages[conversation_id].clear()
-                
-                if len(next_messages) == 1:
-                    # Handle single follow-up message
-                    next_message = next_messages[0]
-                    await turn_context.send_activity("Now addressing your follow-up message...")
-                    
-                    # Instead of creating a new context, use the existing one with modified text
-                    original_text = turn_context.activity.text
-                    turn_context.activity.text = next_message
-                    
-                    try:
-                        # Process with the same context - just different text
-                        await handle_text_message(turn_context, state)
-                    finally:
-                        # Restore original text when done
-                        turn_context.activity.text = original_text
-                else:
-                    # Process multiple messages as a batch
-                    await turn_context.send_activity(f"Now addressing your {len(next_messages)} follow-up messages together...")
-                    
-                    # Use existing context with combined messages
-                    original_text = turn_context.activity.text
-                    combined_message = "\n\n".join([f"Question {i+1}: {msg}" for i, msg in enumerate(next_messages)])
-                    turn_context.activity.text = f"Please answer all of these questions:\n{combined_message}"
-                    
-                    try:
-                        # Process with the same context
-                        await handle_text_message(turn_context, state)
-                    finally:
-                        # Restore original text
-                        turn_context.activity.text = original_text
+        await process_pending_messages(turn_context, state, conversation_id)
             
     except Exception as e:
         # Mark thread as no longer busy even on error (thread-safe)
@@ -1280,16 +1387,63 @@ async def handle_text_message(turn_context: TurnContext, state):
             state["active_run"] = False
             current_session_id = state.get("session_id")
             
-        if current_session_id in active_runs:
-            del active_runs[current_session_id]
+        with active_runs_lock:
+            if current_session_id in active_runs:
+                del active_runs[current_session_id]
             
         # Don't show raw error details to users
         logging.error(f"Error in handle_text_message for user {user_id}: {str(e)}")
         traceback.print_exc()
         await turn_context.send_activity("I'm sorry, I encountered a problem while processing your message. Please try again.")
-async def stream_response_with_teams_ai(turn_context: TurnContext, state, user_message):
+        
+        # Try a fallback direct completion if there was a severe error
+        try:
+            await send_fallback_response(turn_context, user_message)
+        except Exception as fallback_error:
+            logging.error(f"Fallback response also failed: {fallback_error}")
+
+async def process_pending_messages(turn_context: TurnContext, state, conversation_id):
+    """Process any pending messages in the queue"""
+    with pending_messages_lock:
+        if conversation_id in pending_messages and pending_messages[conversation_id]:
+            # Process queued messages
+            next_messages = list(pending_messages[conversation_id])
+            pending_messages[conversation_id].clear()
+            
+            if len(next_messages) == 1:
+                # Handle single follow-up message
+                next_message = next_messages[0]
+                await turn_context.send_activity("Now addressing your follow-up message...")
+                
+                # Instead of creating a new context, use the existing one with modified text
+                original_text = turn_context.activity.text
+                turn_context.activity.text = next_message
+                
+                try:
+                    # Process with the same context - just different text
+                    await handle_text_message(turn_context, state)
+                finally:
+                    # Restore original text when done
+                    turn_context.activity.text = original_text
+            else:
+                # Process multiple messages as a batch
+                await turn_context.send_activity(f"Now addressing your {len(next_messages)} follow-up messages together...")
+                
+                # Use existing context with combined messages
+                original_text = turn_context.activity.text
+                combined_message = "\n\n".join([f"Question {i+1}: {msg}" for i, msg in enumerate(next_messages)])
+                turn_context.activity.text = f"Please answer all of these questions:\n{combined_message}"
+                
+                try:
+                    # Process with the same context
+                    await handle_text_message(turn_context, state)
+                finally:
+                    # Restore original text
+                    turn_context.activity.text = original_text
+
+async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
     """
-    Stream responses using the Teams AI library's StreamingResponse class with direct OpenAI streaming.
+    Stream responses using the Teams AI library's StreamingResponse class
     
     Args:
         turn_context: The TurnContext object
@@ -1301,10 +1455,6 @@ async def stream_response_with_teams_ai(turn_context: TurnContext, state, user_m
         thread_id = state["session_id"]
         assistant_id = state["assistant_id"]
         
-        # Mark run as active in state
-        state["active_run"] = True
-        active_runs[thread_id] = True
-        
         # Create a StreamingResponse instance from Teams AI
         streamer = StreamingResponse(turn_context)
         
@@ -1315,7 +1465,7 @@ async def stream_response_with_teams_ai(turn_context: TurnContext, state, user_m
             # First, add the user message to the thread if provided
             if user_message:
                 try:
-                    # Check for any existing active runs
+                    # Cancel any active runs to avoid conflicts
                     try:
                         runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
                         if runs.data:
@@ -1333,16 +1483,26 @@ async def stream_response_with_teams_ai(turn_context: TurnContext, state, user_m
                     except Exception as check_e:
                         logging.warning(f"Error checking for existing runs: {check_e}")
                     
-                    # Add the user message to the thread
-                    client.beta.threads.messages.create(
-                        thread_id=thread_id,
-                        role="user",
-                        content=user_message
-                    )
-                    logging.info(f"Added user message to thread {thread_id}")
+                    # Add the user message to the thread (with retries)
+                    max_retries = 3
+                    for retry in range(max_retries):
+                        try:
+                            message = client.beta.threads.messages.create(
+                                thread_id=thread_id,
+                                role="user",
+                                content=user_message
+                            )
+                            logging.info(f"Added user message to thread {thread_id}")
+                            break
+                        except Exception as retry_error:
+                            if retry < max_retries - 1:
+                                logging.warning(f"Error adding message (attempt {retry+1}): {retry_error}. Retrying...")
+                                await asyncio.sleep(2)
+                            else:
+                                raise
                     
                 except Exception as msg_e:
-                    if "while a run" in str(msg_e):
+                    if "while a run" in str(msg_e) or "already has an active run" in str(msg_e):
                         logging.warning(f"Could not add message due to active run: {msg_e}")
                         # Create a new thread as fallback
                         new_thread = client.beta.threads.create()
@@ -1358,114 +1518,57 @@ async def stream_response_with_teams_ai(turn_context: TurnContext, state, user_m
                         )
                         logging.info(f"Added user message to new thread {thread_id}")
                     else:
-                        logging.error(f"Error adding message to thread: {msg_e}")
-                        await streamer.end_stream()
-                        await turn_context.send_activity("I'm having trouble processing your request. Please try again.")
-                        return
-            
-            # Initial response variables
-            buffer = ""
-            latest_message_id = None
-            tool_outputs_submitted = False
-            wait_for_final_response = False
-            completed = False
-            last_chunk_time = time.time()
-            chunk_buffer = []
+                        raise  # Re-raise other errors
             
             # Now use direct streaming from the OpenAI API
+            buffer = []
+            last_chunk_time = time.time()
+            completed = False
+            
             try:
+                # Use run.stream to get a streaming run with events
                 with client.beta.threads.runs.stream(
                     thread_id=thread_id,
                     assistant_id=assistant_id,
                 ) as stream:
                     for event in stream:
-                        # Store run ID for potential use
-                        if hasattr(event, 'data') and hasattr(event.data, 'id'):
-                            run_id = event.data.id
-                            
-                        # Check for message creation and completion
-                        if event.event == "thread.message.created":
-                            logging.info(f"New message created: {event.data.id}")
-                            latest_message_id = event.data.id
-                            
-                        # Handle text deltas - this is where the streaming happens
+                        # Handle text delta events (streaming text chunks)
                         if event.event == "thread.message.delta":
-                            delta = event.data.delta
-                            if hasattr(delta, 'content') and delta.content:
-                                for content_part in delta.content:
-                                    if content_part.type == 'text' and hasattr(content_part.text, 'value'):
+                            if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
+                                for content_part in event.data.delta.content:
+                                    if content_part.type == 'text' and hasattr(content_part.text, "value"):
                                         text_value = content_part.text.value
                                         if text_value:
                                             # Add to buffer
-                                            chunk_buffer.append(text_value)
+                                            buffer.append(text_value)
                                             
-                                            # Check if we need to send a chunk (respecting rate limits)
+                                            # Only send updates at reasonable intervals for Teams
                                             current_time = time.time()
-                                            if current_time - last_chunk_time >= 1.5:  # Teams requires 1.5s between messages
-                                                if chunk_buffer:
-                                                    combined_chunk = "".join(chunk_buffer)
-                                                    # Queue the chunk using the Teams StreamingResponse
-                                                    streamer.queue_text_chunk(combined_chunk)
-                                                    chunk_buffer = []
-                                                    last_chunk_time = current_time
+                                            if current_time - last_chunk_time >= 1.5:  # Teams requires 1.5s between msgs
+                                                combined_chunk = "".join(buffer)
+                                                streamer.queue_text_chunk(combined_chunk)
+                                                buffer = []  # Reset buffer after sending
+                                                last_chunk_time = current_time
                         
-                        # Explicitly handle run completion event
-                        if event.event == "thread.run.completed":
-                            logging.info(f"Run completed: {event.data.id}")
+                        # Note completion events
+                        elif event.event == "thread.run.completed":
+                            logging.info(f"Run completed successfully")
                             completed = True
-                            
-                        # Handle tool calls if needed
-                        elif event.event == "thread.run.requires_action":
-                            if event.data.required_action.type == "submit_tool_outputs":
-                                tool_calls = event.data.required_action.submit_tool_outputs.tool_calls
-                                tool_outputs = []
-                                
-                                # Queue informative update about tools
-                                streamer.queue_informative_update("Processing additional information...")
-                                
-                                # Process tool calls here
-                                # This would be where you'd handle any tool calls like file_search or custom tools
-                                
-                                # Submit tool outputs back to the run
-                                client.beta.threads.runs.submit_tool_outputs(
-                                    thread_id=thread_id,
-                                    run_id=event.data.id,
-                                    tool_outputs=tool_outputs
-                                )
-                                
-                                tool_outputs_submitted = True
-                    
-                    # Send any remaining chunks that didn't get sent during streaming
-                    if chunk_buffer:
-                        combined_chunk = "".join(chunk_buffer)
-                        streamer.queue_text_chunk(combined_chunk)
                 
-                # If streaming didn't complete properly, fall back to getting the final message
+                # Send any remaining buffered text
+                if buffer:
+                    combined_chunk = "".join(buffer)
+                    streamer.queue_text_chunk(combined_chunk)
+                
+                # If streaming didn't complete properly, fall back to message retrieval
                 if not completed:
-                    logging.warning("Stream didn't complete properly, falling back to message retrieval")
-                    messages = client.beta.threads.messages.list(
-                        thread_id=thread_id,
-                        order="desc",
-                        limit=1
-                    )
-                    
-                    if messages.data:
-                        latest_message = messages.data[0]
-                        message_text = ""
-                        
-                        # Extract text content
-                        for content_part in latest_message.content:
-                            if content_part.type == 'text':
-                                message_text += content_part.text.value
-                        
-                        # Queue the message if we haven't streamed it completely
-                        if message_text and message_text != buffer:
-                            streamer.queue_text_chunk(message_text)
+                    # Complete message retrieval as fallback
+                    await poll_for_message(client, thread_id, streamer)
             
             except Exception as stream_error:
                 logging.error(f"Error during streaming: {stream_error}")
                 # Fall back to polling if streaming fails
-                await poll_for_completion(client, thread_id, streamer)
+                await poll_for_message(client, thread_id, streamer)
             
             # Enable feedback loop for the final message
             streamer.set_feedback_loop(True)
@@ -1482,121 +1585,275 @@ async def stream_response_with_teams_ai(turn_context: TurnContext, state, user_m
                 # Try to end the stream gracefully
                 streamer.queue_text_chunk("I'm sorry, I encountered an error while processing your request.")
                 await streamer.end_stream()
-            except Exception as stream_end_error:
-                # If that fails, just send a direct message
-                logging.error(f"Error ending stream: {stream_end_error}")
+            except Exception as end_error:
+                logging.error(f"Failed to end stream properly: {end_error}")
+                # At this point, just send a direct message
                 await turn_context.send_activity("I encountered an error while processing your request. Please try again.")
-        
-        finally:
-            # Ensure run is marked as complete
-            with conversation_states_lock:
-                state["active_run"] = False
-            if thread_id in active_runs:
-                del active_runs[thread_id]
-    
+                
+            # Try to provide a fallback response
+            await send_fallback_response(turn_context, user_message)
+            
     except Exception as outer_e:
-        logging.error(f"Outer error in stream_response_with_teams_ai: {str(outer_e)}")
+        logging.error(f"Outer error in stream_with_teams_ai: {str(outer_e)}")
         traceback.print_exc()
         
         # Send a user-friendly error message
         await turn_context.send_activity("I encountered a problem while processing your request. Please try again or start a new chat.")
         
-        # Mark as complete
-        with conversation_states_lock:
-            state["active_run"] = False
-        if state.get("session_id") in active_runs:
-            del active_runs[state.get("session_id", "")]
+        # Try a fallback response
+        await send_fallback_response(turn_context, user_message)
 
-# Helper function for fallback to polling if streaming fails
-async def poll_for_completion(client, thread_id, streamer):
-    """Poll for completion and send updates via the streamer."""
+async def stream_with_custom_implementation(turn_context: TurnContext, state, user_message):
+    """
+    Use a custom streaming implementation when Teams AI library is not available
+    
+    Args:
+        turn_context: The TurnContext object
+        state: The conversation state
+        user_message: The user's message
+    """
     try:
-        # Get the latest run for this thread
-        runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
-        if not runs.data:
-            streamer.queue_text_chunk("No active runs found.")
-            return
-            
-        run_id = runs.data[0].id
-        max_wait_time = 60  # seconds
-        wait_interval = 2   # seconds
-        elapsed_time = 0
-        last_message_length = 0
+        client = create_client()
+        thread_id = state["session_id"]
+        assistant_id = state["assistant_id"]
         
-        while elapsed_time < max_wait_time:
-            # Get run status
-            run_status = client.beta.threads.runs.retrieve(
-                thread_id=thread_id,
-                run_id=run_id
-            )
+        # Create our custom streaming response handler
+        streamer = TeamsStreamingResponse(turn_context)
+        
+        # Send initial typing indicator
+        await streamer.send_typing_indicator()
+        
+        try:
+            # First, add the user message to the thread
+            if user_message:
+                try:
+                    # Check for any existing active runs first
+                    runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
+                    active_run_found = False
+                    
+                    if runs.data:
+                        for run in runs.data:
+                            if run.status in ["in_progress", "queued", "requires_action"]:
+                                active_run_found = True
+                                # Try to cancel it
+                                try:
+                                    client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run.id)
+                                    logging.info(f"Requested cancellation of run {run.id}")
+                                    await asyncio.sleep(2)  # Wait for cancellation to take effect
+                                except Exception as cancel_e:
+                                    logging.warning(f"Failed to cancel run {run.id}: {cancel_e}")
+                    
+                    # If we had an active run and couldn't cancel it, create a new thread
+                    if active_run_found:
+                        try:
+                            # Create a new thread instead of trying to use the busy one
+                            new_thread = client.beta.threads.create()
+                            thread_id = new_thread.id
+                            with conversation_states_lock:
+                                state["session_id"] = thread_id
+                            logging.info(f"Created new thread {thread_id} to avoid active run conflicts")
+                        except Exception as thread_create_e:
+                            logging.error(f"Failed to create new thread: {thread_create_e}")
+                    
+                    # Add the message (with retries)
+                    message_added = False
+                    max_retries = 3
+                    
+                    for retry in range(max_retries):
+                        try:
+                            client.beta.threads.messages.create(
+                                thread_id=thread_id,
+                                role="user",
+                                content=user_message
+                            )
+                            message_added = True
+                            break
+                        except Exception as add_e:
+                            if retry < max_retries - 1:
+                                await asyncio.sleep(2)
+                                logging.warning(f"Retrying message add after error: {add_e}")
+                            else:
+                                raise
+                    
+                    if not message_added:
+                        raise Exception("Failed to add message after multiple attempts")
+                
+                except Exception as msg_e:
+                    logging.error(f"Failed to add message to thread: {msg_e}")
+                    # Create a new thread and try again
+                    try:
+                        new_thread = client.beta.threads.create()
+                        thread_id = new_thread.id
+                        with conversation_states_lock:
+                            state["session_id"] = thread_id
+                        
+                        client.beta.threads.messages.create(
+                            thread_id=thread_id,
+                            role="user",
+                            content=user_message
+                        )
+                        logging.info(f"Created new thread {thread_id} and added message after failure")
+                    except Exception as recovery_e:
+                        logging.error(f"Recovery attempt failed: {recovery_e}")
+                        raise Exception("Could not create thread or add message")
             
-            if run_status.status == "completed":
-                # Get the latest message
-                messages = client.beta.threads.messages.list(
+            # Create a run to generate a response
+            run = None
+            try:
+                # Create a run
+                run = client.beta.threads.runs.create(
                     thread_id=thread_id,
-                    order="desc",
-                    limit=1
+                    assistant_id=assistant_id
                 )
-                
-                if messages.data:
-                    latest_message = messages.data[0]
-                    current_text = ""
-                    
-                    # Extract text content
-                    for content_part in latest_message.content:
-                        if content_part.type == 'text':
-                            current_text += content_part.text.value
-                    
-                    # Only send if there's new content
-                    if len(current_text) > last_message_length:
-                        # Send just the new part
-                        new_text = current_text[last_message_length:]
-                        streamer.queue_text_chunk(new_text)
-                        last_message_length = len(current_text)
-                
-                # Run is complete, exit the loop
-                break
-                
-            elif run_status.status in ["failed", "cancelled", "expired"]:
-                streamer.queue_text_chunk(f"\nRun ended with status: {run_status.status}. Please try again.")
-                break
-                
-            # For in-progress runs, try to show partial updates
-            elif run_status.status == "in_progress":
-                messages = client.beta.threads.messages.list(
-                    thread_id=thread_id,
-                    order="desc",
-                    limit=1
-                )
-                
-                if messages.data and messages.data[0].role == "assistant":
-                    latest_message = messages.data[0]
-                    current_text = ""
-                    
-                    # Extract text content
-                    for content_part in latest_message.content:
-                        if content_part.type == 'text':
-                            current_text += content_part.text.value
-                    
-                    # Only send if there's new content
-                    if len(current_text) > last_message_length:
-                        # Send just the new part
-                        new_text = current_text[last_message_length:]
-                        streamer.queue_text_chunk(new_text)
-                        last_message_length = len(current_text)
+                run_id = run.id
+                logging.info(f"Created run {run_id}")
+            except Exception as run_e:
+                logging.error(f"Error creating run: {run_e}")
+                raise
             
-            # Wait before checking again
-            await asyncio.sleep(wait_interval)
-            elapsed_time += wait_interval
+            # Poll the run until completion
+            accumulated_text = ""
+            max_wait_time = 120  # Maximum wait time in seconds
+            wait_interval = 2  # seconds
+            elapsed_time = 0
+            last_message_check_time = 0
+            message_check_interval = 5  # Check for partial messages every 5 seconds
             
-        # If we timed out
-        if elapsed_time >= max_wait_time:
-            streamer.queue_text_chunk("\n\nIt's taking longer than expected. Here's what I have so far.")
+            while elapsed_time < max_wait_time:
+                # Send a typing indicator
+                if elapsed_time % 8 == 0:  # Send typing indicator every ~8 seconds
+                    await streamer.send_typing_indicator()
+                
+                # Check run status
+                try:
+                    run_status = client.beta.threads.runs.retrieve(
+                        thread_id=thread_id,
+                        run_id=run_id
+                    )
+                    
+                    # Check for partial messages if enough time has passed
+                    current_time = time.time()
+                    if (current_time - last_message_check_time) >= message_check_interval:
+                        last_message_check_time = current_time
+                        
+                        # Get the latest messages
+                        messages = client.beta.threads.messages.list(
+                            thread_id=thread_id,
+                            order="desc",
+                            limit=1
+                        )
+                        
+                        if messages.data and messages.data[0].role == "assistant":
+                            message_text = ""
+                            for content_part in messages.data[0].content:
+                                if content_part.type == 'text':
+                                    message_text += content_part.text.value
+                            
+                            # If we have new text, add it to our buffer
+                            if message_text and message_text != accumulated_text:
+                                # Get just the new part
+                                new_text = message_text[len(accumulated_text):]
+                                if new_text:
+                                    # Queue this update
+                                    await streamer.queue_update(new_text)
+                                    accumulated_text = message_text
+                    
+                    # Handle completed run
+                    if run_status.status == "completed":
+                        # Get the final message
+                        messages = client.beta.threads.messages.list(
+                            thread_id=thread_id,
+                            order="desc",
+                            limit=1
+                        )
+                        
+                        if messages.data:
+                            message_text = ""
+                            for content_part in messages.data[0].content:
+                                if content_part.type == 'text':
+                                    message_text += content_part.text.value
+                            
+                            # If there's new text we haven't sent yet
+                            if message_text and message_text != accumulated_text:
+                                new_text = message_text[len(accumulated_text):]
+                                if new_text:
+                                    # Add this to our stream buffer
+                                    await streamer.queue_update(new_text)
+                                    accumulated_text = message_text
+                        
+                        # Send the final complete message
+                        await streamer.send_final_message()
+                        return
+                    
+                    # Handle failed run
+                    elif run_status.status in ["failed", "cancelled", "expired"]:
+                        logging.error(f"Run ended with status: {run_status.status}")
+                        await turn_context.send_activity(f"I'm sorry, I encountered an issue while processing your request (status: {run_status.status}). Please try again.")
+                        return
+                
+                except Exception as poll_e:
+                    logging.error(f"Error polling run status: {poll_e}")
+                    # Continue polling - don't break the loop for transient errors
+                
+                # Wait before checking again
+                await asyncio.sleep(wait_interval)
+                elapsed_time += wait_interval
             
+            # If we get here, we timed out
+            logging.warning(f"Timed out waiting for run {run_id} to complete")
+            await turn_context.send_activity("I'm sorry, it's taking longer than expected to process your request. Here's what I have so far:")
+            
+            # Send whatever we've accumulated
+            if accumulated_text:
+                await turn_context.send_activity(accumulated_text)
+            else:
+                await turn_context.send_activity("I couldn't generate a response. Please try again or ask in a different way.")
+        
+        except Exception as e:
+            logging.error(f"Error in custom streaming: {e}")
+            traceback.print_exc()
+            await turn_context.send_activity("I encountered an error while processing your request. Please try again.")
+            
+            # Try a fallback direct completion
+            await send_fallback_response(turn_context, user_message)
+    
+    except Exception as outer_e:
+        logging.error(f"Outer error in stream_with_custom_implementation: {str(outer_e)}")
+        traceback.print_exc()
+        await turn_context.send_activity("I'm experiencing technical difficulties. Please try again later.")
+
+async def poll_for_message(client, thread_id, streamer):
+    """
+    Poll for messages and send any updates via the streamer.
+    Used as a fallback when streaming fails.
+    """
+    try:
+        # Get the latest message
+        messages = client.beta.threads.messages.list(
+            thread_id=thread_id,
+            order="desc",
+            limit=1
+        )
+        
+        if messages.data:
+            latest_message = messages.data[0]
+            message_text = ""
+            
+            # Extract text content
+            for content_part in latest_message.content:
+                if content_part.type == 'text':
+                    message_text += content_part.text.value
+            
+            # Queue the complete message if we have it
+            if message_text:
+                streamer.queue_text_chunk(message_text)
+                return
+        
+        streamer.queue_text_chunk("I processed your request but couldn't generate a proper response. Please try again.")
+        
     except Exception as e:
-        logging.error(f"Error in poll_for_completion: {e}")
-        streamer.queue_text_chunk("\nI encountered an error while retrieving the response. Please try again.")
-# Implement streaming with Teams AI integration
+        logging.error(f"Error in poll_for_message: {e}")
+        streamer.queue_text_chunk("I encountered an error while retrieving the response. Please try again.")
 
 async def validate_resources(client: AzureOpenAI, thread_id: Optional[str], assistant_id: Optional[str]) -> Dict[str, bool]:
     """
@@ -1744,6 +2001,8 @@ async def add_file_awareness_internal(thread_id: str, file_info: Dict[str, Any])
             awareness_message += "This image has been analyzed and the descriptive content has been added to this thread."
         elif processing_method == "vector_store":
             awareness_message += "This file has been added to the vector store and its content is available for search."
+        elif processing_method == "thread_attachment":
+            awareness_message += "This file has been attached to the thread and can be accessed via file search."
         else:
             awareness_message += "This file has been processed."
 
@@ -1783,7 +2042,8 @@ async def initialize_chat(turn_context: TurnContext, state=None, context=None):
                 "last_error": None,
                 "active_run": False,
                 "user_id": user_id,  # Store the user ID for additional verification
-                "creation_time": time.time()
+                "creation_time": time.time(),
+                "last_activity_time": time.time()
             }
             state = conversation_states[conversation_id]
             
@@ -1807,7 +2067,8 @@ async def initialize_chat(turn_context: TurnContext, state=None, context=None):
                     "last_error": None,
                     "active_run": False,
                     "user_id": user_id,
-                    "creation_time": time.time()
+                    "creation_time": time.time(),
+                    "last_activity_time": time.time()
                 }
                 state = conversation_states[conversation_id]
                 
@@ -1816,81 +2077,6 @@ async def initialize_chat(turn_context: TurnContext, state=None, context=None):
         
         # Log initialization attempt with user details for traceability
         logger.info(f"Initializing chat for user {user_id} in conversation {conversation_id} with context: {context}")
-        
-        # Define system prompt here instead of relying on external variable
-        system_prompt = '''
-You are a Product Management AI Co-Pilot that helps create documentation and analyze various file types. Your capabilities vary based on the type of files uploaded.
-
-### Understanding File Types and Processing Methods:
-
-1. **Documents (PDF, DOC, TXT, etc.)** - When users upload these files, you should:
-   - Use your file_search capability to extract relevant information
-   - Quote information directly from the documents when answering questions
-   - Always reference the specific filename when sharing information from a document
-
-2. **Images** - When users upload images, you should:
-   - Refer to the analysis that was automatically added to the conversation
-   - Use details from the image analysis to answer questions
-   - Acknowledge when information might not be visible in the image
-
-3. **Unsupported File Types**:
-   - CSV and Excel files are not supported by this system
-   - If users ask about analyzing spreadsheets, kindly inform them that this feature is not available
-
-### PRD Generation Excellence:
-
-When creating a PRD (Product Requirements Document), develop a comprehensive and professional document with these mandatory sections:
-
-1. **Product Overview:**
-   - Product Manager: [Name and contact details]
-   - Product Name: [Clear, concise name]
-   - Date: [Current date and version]
-   - Vision Statement: [Compelling, aspirational vision in 1-2 sentences]
-
-2. **Problem and Customer Analysis:**
-   - Customer Problem: [Clearly articulated problem statement]
-   - Market Opportunity: [Quantified TAM/SAM/SOM when possible]
-   - Personas: [Detailed primary and secondary user personas]
-   - User Stories: [Key scenarios from persona perspective]
-
-3. **Strategic Elements:**
-   - Executive Summary: [Brief overview of product and value proposition]
-   - Business Objectives: [Measurable goals with KPIs]
-   - Success Metrics: [Specific metrics to track success]
-
-4. **Detailed Requirements:**
-   - Key Features: [Prioritized feature list with clear descriptions]
-   - Functional Requirements: [Detailed specifications for each feature]
-   - Non-Functional Requirements: [Performance, security, scalability, etc.]
-   - Technical Specifications: [Relevant architecture and technical details]
-
-5. **Implementation Planning:**
-   - Milestones: [Phased delivery timeline with key dates]
-   - Dependencies: [Internal and external dependencies]
-   - Risks and Mitigations: [Potential challenges and contingency plans]
-
-6. **Appendices:**
-   - Supporting Documents: [Research findings, competitive analysis, etc.]
-   - Open Questions: [Items requiring further investigation]
-
-If any information is unavailable, clearly mark sections as "[To be determined]" and request specific clarification from the user. When creating a PRD, maintain a professional, clear, and structured format with appropriate headers and bullet points.
-
-### Professional Assistance Guidelines:
-
-- Demonstrate expertise and professionalism in all responses
-- Proactively seek clarification when details are missing or ambiguous
-- Ask specific questions about file names, requirements, or expectations when needed
-- Provide context for why you need certain information to deliver better results
-- Structure responses clearly with appropriate formatting for readability
-- Always reference files by their exact filenames
-- Use tools appropriately based on file type
-- If asked about CSV/Excel data analysis, politely explain this is not supported
-- Acknowledge limitations and be transparent when information is unavailable
-- Balance detail with conciseness based on the user's needs
-- When in doubt about requirements, ask targeted questions rather than making assumptions
-
-Remember to be thorough yet efficient with your responses, anticipating follow-up needs while addressing the immediate question.
-'''
         
         # ALWAYS create a new assistant and thread for this user - never reuse
         client = create_client()
@@ -1917,7 +2103,7 @@ Remember to be thorough yet efficient with your responses, anticipating follow-u
             assistant = client.beta.assistants.create(
                 name=unique_name,
                 model="gpt-4o-mini",
-                instructions=system_prompt,  # Now correctly defined
+                instructions=SYSTEM_PROMPT,
                 tools=assistant_tools,
                 tool_resources=assistant_tool_resources,
             )
@@ -1959,6 +2145,12 @@ Remember to be thorough yet efficient with your responses, anticipating follow-u
         await turn_context.send_activity(f"Error initializing chat: {str(e)}")
         logger.error(f"Error in initialize_chat for user {user_id}: {str(e)}")
         traceback.print_exc()
+        
+        # Try a fallback response if everything else fails
+        try:
+            await send_fallback_response(turn_context, context or "How can I help you with product management today?")
+        except Exception as fallback_e:
+            logging.error(f"Even fallback failed during initialization: {fallback_e}")
 
 # Send a message without user input (used after file upload or initialization)
 async def send_message(turn_context: TurnContext, state):
@@ -1969,9 +2161,12 @@ async def send_message(turn_context: TurnContext, state):
         # Use streaming if supported by the channel
         supports_streaming = turn_context.activity.channel_id == "msteams"
         
-        if supports_streaming:
+        if TEAMS_AI_AVAILABLE and supports_streaming:
             # Use streaming for response
-            await stream_response_with_teams_ai(turn_context, state, None)
+            await stream_with_teams_ai(turn_context, state, None)
+        elif supports_streaming:
+            # Use custom streaming implementation
+            await stream_with_custom_implementation(turn_context, state, None)
         else:
             # Call internal function directly to get latest message
             client = create_client()
@@ -2002,6 +2197,12 @@ async def send_message(turn_context: TurnContext, state):
         await turn_context.send_activity(f"Error getting response: {str(e)}")
         logger.error(f"Error in send_message: {str(e)}")
         traceback.print_exc()
+        
+        # Use fallback if everything else fails
+        try:
+            await send_fallback_response(turn_context, "Hello, how can I help you with product management today?")
+        except:
+            pass  # Last resort is to simply give up
 
 # Send welcome message when bot is added
 async def send_welcome_message(turn_context: TurnContext):
@@ -2035,7 +2236,7 @@ async def process_conversation_internal(
 ):
     """
     Core function to process conversation with the assistant.
-    This function handles both streaming and non-streaming modes with robust Stream object handling.
+    This function handles both streaming and non-streaming modes.
     """
     try:
         # Create defaults if not provided
