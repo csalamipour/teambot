@@ -1453,10 +1453,6 @@ async def stream_response_with_teams_ai(turn_context: TurnContext, state, user_m
             else:
                 # Fallback to a different approach if direct streaming isn't available
                 logging.warning(f"No streaming methods available, using fallback approach for thread {thread_id}")
-                
-                # Get the run ID for polling
-                run_id = run.id
-                
                 # Polling approach for older API versions that don't support direct streaming
                 streamer.queue_informative_update("Working on your response...")
                 
