@@ -17,3 +17,4 @@ pandas
 tabulate
 tables
 openpyxl
+teams-ai
