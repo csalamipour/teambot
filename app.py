@@ -17,9 +17,9 @@ from http import HTTPStatus
 from datetime import datetime
 
 # FastAPI imports
-from fastAPI import FastAPI, Request, Response, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastAPI.responses import JSONResponse, StreamingResponse
-from fastAPI.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request, Response, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 # Azure OpenAI imports
 from openai import AzureOpenAI
