@@ -157,16 +157,14 @@ class TeamsStreamingResponse:
         try:
             # Verify correct stream types based on activity type
             if self.complete:
-                if stream_type != "end":
-                    stream_type = "end"  # Force correct type for message activity
+                # Final messages must be message type with end stream type
                 activity_type = ActivityTypes.message
+                stream_type = "end"
             else:
-                if stream_type not in ["start", "continue"]:
-                    if self.stream_id is None:
-                        stream_type = "start"  # First message must be "start"
-                    else:
-                        stream_type = "continue"  # Subsequent messages must be "continue"
+                # In-progress messages must be typing with start/continue
                 activity_type = ActivityTypes.typing
+                if stream_type not in ["start", "continue"]:
+                    stream_type = "start" if self.stream_id is None else "continue"
             
             # Create the activity for a streaming update
             activity = Activity(
