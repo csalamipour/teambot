@@ -379,20 +379,20 @@ async def send_fallback_response(turn_context: TurnContext, user_message: str):
         await turn_context.send_activity("I'm experiencing technical difficulties right now. Please try again in a moment.")
 
 def create_new_chat_card():
-    """Creates an adaptive card for starting a new chat session"""
+    """Creates an adaptive card for starting a new chat session with additional options"""
     card = {
         "type": "AdaptiveCard",
         "version": "1.0",
         "body": [
             {
                 "type": "TextBlock",
-                "text": "Start a New Conversation",
+                "text": "PM Bot Menu",
                 "size": "large",
                 "weight": "bolder"
             },
             {
                 "type": "TextBlock",
-                "text": "Click the button below to start a fresh conversation with me.",
+                "text": "Select an action below",
                 "wrap": True
             }
         ],
@@ -402,6 +402,20 @@ def create_new_chat_card():
                 "title": "Start New Chat",
                 "data": {
                     "action": "new_chat"
+                }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Create Email Template",
+                "data": {
+                    "action": "create_email"
+                }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Help / Commands",
+                "data": {
+                    "action": "show_help"
                 }
             }
         ]
@@ -1495,7 +1509,9 @@ async def handle_text_message(turn_context: TurnContext, state):
     user_message = turn_context.activity.text.strip()
     conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
     conversation_id = conversation_reference.conversation.id
-    
+    if user_message in ["/email", "create email", "write email", "email template"]:
+        await send_email_card(turn_context)
+        return
     # Extract user identity for security validation
     user_id = turn_context.activity.from_property.id if hasattr(turn_context.activity, 'from_property') else "unknown"
     
@@ -2684,15 +2700,14 @@ async def send_message(turn_context: TurnContext, state):
 # Send welcome message when bot is added
 async def send_welcome_message(turn_context: TurnContext):
     welcome_text = (
-        "# Welcome to the Product Management Bot! 👋\n\n"
-        "I'm here to help you with your product management tasks. I can:\n\n"
-        "- Create and edit product requirements documents\n"
+        "# Welcome to Emal and Virtual Assistant! 👋\n\n"
+        "I'm here to help you with your email drafting and chat query. I can:\n\n"
         "- Answer questions about uploaded documents (PDF, DOC, TXT)\n"
         "- Analyze images and provide insights\n\n"
         "To get started, you can:\n"
         "- Send me a message with your request\n"
         "- Upload a document for analysis\n"
-        "- Ask me to create a PRD\n\n"
+        "- Type '/email' to create an email template\n\n"
         "Note: CSV and Excel files are not supported.\n\n"
         "How can I assist you today?"
     )
@@ -2701,6 +2716,30 @@ async def send_welcome_message(turn_context: TurnContext):
     
     # Also send the new chat card
     await send_new_chat_card(turn_context)
+    email_button_card = {
+        "type": "AdaptiveCard",
+        "version": "1.0",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "Need to write an email?",
+                "weight": "bolder"
+            }
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": "Create Email Template",
+                "data": {
+                    "action": "create_email"
+                }
+            }
+        ]
+    }
+    
+    reply = _create_reply(turn_context.activity)
+    reply.attachments = [CardFactory.adaptive_card(email_button_card)]
+    await turn_context.send_activity(reply)
 
 # ----- Common API Functions -----
 
