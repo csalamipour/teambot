@@ -1402,92 +1402,110 @@ async def handle_text_message(turn_context: TurnContext, state):
         except Exception as fallback_error:
             logging.error(f"Fallback response also failed: {fallback_error}")
 
+# Modified process_pending_messages function to fix the run conflict
 async def process_pending_messages(turn_context: TurnContext, state, conversation_id):
-    """Process any pending messages in the queue with improved run handling"""
+    """Process any pending messages in the queue safely"""
     with pending_messages_lock:
         if conversation_id in pending_messages and pending_messages[conversation_id]:
-            # Get queued messages but don't clear the queue yet
-            next_messages = list(pending_messages[conversation_id])
-            
-            # Only if we have pending messages
-            if next_messages:
-                # Process the first message
-                next_message = next_messages[0]
+            # Process one message at a time to avoid race conditions
+            if len(pending_messages[conversation_id]) > 0:
+                next_message = pending_messages[conversation_id].popleft()
                 await turn_context.send_activity("Now addressing your follow-up message...")
                 
+                # IMPORTANT: Don't modify the original turn_context
+                # Instead, directly process the message through OpenAI API
                 try:
-                    client = create_client()
+                    # Get the thread and assistant IDs
                     thread_id = state.get("session_id")
                     assistant_id = state.get("assistant_id")
                     
-                    if thread_id and assistant_id:
-                        # IMPORTANT: First check for any active runs and cancel them
+                    if not thread_id or not assistant_id:
+                        await turn_context.send_activity("I'm having trouble with your follow-up question. Let's start a new conversation.")
+                        return
+                    
+                    # Create a new client
+                    client = create_client()
+                    
+                    # Send typing indicator
+                    await turn_context.send_activity(create_typing_activity())
+                    
+                    # Check for any existing active runs and cancel them first
+                    try:
+                        runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
+                        if runs.data:
+                            latest_run = runs.data[0]
+                            if latest_run.status in ["in_progress", "queued", "requires_action"]:
+                                logging.info(f"Cancelling active run {latest_run.id} before processing follow-up")
+                                client.beta.threads.runs.cancel(thread_id=thread_id, run_id=latest_run.id)
+                                await asyncio.sleep(2)  # Wait for cancellation to take effect
+                    except Exception as cancel_e:
+                        logging.warning(f"Error checking or cancelling runs: {cancel_e}")
+                    
+                    # CRITICAL: Wait to ensure no active runs
+                    active_run_found = True
+                    max_wait = 5  # Maximum 5 seconds to wait
+                    start_time = time.time()
+                    
+                    while active_run_found and (time.time() - start_time) < max_wait:
                         try:
-                            # Check for active runs
+                            # Check if any active runs still exist
                             runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
+                            active_run_found = False
+                            
                             if runs.data:
                                 for run in runs.data:
                                     if run.status in ["in_progress", "queued", "requires_action"]:
-                                        # Try to cancel active run
-                                        logging.info(f"Cancelling active run {run.id} before processing follow-up")
-                                        try:
-                                            client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run.id)
-                                            # Wait for cancellation to take effect
-                                            await asyncio.sleep(3)
-                                        except Exception as cancel_e:
-                                            logging.warning(f"Error cancelling run: {cancel_e}")
-                        except Exception as check_e:
-                            logging.warning(f"Error checking for active runs: {check_e}")
-                        
-                        # CRITICAL FIX: Create a new thread instead of reusing the existing one
-                        # This avoids the "already has an active run" error completely
-                        try:
-                            new_thread = client.beta.threads.create()
-                            old_thread_id = thread_id
-                            thread_id = new_thread.id
+                                        active_run_found = True
+                                        logging.info(f"Still waiting for run {run.id} to cancel...")
+                                        await asyncio.sleep(1)
+                                        break
                             
-                            # Update the state with the new thread ID
-                            with conversation_states_lock:
-                                state["session_id"] = thread_id
-                                
-                            logging.info(f"Created new thread {thread_id} for follow-up message (replacing {old_thread_id})")
-                            
-                            # Add the follow-up message to the new thread
-                            client.beta.threads.messages.create(
-                                thread_id=thread_id,
-                                role="user",
-                                content=next_message
-                            )
-                            
-                            # Now use direct processing for clean state
-                            if TEAMS_AI_AVAILABLE:
-                                await stream_with_teams_ai(turn_context, state, None)
-                            else:
-                                await stream_with_custom_implementation(turn_context, state, None)
-                                
-                            # Only remove from queue after successful processing
-                            with pending_messages_lock:
-                                if conversation_id in pending_messages and pending_messages[conversation_id]:
-                                    pending_messages[conversation_id].popleft()
-                                    
-                        except Exception as thread_e:
-                            logging.error(f"Error creating new thread for follow-up: {thread_e}")
-                            raise
+                            if not active_run_found:
+                                break
+                        except Exception:
+                            break  # If we can't check, just proceed
+                    
+                    # Add the follow-up message to the thread
+                    client.beta.threads.messages.create(
+                        thread_id=thread_id,
+                        role="user",
+                        content=next_message
+                    )
+                    
+                    # Process the response with streaming
+                    if TEAMS_AI_AVAILABLE:
+                        await stream_with_teams_ai(turn_context, state, None)
                     else:
-                        await turn_context.send_activity("I can't process your follow-up because the conversation session was lost.")
-                        # Clear the queue to avoid stuck messages
-                        with pending_messages_lock:
-                            if conversation_id in pending_messages:
-                                pending_messages[conversation_id].clear()
-                                
+                        await stream_with_custom_implementation(turn_context, state, None)
+                        
                 except Exception as e:
-                    logging.error(f"Error processing follow-up message: {e}")
-                    await turn_context.send_activity("I had trouble processing your follow-up. Please try asking again as a new question.")
-                    # Clear the problematic message from the queue
-                    with pending_messages_lock:
-                        if conversation_id in pending_messages and pending_messages[conversation_id]:
-                            pending_messages[conversation_id].popleft()
+                    logging.error(f"Error processing follow-up: {e}")
+                    traceback.print_exc()
+                    await turn_context.send_activity(f"I had trouble processing your follow-up. Please try asking again.")
 # Add this to the end of handle_text_message function
+async def ensure_no_active_runs(client, thread_id):
+    """Ensure there are no active runs on the thread"""
+    try:
+        runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
+        active_run_found = False
+        
+        if runs.data:
+            for run in runs.data:
+                if run.status in ["in_progress", "queued", "requires_action"]:
+                    # Try to cancel it
+                    logging.info(f"Cancelling active run {run.id}")
+                    try:
+                        client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run.id)
+                    except Exception as cancel_e:
+                        logging.warning(f"Error cancelling run {run.id}: {cancel_e}")
+                    
+                    active_run_found = True
+        
+        # If we found an active run, wait for it to be cancelled
+        if active_run_found:
+            await asyncio.sleep(2)  # Give the cancellation time to take effect
+    except Exception as e:
+        logging.warning(f"Error checking for active runs: {e}")
 # Right before the function returns
 async def cleanup_after_message():
     """Ensure all state is properly reset after message processing"""
