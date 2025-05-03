@@ -128,8 +128,39 @@ def create_message_card(message_text):
         "body": [{"type": "TextBlock", "wrap": True, "text": message_text}]
     }
     return CardFactory.adaptive_card(card)
+async def end_stream_handler(
+    context: TurnContext,
+    state: MemoryBase,
+    response: PromptResponse[str],
+    streamer: StreamingResponse,
+):
+    """Handles the end of streaming by creating an Adaptive Card with the response"""
+    if not streamer:
+        return
+    
+    # Create an adaptive card with the full message
+    card = CardFactory.adaptive_card(
+        {
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.6",
+            "type": "AdaptiveCard",
+            "body": [
+                {
+                    "type": "TextBlock", 
+                    "wrap": True, 
+                    "text": streamer.message
+                }
+            ]
+        }
+    )
+    
+    # Set the attachment on the streamer
+    streamer.set_attachments([card])
+    
+    # Ensure card is shown during final message stage
+    logging.info(f"End stream handler complete with Adaptive Card attachment")
 class TeamsStreamingResponse:
-    """Handles streaming responses to Teams using proper Teams streaming protocols"""
+    """Handles streaming responses to Teams using proper Teams streaming protocols with Teams AI compatibility"""
     
     def __init__(self, turn_context):
         self.turn_context = turn_context
@@ -141,6 +172,8 @@ class TeamsStreamingResponse:
         self.min_update_interval = 0.7  # Minimum time between updates in seconds
         self.active = True
         self.complete = False
+        self.attachments = None  # Store attachments for final message
+        self.message = ""  # Property required by end_stream_handler
         
     async def initialize(self):
         """Initialize the stream with first informative message"""
@@ -155,7 +188,7 @@ class TeamsStreamingResponse:
     async def _send_streaming_update(self, text, stream_type="continue"):
         """Send a streaming update to Teams with proper sequencing"""
         try:
-            # Verify correct stream types based on activity type
+            # FIXED: Verify correct stream types based on activity type
             if self.complete:
                 # Final messages must be message type with end stream type
                 activity_type = ActivityTypes.message
@@ -185,6 +218,10 @@ class TeamsStreamingResponse:
             # Add stream ID for all but the first message
             if self.stream_id is not None:
                 activity.entities[0]["streamId"] = self.stream_id
+            
+            # Add attachments to final message if available
+            if self.complete and self.attachments:
+                activity.attachments = self.attachments
             
             # Send the activity
             response = await self.turn_context.send_activity(activity)
@@ -224,14 +261,14 @@ class TeamsStreamingResponse:
             
         # Add to the accumulated text
         self.message_parts.append(text_chunk)
+        self.message = "".join(self.message_parts)  # Update self.message property for Teams AI compatibility
         
         # Check if we should send an update
         current_time = time.time()
         
         # Send update if sufficient time has passed
         if (current_time - self.last_update_time) >= self.min_update_interval:
-            full_text = "".join(self.message_parts)
-            await self._send_streaming_update(full_text)
+            await self._send_streaming_update(self.message)
             
             # Periodically add a typing indicator to keep the user informed
             if self.sequence_number % 5 == 0:
@@ -239,7 +276,12 @@ class TeamsStreamingResponse:
     
     def get_full_message(self):
         """Gets the complete message from all chunks"""
-        return "".join(self.message_parts)
+        return self.message
+    
+    def set_attachments(self, attachments):
+        """Sets attachments for final message (required by end_stream_handler)"""
+        self.attachments = attachments
+        logging.info(f"Set {len(attachments)} attachments for streaming response")
     
     async def send_informative_update(self, message):
         """Sends an informative update to the user"""
@@ -251,7 +293,7 @@ class TeamsStreamingResponse:
         return await self._send_streaming_update(message, stream_type)
         
     async def send_final_message(self, attachments=None):
-        """Sends the final complete message as an adaptive card with proper stream ending"""
+        """Sends the final complete message with proper stream ending"""
         if not self.active:
             return False
             
@@ -260,34 +302,22 @@ class TeamsStreamingResponse:
             return False
             
         try:
-            complete_message = self.get_full_message()
-            
             # Mark stream as complete before sending (avoid race conditions)
             self.complete = True
             
-            # Create an adaptive card with the message
-            message_card = create_message_card(complete_message)
-            
-            # Create attachments list with our card first
-            all_attachments = [message_card]
-            
-            # Add any additional attachments if provided
+            # Set attachments if provided
             if attachments:
-                all_attachments.extend(attachments)
+                self.attachments = attachments
             
-            # Send the final message with proper streaming format
-            activity = Activity(
-                type=ActivityTypes.message,
-                channel_id="msteams",
-                attachments=all_attachments,
-                entities=[{
-                    "type": "streaminfo",
-                    "streamId": self.stream_id,
-                    "streamType": "end"
-                }]
-            )
-                    
-            await self.turn_context.send_activity(activity)
+            # If no attachments are set and end_stream_handler hasn't been called yet,
+            # create a default card
+            if not self.attachments:
+                # Create an adaptive card with the message
+                message_card = create_message_card(self.message)
+                self.attachments = [message_card]
+            
+            # Send the final message with proper streaming format and attachments
+            await self._send_streaming_update(self.message, "end")
             
             # Clean up resources
             with active_streamers_lock:
@@ -301,16 +331,18 @@ class TeamsStreamingResponse:
             
             # Try to send as a regular message if streaming fails
             try:
-                complete_message = self.get_full_message()
-                
-                # Create an adaptive card
-                message_card = create_message_card(complete_message)
+                # Use the attachments if they exist, otherwise create a default card
+                if not self.attachments:
+                    message_card = create_message_card(self.message)
+                    all_attachments = [message_card]
+                else:
+                    all_attachments = self.attachments
                 
                 # Create a regular message activity with the card
                 activity = Activity(
                     type=ActivityTypes.message,
                     channel_id="msteams",
-                    attachments=[message_card]
+                    attachments=all_attachments
                 )
                 
                 await self.turn_context.send_activity(activity)
@@ -323,6 +355,19 @@ class TeamsStreamingResponse:
                 with active_streamers_lock:
                     if self.conversation_id in active_streamers:
                         del active_streamers[self.conversation_id]
+                        
+    async def abort_streaming(self):
+        """Aborts the streaming session and cleans up resources"""
+        self.active = False
+        self.complete = True
+        
+        # Clean up resources
+        with active_streamers_lock:
+            if self.conversation_id in active_streamers:
+                del active_streamers[self.conversation_id]
+        
+        logging.info(f"Aborted streaming session for conversation {self.conversation_id}")
+        return True
 async def upload_file_to_openai_thread(client: AzureOpenAI, file_content: bytes, filename: str, thread_id: str, message_content: str = None):
     """
     Uploads a file directly to OpenAI and attaches it to a thread.
