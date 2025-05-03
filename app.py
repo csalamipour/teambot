@@ -18,7 +18,7 @@ from datetime import datetime
 
 # FastAPI imports
 from fastapi import FastAPI, Request, Response, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse as FastAPIStreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # Azure OpenAI imports
@@ -56,10 +56,12 @@ from typing import Dict, List, Optional, Any
 from botbuilder.core import CardFactory, Storage, TurnContext
 from botbuilder.schema import Activity, ActivityTypes, ChannelAccount, ConversationAccount, Attachment
 from teams.state import MemoryBase  # Import MemoryBase from Teams library
+from teams.streaming import StreamingResponse  # Import StreamingResponse from teams-ai
 import logging
 import time
 import threading
 import asyncio
+
 # Dictionary to store pending messages for each conversation
 pending_messages = {}
 # Lock for thread-safe operations on the pending_messages dict
@@ -126,6 +128,7 @@ def create_client():
         api_key=AZURE_API_KEY,
         api_version=AZURE_API_VERSION,
     )
+
 def create_message_card(message_text):
     """Creates an adaptive card for displaying message text"""
     card = {
@@ -136,215 +139,49 @@ def create_message_card(message_text):
     }
     return CardFactory.adaptive_card(card)
 
-class TeamsStreamingResponse:
-    """Handles streaming responses to Teams using proper Teams streaming protocols with Teams AI compatibility"""
+async def end_stream_handler(
+    context: TurnContext,
+    state: MemoryBase,
+    response: Any,  # Using Any instead of PromptResponse[str] for flexibility
+    streamer: StreamingResponse,
+):
+    """
+    Handles the end of streaming by creating an Adaptive Card with the response.
+    Called by the Teams AI framework when streaming is complete.
     
-    def __init__(self, turn_context):
-        self.turn_context = turn_context
-        self.conversation_id = TurnContext.get_conversation_reference(turn_context.activity).conversation.id
-        self.message_parts = []
-        self.stream_id = None
-        self.sequence_number = 1
-        self.last_update_time = 0
-        self.min_update_interval = 0.7  # Minimum time between updates in seconds
-        self.active = True
-        self.complete = False
-        self.attachments = None  # Store attachments for final message
-        self.message = ""  # Property required by end_stream_handler
-        
-    async def initialize(self):
-        """Initialize the stream with first informative message"""
-        # Register this streamer in active streamers dict
-        with active_streamers_lock:
-            active_streamers[self.conversation_id] = self
-        
-        # Send initial informative message
-        message = "Generating response..."
-        await self._send_streaming_update(message, "start")
-        
-    async def _send_streaming_update(self, text, stream_type="continue"):
-        """Send a streaming update to Teams with proper sequencing"""
-        try:
-            # FIXED: Verify correct stream types based on activity type
-            if self.complete:
-                # Final messages must be message type with end stream type
-                activity_type = ActivityTypes.message
-                stream_type = "end"
-            else:
-                # In-progress messages must be typing with start/continue
-                activity_type = ActivityTypes.typing
-                if stream_type not in ["start", "continue"]:
-                    stream_type = "start" if self.stream_id is None else "continue"
-            
-            # Create the activity for a streaming update
-            activity = Activity(
-                type=activity_type,
-                text=text,
-                channel_id="msteams",
-                entities=[{
-                    "type": "streaminfo",
-                    "streamType": stream_type
-                }]
-            )
-            
-            # Add sequence number for non-final messages
-            if not self.complete:
-                activity.entities[0]["streamSequence"] = self.sequence_number
-                self.sequence_number += 1
-            
-            # Add stream ID for all but the first message
-            if self.stream_id is not None:
-                activity.entities[0]["streamId"] = self.stream_id
-            
-            # Add attachments to final message if available
-            if self.complete and self.attachments:
-                activity.attachments = self.attachments
-            
-            # Send the activity
-            response = await self.turn_context.send_activity(activity)
-            
-            # Store the stream ID from the first response
-            if self.stream_id is None and response is not None:
-                self.stream_id = response.id
-                logging.info(f"Initialized stream with ID: {self.stream_id}")
-                
-            # Update last update time
-            self.last_update_time = time.time()
-            
-            return True
-        except Exception as e:
-            logging.error(f"Error sending streaming update: {e}")
-            self.active = False
-            return False
-            
-    async def send_typing_indicator(self):
-        """Sends a dedicated typing indicator to Teams (non-streaming)"""
-        if not self.active:
-            return
-            
-        try:
-            activity = Activity(
-                type=ActivityTypes.typing,
-                channel_id="msteams"
-            )
-            await self.turn_context.send_activity(activity)
-        except Exception as e:
-            logging.error(f"Error sending typing indicator: {e}")
+    Args:
+        context: The turn context
+        state: The conversation state
+        response: The response from the model
+        streamer: The streaming response object
+    """
+    if not streamer:
+        return
     
-    async def queue_update(self, text_chunk):
-        """Queues and potentially sends a text update"""
-        if not self.active or self.complete:
-            return
-            
-        # Add to the accumulated text
-        self.message_parts.append(text_chunk)
-        self.message = "".join(self.message_parts)  # Update self.message property for Teams AI compatibility
+    try:
+        # Create an adaptive card with the full message
+        card = CardFactory.adaptive_card(
+            {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.6",
+                "type": "AdaptiveCard",
+                "body": [
+                    {
+                        "type": "TextBlock", 
+                        "wrap": True, 
+                        "text": streamer.message
+                    }
+                ]
+            }
+        )
         
-        # Check if we should send an update
-        current_time = time.time()
+        # Set the attachment on the streamer
+        streamer.set_attachments([card])
         
-        # Send update if sufficient time has passed
-        if (current_time - self.last_update_time) >= self.min_update_interval:
-            await self._send_streaming_update(self.message)
-            
-            # Periodically add a typing indicator to keep the user informed
-            if self.sequence_number % 5 == 0:
-                await self.send_typing_indicator()
-    
-    def get_full_message(self):
-        """Gets the complete message from all chunks"""
-        return self.message
-    
-    def set_attachments(self, attachments):
-        """Sets attachments for final message (required by end_stream_handler)"""
-        self.attachments = attachments
-        logging.info(f"Set {len(attachments)} attachments for streaming response")
-    
-    async def send_informative_update(self, message):
-        """Sends an informative update to the user"""
-        if not self.active or self.complete:
-            return False
-            
-        # For first message, use "start", otherwise use "continue"
-        stream_type = "start" if self.stream_id is None else "continue"
-        return await self._send_streaming_update(message, stream_type)
-        
-    async def send_final_message(self, attachments=None):
-        """Sends the final complete message with proper stream ending"""
-        if not self.active:
-            return False
-            
-        if self.complete:
-            logging.warning("Attempted to send final message for already completed stream")
-            return False
-            
-        try:
-            # Mark stream as complete before sending (avoid race conditions)
-            self.complete = True
-            
-            # Set attachments if provided
-            if attachments:
-                self.attachments = attachments
-            
-            # If no attachments are set and end_stream_handler hasn't been called yet,
-            # create a default card
-            if not self.attachments:
-                # Create an adaptive card with the message
-                message_card = create_message_card(self.message)
-                self.attachments = [message_card]
-            
-            # Send the final message with proper streaming format and attachments
-            await self._send_streaming_update(self.message, "end")
-            
-            # Clean up resources
-            with active_streamers_lock:
-                if self.conversation_id in active_streamers:
-                    del active_streamers[self.conversation_id]
-            
-            return True
-            
-        except Exception as e:
-            logging.error(f"Error sending final streaming message: {e}")
-            
-            # Try to send as a regular message if streaming fails
-            try:
-                # Use the attachments if they exist, otherwise create a default card
-                if not self.attachments:
-                    message_card = create_message_card(self.message)
-                    all_attachments = [message_card]
-                else:
-                    all_attachments = self.attachments
-                
-                # Create a regular message activity with the card
-                activity = Activity(
-                    type=ActivityTypes.message,
-                    channel_id="msteams",
-                    attachments=all_attachments
-                )
-                
-                await self.turn_context.send_activity(activity)
-                return True
-            except Exception as fallback_e:
-                logging.error(f"Failed to send final message even as regular message: {fallback_e}")
-                return False
-            finally:
-                # Clean up resources
-                with active_streamers_lock:
-                    if self.conversation_id in active_streamers:
-                        del active_streamers[self.conversation_id]
-                        
-    async def abort_streaming(self):
-        """Aborts the streaming session and cleans up resources"""
-        self.active = False
-        self.complete = True
-        
-        # Clean up resources
-        with active_streamers_lock:
-            if self.conversation_id in active_streamers:
-                del active_streamers[self.conversation_id]
-        
-        logging.info(f"Aborted streaming session for conversation {self.conversation_id}")
-        return True
+        logging.info("End stream handler completed successfully with Adaptive Card")
+    except Exception as e:
+        logging.error(f"Error in end_stream_handler: {e}")
+
 async def upload_file_to_openai_thread(client: AzureOpenAI, file_content: bytes, filename: str, thread_id: str, message_content: str = None):
     """
     Uploads a file directly to OpenAI and attaches it to a thread.
@@ -411,48 +248,7 @@ async def upload_file_to_openai_thread(client: AzureOpenAI, file_content: bytes,
         logging.error(f"Error uploading file to OpenAI: {str(e)}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to upload file to OpenAI: {str(e)}")
-async def end_stream_handler(
-    context: TurnContext,
-    state: MemoryBase,
-    response: Any,  # Using Any instead of PromptResponse[str] for flexibility
-    streamer: TeamsStreamingResponse,
-):
-    """
-    Handles the end of streaming by creating an Adaptive Card with the response.
-    Called by the Teams AI framework when streaming is complete.
-    
-    Args:
-        context: The turn context
-        state: The conversation state
-        response: The response from the model
-        streamer: The streaming response object
-    """
-    if not streamer:
-        return
-    
-    try:
-        # Create an adaptive card with the full message
-        card = CardFactory.adaptive_card(
-            {
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.6",
-                "type": "AdaptiveCard",
-                "body": [
-                    {
-                        "type": "TextBlock", 
-                        "wrap": True, 
-                        "text": streamer.message
-                    }
-                ]
-            }
-        )
-        
-        # Set the attachment on the streamer
-        streamer.set_attachments([card])
-        
-        logging.info("End stream handler completed successfully with Adaptive Card")
-    except Exception as e:
-        logging.error(f"Error in end_stream_handler: {e}")
+
 def update_operation_status(operation_id: str, status: str, progress: float, message: str):
     """Update the status of a long-running operation."""
     operation_statuses[operation_id] = {
@@ -831,8 +627,24 @@ async def bot_logic(turn_context: TurnContext):
                 active_streamer = active_streamers.get(conversation_id)
                 
             # If there's an active streamer, update the informative message to show progress
-            if active_streamer and active_streamer.active and not active_streamer.complete:
-                await active_streamer.send_informative_update(f"Still working... ({queue_length} new message(s) queued)")
+            if active_streamer and not active_streamer.complete:
+                # Add an informative message to the stream
+                activity = Activity(
+                    type=ActivityTypes.typing,
+                    text=f"Still working... ({queue_length} new message(s) queued)",
+                    channel_id="msteams",
+                    entities=[{
+                        "type": "streaminfo",
+                        "streamType": "continue"
+                    }]
+                )
+                
+                if active_streamer.stream_id:
+                    activity.entities[0]["streamId"] = active_streamer.stream_id
+                    activity.entities[0]["streamSequence"] = active_streamer.sequence_id
+                    active_streamer.sequence_id += 1
+                
+                await turn_context.send_activity(activity)
             
             return
         
@@ -1045,8 +857,15 @@ async def handle_file_upload(turn_context: TurnContext, state, message_text=None
 async def process_uploaded_file(turn_context: TurnContext, state, file_path: str, filename: str, message_text: str = None):
     """Process an uploaded file after it's been downloaded, with optional message text"""
     # Initialize streaming response
-    streamer = TeamsStreamingResponse(turn_context)
-    await streamer.initialize()
+    streamer = StreamingResponse(turn_context)
+    
+    # Start the stream with loading message
+    streamer.start("Processing your file...")
+    
+    # Register this streamer in active streamers dict
+    conversation_id = TurnContext.get_conversation_reference(turn_context.activity).conversation.id
+    with active_streamers_lock:
+        active_streamers[conversation_id] = streamer
     
     # If no assistant yet, initialize chat first
     if not state["assistant_id"]:
@@ -1058,7 +877,7 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
             file_content = file.read()
             
             # Update streaming with progress
-            await streamer.send_informative_update(f"Processing file: '{filename}'...")
+            streamer.update("Processing file: '{}'...".format(filename))
             
             # Check file type
             file_ext = os.path.splitext(filename)[1].lower()
@@ -1067,7 +886,7 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
             is_csv_excel = file_ext in ['.csv', '.xlsx', '.xls', '.xlsm']
             
             if is_csv_excel:
-                await streamer.send_final_message("Sorry, CSV and Excel files are not supported. Please upload PDF, DOC, DOCX, or TXT files only.")
+                streamer.complete("Sorry, CSV and Excel files are not supported. Please upload PDF, DOC, DOCX, or TXT files only.")
                 return
             
             # Process based on file type
@@ -1075,7 +894,7 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
             
             if is_image:
                 # Update streaming with progress
-                await streamer.send_informative_update(f"Analyzing image '{filename}'...")
+                streamer.update("Analyzing image '{}'...".format(filename))
                 
                 # Analyze image - same as before but add message text if provided
                 analysis_text = await image_analysis_internal(file_content, filename)
@@ -1108,16 +927,15 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                     
                     # Update streaming with final response
                     final_message = f"Image '{filename}' processed successfully!\n\nHere's my analysis of the image:\n\n{analysis_text}"
-                    await streamer.queue_update(final_message)
-                    await streamer.send_final_message()
+                    streamer.complete(final_message)
                 else:
-                    await streamer.send_final_message("Cannot process image: No active conversation session.")
+                    streamer.complete("Cannot process image: No active conversation session.")
                     
             elif is_document:
                 # Use the new direct file upload approach for documents
                 if state["assistant_id"] and state["session_id"]:
                     # Update streaming with progress
-                    await streamer.send_informative_update(f"Uploading document '{filename}'...")
+                    streamer.update("Uploading document '{}'...".format(filename))
                     
                     # Upload the file directly to the thread
                     if message_text:
@@ -1127,7 +945,7 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                     
                     # Use the new OpenAI direct file upload approach
                     try:
-                        await streamer.send_informative_update(f"Attaching document to conversation...")
+                        streamer.update("Attaching document to conversation...")
                         
                         result = await upload_file_to_openai_thread(
                             client,
@@ -1152,12 +970,11 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                         )
                         
                         # Send final streaming message
-                        await streamer.queue_update(f"Document '{filename}' uploaded successfully! You can now ask questions about it.")
-                        await streamer.send_final_message()
+                        streamer.complete(f"Document '{filename}' uploaded successfully! You can now ask questions about it.")
                         
                     except Exception as upload_error:
                         logger.error(f"Error uploading file to OpenAI: {str(upload_error)}")
-                        await streamer.send_informative_update(f"Error uploading document. Trying alternate method...")
+                        streamer.update("Error uploading document. Trying alternate method...")
                         
                         # Fall back to vector store approach if direct upload fails
                         logger.info(f"Falling back to vector store approach for document '{filename}'")
@@ -1172,13 +989,13 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                             vector_store_id = state["vector_store_id"]
                             if not vector_store_id:
                                 # Create a new vector store if needed
-                                await streamer.send_informative_update(f"Creating storage for the document...")
+                                streamer.update("Creating storage for the document...")
                                 vector_store = client.beta.vector_stores.create(name=f"Assistant_{state['assistant_id']}_Store")
                                 vector_store_id = vector_store.id
                                 state["vector_store_id"] = vector_store_id
                             
                             # Upload to vector store
-                            await streamer.send_informative_update(f"Uploading document to storage...")
+                            streamer.update("Uploading document to storage...")
                             with open(temp_path, "rb") as file_stream:
                                 file_batch = client.beta.vector_stores.file_batches.upload_and_poll(
                                     vector_store_id=vector_store_id,
@@ -1203,7 +1020,7 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                                     break
                             
                             if not has_file_search:
-                                await streamer.send_informative_update(f"Configuring assistant to access your document...")
+                                streamer.update("Configuring assistant to access your document...")
                                 current_tools = list(assistant_obj.tools)
                                 current_tools.append({"type": "file_search"})
                                 
@@ -1228,29 +1045,26 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                             state["uploaded_files"].append(filename)
                             
                             # Send final success message
-                            await streamer.queue_update(f"Document '{filename}' uploaded to vector store successfully as a fallback method. You can now ask questions about it.")
-                            await streamer.send_final_message()
+                            streamer.complete(f"Document '{filename}' uploaded to vector store successfully as a fallback method. You can now ask questions about it.")
                             
                         except Exception as fallback_error:
-                            await streamer.queue_update(f"Failed to upload document via fallback method: {str(fallback_error)}")
-                            await streamer.send_final_message()
+                            streamer.complete(f"Failed to upload document via fallback method: {str(fallback_error)}")
                         finally:
                             # Clean up temp file
                             if os.path.exists(temp_path):
                                 os.remove(temp_path)
                 else:
-                    await streamer.send_final_message("Cannot process document: No active assistant or session.")
+                    streamer.complete("Cannot process document: No active assistant or session.")
             else:
-                await streamer.send_final_message(f"Unsupported file type: {file_ext}. Please upload PDF, DOC, DOCX, TXT files, or images.")
+                streamer.complete(f"Unsupported file type: {file_ext}. Please upload PDF, DOC, DOCX, TXT files, or images.")
     except Exception as e:
         logger.error(f"Error processing file '{filename}': {e}")
         traceback.print_exc()
         
         # Try to send final message through streamer first
         try:
-            if streamer and streamer.active and not streamer.complete:
-                await streamer.queue_update(f"Error processing file: {str(e)}")
-                await streamer.send_final_message()
+            if streamer and not streamer.complete:
+                streamer.complete(f"Error processing file: {str(e)}")
             else:
                 await turn_context.send_activity(f"Error processing file: {str(e)}")
         except:
@@ -1263,6 +1077,11 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                 os.remove(file_path)
             except OSError as e:
                 logger.error(f"Error removing file {file_path}: {e}")
+                
+        # Clean up streamer
+        with active_streamers_lock:
+            if conversation_id in active_streamers:
+                del active_streamers[conversation_id]
 
 # Function to send file to Teams
 async def send_file_to_teams(turn_context: TurnContext, filename: str):
@@ -1490,13 +1309,17 @@ async def handle_text_message(turn_context: TurnContext, state):
     # Record this user's message processing (audit trail)
     logging.info(f"Processing message from user {user_id} in conversation {conversation_id}: {user_message[:50]}...")
     
-    # Initialize streaming response handler
-    streamer = TeamsStreamingResponse(turn_context)
-    await streamer.initialize()
+    # Initialize streaming response
+    streamer = StreamingResponse(turn_context)
+    streamer.start("Processing your message...")
+    
+    # Register this streamer in active streamers dict
+    with active_streamers_lock:
+        active_streamers[conversation_id] = streamer
     
     # If no assistant yet, initialize chat with the message as context
     if not stored_assistant_id:
-        await streamer.send_informative_update("Setting up a new conversation...")
+        streamer.update("Setting up a new conversation...")
         await initialize_chat(turn_context, state, context=user_message)
         return
     
@@ -1509,7 +1332,7 @@ async def handle_text_message(turn_context: TurnContext, state):
         client = create_client()
         
         # Send informative update about checking context
-        await streamer.send_informative_update("Checking conversation context...")
+        streamer.update("Checking conversation context...")
         
         summarized = await summarize_thread_if_needed(client, stored_session_id, state, threshold=30)
         
@@ -1518,7 +1341,7 @@ async def handle_text_message(turn_context: TurnContext, state):
             with conversation_states_lock:
                 stored_session_id = state.get("session_id")
                 
-            await streamer.send_informative_update("Summarized our previous conversation to maintain context while keeping the conversation focused.")
+            streamer.update("Summarized our previous conversation to maintain context while keeping the conversation focused.")
     
     # Mark thread as busy (thread-safe)
     with conversation_states_lock:
@@ -1533,7 +1356,7 @@ async def handle_text_message(turn_context: TurnContext, state):
         client = create_client()
         
         # Send progress update
-        await streamer.send_informative_update("Validating conversation resources...")
+        streamer.update("Validating conversation resources...")
         
         validation = await validate_resources(client, current_session_id, stored_assistant_id)
         
@@ -1542,14 +1365,13 @@ async def handle_text_message(turn_context: TurnContext, state):
             logging.warning(f"Resource validation failed for user {user_id}: thread_valid={validation['thread_valid']}, assistant_valid={validation['assistant_valid']}")
             
             # Send error message through streamer and end streaming
-            await streamer.queue_update("I encountered an issue with our conversation resources. Creating a fresh session...")
-            await streamer.send_final_message()
+            streamer.complete("I encountered an issue with our conversation resources. Creating a fresh session...")
             
             # Force recovery
             raise Exception("Invalid conversation resources detected - forcing recovery")
         
         # Send progress update
-        await streamer.send_informative_update("Processing your message...")
+        streamer.update("Processing your message...")
         
         # Add message to thread
         client.beta.threads.messages.create(
@@ -1602,9 +1424,8 @@ async def handle_text_message(turn_context: TurnContext, state):
                         
                         if partial_response.strip():
                             # We have a partial response to send
-                            await streamer.queue_update(partial_response)
-                            await streamer.queue_update("\n\n[Note: This is a partial response as you've sent a new message.]")
-                            await streamer.send_final_message()
+                            partial_response += "\n\n[Note: This is a partial response as you've sent a new message.]"
+                            streamer.complete(partial_response)
                             
                             # Update state
                             with conversation_states_lock:
@@ -1631,13 +1452,13 @@ async def handle_text_message(turn_context: TurnContext, state):
             if current_time - last_progress_update >= progress_update_interval:
                 # Update progress message based on elapsed time
                 if elapsed_time < 5:
-                    await streamer.send_informative_update("Processing your message...")
+                    streamer.update("Processing your message...")
                 elif elapsed_time < 15:
-                    await streamer.send_informative_update("Thinking about your question...")
+                    streamer.update("Thinking about your question...")
                 elif elapsed_time < 30:
-                    await streamer.send_informative_update("Still working on a comprehensive response...")
+                    streamer.update("Still working on a comprehensive response...")
                 else:
-                    await streamer.send_informative_update(f"This is taking longer than expected, but I'm still working on it... ({elapsed_time}s)")
+                    streamer.update(f"This is taking longer than expected, but I'm still working on it... ({elapsed_time}s)")
                 
                 last_progress_update = current_time
             
@@ -1662,19 +1483,16 @@ async def handle_text_message(turn_context: TurnContext, state):
                         if content_part.type == 'text':
                             response_text += content_part.text.value
                     
-                    # Stream full response through streamer
-                    await streamer.queue_update(response_text)
-                    await streamer.send_final_message()
+                    # Complete streamer with full response
+                    streamer.complete(response_text)
                 else:
-                    await streamer.queue_update("I processed your request, but couldn't generate a proper response.")
-                    await streamer.send_final_message()
+                    streamer.complete("I processed your request, but couldn't generate a proper response.")
                 
                 break
             
             elif run_status.status in ["failed", "cancelled", "expired"]:
                 logging.error(f"Run ended with status: {run_status.status}")
-                await streamer.queue_update(f"Sorry, I encountered an error and couldn't complete your request. Run status: {run_status.status}. Please try again.")
-                await streamer.send_final_message()
+                streamer.complete(f"Sorry, I encountered an error and couldn't complete your request. Run status: {run_status.status}. Please try again.")
                 break
             
             await asyncio.sleep(wait_interval)
@@ -1683,8 +1501,7 @@ async def handle_text_message(turn_context: TurnContext, state):
         # Handle timeout
         if elapsed_time >= max_wait_time:
             logging.warning(f"Run {run_id} timed out after {max_wait_time} seconds")
-            await streamer.queue_update("I'm sorry, it's taking longer than expected to generate a response. Please try again or rephrase your question.")
-            await streamer.send_final_message()
+            streamer.complete("I'm sorry, it's taking longer than expected to generate a response. Please try again or rephrase your question.")
             
             # Try to cancel the run
             try:
@@ -1703,6 +1520,11 @@ async def handle_text_message(turn_context: TurnContext, state):
         
         if current_session_id in active_runs:
             del active_runs[current_session_id]
+        
+        # Clean up streamer reference
+        with active_streamers_lock:
+            if conversation_id in active_streamers:
+                del active_streamers[conversation_id]
         
         # Process any queued messages
         with pending_messages_lock:
@@ -1728,14 +1550,18 @@ async def handle_text_message(turn_context: TurnContext, state):
         if current_session_id in active_runs:
             del active_runs[current_session_id]
             
+        # Clean up streamer reference
+        with active_streamers_lock:
+            if conversation_id in active_streamers:
+                del active_streamers[conversation_id]
+            
         # Don't show raw error details to users
         logging.error(f"Error in handle_text_message for user {user_id}: {str(e)}")
         traceback.print_exc()
         
         # Send error through streamer if active
-        if streamer and streamer.active and not streamer.complete:
-            await streamer.queue_update("I'm sorry, I encountered a problem while processing your message. Please try again.")
-            await streamer.send_final_message()
+        if streamer:
+            streamer.complete("I'm sorry, I encountered a problem while processing your message. Please try again.")
         else:
             await turn_context.send_activity("I'm sorry, I encountered a problem while processing your message. Please try again.")
 
@@ -1772,8 +1598,8 @@ async def initialize_chat(turn_context: TurnContext, state=None, context=None):
                     pending_messages[conversation_id].clear()
     
     # Create a streamer for a better user experience
-    streamer = TeamsStreamingResponse(turn_context)
-    await streamer.initialize()
+    streamer = StreamingResponse(turn_context)
+    streamer.start("Creating a new conversation...")
     
     try:
         # Always verify user before proceeding
@@ -1795,7 +1621,7 @@ async def initialize_chat(turn_context: TurnContext, state=None, context=None):
                 state = conversation_states[conversation_id]
                 
         # Send typing indicator
-        await streamer.send_informative_update("Creating a new conversation...")
+        streamer.update("Creating a new conversation...")
         
         # Log initialization attempt with user details for traceability
         logger.info(f"Initializing chat for user {user_id} in conversation {conversation_id} with context: {context}")
@@ -1880,15 +1706,14 @@ Remember to be thorough yet efficient with your responses, anticipating follow-u
         
         # Create a vector store
         try:
-            await streamer.send_informative_update("Creating storage resources...")
+            streamer.update("Creating storage resources...")
             vector_store = client.beta.vector_stores.create(
                 name=f"user_{user_id}_convo_{conversation_id}_{int(time.time())}"
             )
             logging.info(f"Created vector store: {vector_store.id} for user {user_id}")
         except Exception as e:
             logging.error(f"Failed to create vector store for user {user_id}: {e}")
-            await streamer.queue_update("I encountered an error while setting up your conversation storage.")
-            await streamer.send_final_message()
+            streamer.complete("I encountered an error while setting up your conversation storage.")
             raise HTTPException(status_code=500, detail="Failed to create vector store")
 
         # Include file_search tool
@@ -1899,7 +1724,7 @@ Remember to be thorough yet efficient with your responses, anticipating follow-u
 
         # Create the assistant with a unique name including user identifiers
         try:
-            await streamer.send_informative_update("Creating your personal assistant...")
+            streamer.update("Creating your personal assistant...")
             unique_name = f"pm_copilot_user_{user_id}_convo_{conversation_id}_{int(time.time())}"
             assistant = client.beta.assistants.create(
                 name=unique_name,
@@ -1911,19 +1736,17 @@ Remember to be thorough yet efficient with your responses, anticipating follow-u
             logging.info(f'Created assistant {assistant.id} for user {user_id}')
         except Exception as e:
             logging.error(f"Failed to create assistant for user {user_id}: {e}")
-            await streamer.queue_update("I encountered an error while creating your personal assistant.")
-            await streamer.send_final_message()
+            streamer.complete("I encountered an error while creating your personal assistant.")
             raise HTTPException(status_code=500, detail=f"Failed to create assistant: {e}")
 
         # Create a thread
         try:
-            await streamer.send_informative_update("Setting up your conversation...")
+            streamer.update("Setting up your conversation...")
             thread = client.beta.threads.create()
             logging.info(f"Created thread {thread.id} for user {user_id}")
         except Exception as e:
             logging.error(f"Failed to create thread for user {user_id}: {e}")
-            await streamer.queue_update("I encountered an error while setting up your conversation thread.")
-            await streamer.send_final_message()
+            streamer.complete("I encountered an error while setting up your conversation thread.")
             raise HTTPException(status_code=500, detail=f"Failed to create thread: {e}")
 
         # Update state with new resources
@@ -1937,7 +1760,7 @@ Remember to be thorough yet efficient with your responses, anticipating follow-u
             
         # If context is provided, add it as user persona context
         if context:
-            await streamer.send_informative_update("Adding your context to the conversation...")
+            streamer.update("Adding your context to the conversation...")
             await update_context_internal(client, thread.id, context)
             
         # Compose greeting messages
@@ -1947,8 +1770,7 @@ Remember to be thorough yet efficient with your responses, anticipating follow-u
             welcome_message += f"\n\nI've initialized with your context: '{context}'"
         
         # Send final welcome message through streamer
-        await streamer.queue_update(welcome_message)
-        await streamer.send_final_message()
+        streamer.complete(welcome_message)
             
         # Also process the first message if context was provided
         if context:
@@ -1957,9 +1779,8 @@ Remember to be thorough yet efficient with your responses, anticipating follow-u
             
     except Exception as e:
         # Try to send error through streamer if active
-        if streamer and streamer.active and not streamer.complete:
-            await streamer.queue_update(f"Error initializing chat: {str(e)}")
-            await streamer.send_final_message()
+        if streamer:
+            streamer.complete(f"Error initializing chat: {str(e)}")
         else:
             await turn_context.send_activity(f"Error initializing chat: {str(e)}")
             
@@ -1970,14 +1791,11 @@ Remember to be thorough yet efficient with your responses, anticipating follow-u
 async def send_message(turn_context: TurnContext, state):
     try:
         # Create streaming response handler
-        streamer = TeamsStreamingResponse(turn_context)
-        await streamer.initialize()
+        streamer = StreamingResponse(turn_context)
+        streamer.start("Processing your request...")
         
         # Call internal function directly to get latest message
         client = create_client()
-        
-        # Send informative update
-        await streamer.send_informative_update("Processing your request...")
         
         # Create a run to process the current thread state
         run = client.beta.threads.runs.create(
@@ -1997,11 +1815,11 @@ async def send_message(turn_context: TurnContext, state):
             current_time = time.time()
             if current_time - last_progress_update >= progress_update_interval:
                 if elapsed_time < 10:
-                    await streamer.send_informative_update("Analyzing your request...")
+                    streamer.update("Analyzing your request...")
                 elif elapsed_time < 30:
-                    await streamer.send_informative_update("Working on a comprehensive response...")
+                    streamer.update("Working on a comprehensive response...")
                 else:
-                    await streamer.send_informative_update(f"Still processing... ({elapsed_time}s)")
+                    streamer.update(f"Still processing... ({elapsed_time}s)")
                 
                 last_progress_update = current_time
             
@@ -2028,19 +1846,16 @@ async def send_message(turn_context: TurnContext, state):
                         if content_part.type == 'text':
                             response_text += content_part.text.value
                     
-                    # Send through streamer
-                    await streamer.queue_update(response_text)
-                    await streamer.send_final_message()
+                    # Complete the stream with the response
+                    streamer.complete(response_text)
                 else:
-                    await streamer.queue_update("I processed your request, but couldn't generate a response.")
-                    await streamer.send_final_message()
+                    streamer.complete("I processed your request, but couldn't generate a response.")
                 
                 break
             
             elif run_status.status in ["failed", "cancelled", "expired"]:
                 logging.error(f"Run ended with status: {run_status.status}")
-                await streamer.queue_update(f"Sorry, I encountered an error processing your request. Run status: {run_status.status}. Please try again.")
-                await streamer.send_final_message()
+                streamer.complete(f"Sorry, I encountered an error processing your request. Run status: {run_status.status}. Please try again.")
                 break
             
             # Wait before next check
@@ -2050,17 +1865,15 @@ async def send_message(turn_context: TurnContext, state):
         # Handle timeout
         if elapsed_time >= max_wait_time:
             logging.warning(f"Run timed out after {max_wait_time} seconds")
-            await streamer.queue_update("I'm sorry, it's taking longer than expected to generate a response. Please try again or rephrase your question.")
-            await streamer.send_final_message()
+            streamer.complete("I'm sorry, it's taking longer than expected to generate a response. Please try again or rephrase your question.")
             
     except Exception as e:
         logging.error(f"Error in send_message: {str(e)}")
         traceback.print_exc()
         
         # Try to send through streamer if active
-        if streamer and streamer.active and not streamer.complete:
-            await streamer.queue_update(f"Error getting response: {str(e)}")
-            await streamer.send_final_message()
+        if streamer:
+            streamer.complete(f"Error getting response: {str(e)}")
         else:
             await turn_context.send_activity(f"Error getting response: {str(e)}")
 
@@ -3017,7 +2830,7 @@ async def conversation(
     try:
         client = create_client()
         response_stream = await process_conversation_internal(client, session, prompt, assistant, stream_output=True)
-        return StreamingResponse(response_stream, media_type="text/event-stream")
+        return FastAPIStreamingResponse(response_stream, media_type="text/event-stream")
     except HTTPException as http_e:
         raise http_e
     except Exception as e:
@@ -3072,7 +2885,6 @@ async def messages(req: Request) -> Response:
         logger.error(f"Error processing message: {str(e)}")
         traceback.print_exc()
         return Response(content=str(e), status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
-
 # Simple health check endpoint
 @app.get("/health")
 async def health_check():
