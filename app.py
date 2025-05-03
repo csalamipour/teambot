@@ -528,23 +528,25 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             # Reset conversation state
             if conversation_id in conversation_states:
                 # Clear any pending messages
-                with pending_messages_lock:
-                    if conversation_id in pending_messages and pending_messages[conversation_id]:
-                        # Gather all queued messages into a combined prompt
-                        all_messages = list(pending_messages[conversation_id])
-                        combined_message = "\n\n".join([f"Question {i+1}: {msg}" for i, msg in enumerate(all_messages)])
-                        
-                        # Clear the queue
-                        pending_messages[conversation_id].clear()
-                        
-                        # Inform user about combined processing
-                        message_count = len(all_messages)
-                        await turn_context.send_activity(f"Now addressing your {message_count} follow-up message(s) together...")
-                        
-                        # Process all messages in one request
-                        next_turn_context = copy.deepcopy(turn_context)
-                        next_turn_context.activity.text = f"Please answer all of these questions:\n{combined_message}"
-                        await handle_text_message(next_turn_context, state)
+                # Process any queued messages
+        with pending_messages_lock:
+            if conversation_id in pending_messages and pending_messages[conversation_id]:
+                # Get the next message
+                next_message = pending_messages[conversation_id].popleft()
+                await turn_context.send_activity("Now addressing your follow-up message...")
+                
+                # Save original text
+                original_text = turn_context.activity.text
+                
+                try:
+                    # Set the new message text
+                    turn_context.activity.text = next_message
+                    
+                    # Process the message using the same turn context
+                    await handle_text_message(turn_context, state)
+                finally:
+                    # Restore original text
+                    turn_context.activity.text = original_text
                 
                 # Send typing indicator
                 await turn_context.send_activity(create_typing_activity())
