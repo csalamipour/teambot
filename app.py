@@ -377,7 +377,223 @@ async def send_fallback_response(turn_context: TurnContext, user_message: str):
     except Exception as e:
         logging.error(f"Fallback response generation failed: {e}")
         await turn_context.send_activity("I'm experiencing technical difficulties right now. Please try again in a moment.")
+def create_welcome_card():
+    """Creates an enhanced adaptive card that mimics the Copilot interface"""
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.3",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "body": [
+            {
+                "type": "Image",
+                "url": "https://cdn.vectorstock.com/i/500p/33/79/rag-blue-gradient-concept-icon-vector-50763379.jpg",  # Replace with your logo URL
+                "size": "medium",
+                "horizontalAlignment": "center"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Email & Chat Assistant",
+                "weight": "bolder",
+                "size": "large",
+                "horizontalAlignment": "center"
+            },
+            {
+                "type": "Container",
+                "items": [
+                    {
+                        "type": "ColumnSet",
+                        "columns": [
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "✉️ Communicate effectively",
+                                        "weight": "bolder",
+                                        "color": "accent"
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "Create professional email templates",
+                                        "wrap": True,
+                                        "spacing": "small"
+                                    },
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "Create Email",
+                                                "data": {
+                                                    "action": "create_email"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ],
+                                "style": "emphasis",
+                                "separator": True,
+                                "spacing": "medium"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "type": "Container",
+                "items": [
+                    {
+                        "type": "ColumnSet",
+                        "columns": [
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "📄 Analyze documents",
+                                        "weight": "bolder",
+                                        "color": "accent"
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "Upload files to get insights and summaries",
+                                        "wrap": True,
+                                        "spacing": "small"
+                                    },
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "Upload Document",
+                                                "data": {
+                                                    "action": "upload_document"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ],
+                                "style": "emphasis",
+                                "separator": True,
+                                "spacing": "medium"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "type": "Container",
+                "items": [
+                    {
+                        "type": "ColumnSet",
+                        "columns": [
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "🖼️ Process images",
+                                        "weight": "bolder",
+                                        "color": "accent"
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "Upload images for detailed analysis",
+                                        "wrap": True,
+                                        "spacing": "small"
+                                    },
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "Upload Image",
+                                                "data": {
+                                                    "action": "upload_image"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ],
+                                "style": "emphasis",
+                                "separator": True,
+                                "spacing": "medium"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "type": "TextBlock",
+                "text": "Or simply type your question below...",
+                "wrap": True,
+                "horizontalAlignment": "center",
+                "spacing": "large"
+            }
+        ]
+    }
+    
+    return CardFactory.adaptive_card(card)
 
+async def send_welcome_message(turn_context: TurnContext):
+    """Sends an enhanced welcome message when bot is added"""
+    # Send the welcome card
+    reply = _create_reply(turn_context.activity)
+    reply.attachments = [create_welcome_card()]
+    await turn_context.send_activity(reply)
+
+# Add this to your handle_card_actions function
+async def handle_card_actions(turn_context: TurnContext, action_data):
+    """Handles actions from adaptive cards"""
+    try:
+        if action_data.get("action") == "new_chat":
+            # Reset conversation state and initialize new chat
+            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+            conversation_id = conversation_reference.conversation.id
+            
+            if conversation_id in conversation_states:
+                with pending_messages_lock:
+                    if conversation_id in pending_messages:
+                        pending_messages[conversation_id].clear()
+                
+                await turn_context.send_activity(create_typing_activity())
+                await initialize_chat(turn_context, None)
+            else:
+                await initialize_chat(turn_context, None)
+                
+        elif action_data.get("action") == "create_email":
+            # Send email card
+            await send_email_card(turn_context)
+            
+        elif action_data.get("action") == "upload_document" or action_data.get("action") == "upload_image":
+            # Send message instructing how to upload
+            message = "Please use the attachment button in the Teams chat to upload your file."
+            await turn_context.send_activity(message)
+            
+        elif action_data.get("action") == "generate_email":
+            # Extract email details from the action data
+            recipient = action_data.get("recipient", "")
+            subject = action_data.get("subject", "")
+            topic = action_data.get("topic", "")
+            dos = action_data.get("dos", "")
+            donts = action_data.get("donts", "")
+            chain = action_data.get("chain", "")
+            has_attachments = action_data.get("hasAttachments", "false") == "true"
+            
+            # Get conversation state
+            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+            conversation_id = conversation_reference.conversation.id
+            state = conversation_states[conversation_id]
+            
+            # Generate email using AI
+            await generate_email(turn_context, state, recipient, subject, topic, dos, donts, chain, has_attachments)
+            
+    except Exception as e:
+        logging.error(f"Error handling card action: {e}")
+        await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
 def create_new_chat_card():
     """Creates an adaptive card for starting a new chat session with additional options"""
     card = {
@@ -421,95 +637,163 @@ def create_new_chat_card():
         ]
     }
     return CardFactory.adaptive_card(card)
+
 def create_email_card():
-    """Creates an adaptive card for email composition"""
+    """Creates an improved adaptive card for email composition with better styling"""
     card = {
         "type": "AdaptiveCard",
-        "version": "1.0",
+        "version": "1.3",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "body": [
             {
                 "type": "TextBlock",
                 "text": "Email Template Creator",
                 "size": "large",
-                "weight": "bolder"
+                "weight": "bolder",
+                "horizontalAlignment": "center",
+                "color": "accent"
             },
             {
-                "type": "TextBlock",
-                "text": "Recipient",
-                "wrap": True
+                "type": "Container",
+                "style": "emphasis",
+                "spacing": "medium",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Recipient",
+                        "wrap": True,
+                        "weight": "bolder"
+                    },
+                    {
+                        "type": "Input.Text",
+                        "id": "recipient",
+                        "placeholder": "Enter recipient(s)",
+                        "spacing": "small"
+                    }
+                ]
             },
             {
-                "type": "Input.Text",
-                "id": "recipient",
-                "placeholder": "Enter recipient(s)"
+                "type": "Container",
+                "style": "emphasis",
+                "spacing": "medium",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Subject",
+                        "wrap": True,
+                        "weight": "bolder"
+                    },
+                    {
+                        "type": "Input.Text",
+                        "id": "subject",
+                        "placeholder": "Enter email subject",
+                        "spacing": "small"
+                    }
+                ]
             },
             {
-                "type": "TextBlock",
-                "text": "Subject",
-                "wrap": True
+                "type": "Container",
+                "style": "emphasis",
+                "spacing": "medium",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Topic/Purpose",
+                        "wrap": True,
+                        "weight": "bolder"
+                    },
+                    {
+                        "type": "Input.Text",
+                        "id": "topic",
+                        "placeholder": "What is this email about?",
+                        "isMultiline": True,
+                        "spacing": "small"
+                    }
+                ]
             },
             {
-                "type": "Input.Text",
-                "id": "subject",
-                "placeholder": "Enter email subject"
+                "type": "Container",
+                "style": "emphasis",
+                "spacing": "medium",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Do's (Optional)",
+                        "wrap": True,
+                        "weight": "bolder"
+                    },
+                    {
+                        "type": "Input.Text",
+                        "id": "dos",
+                        "placeholder": "Points to include",
+                        "isMultiline": True,
+                        "spacing": "small"
+                    }
+                ]
             },
             {
-                "type": "TextBlock",
-                "text": "Topic/Purpose",
-                "wrap": True
+                "type": "Container",
+                "style": "emphasis",
+                "spacing": "medium",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Don'ts (Optional)",
+                        "wrap": True,
+                        "weight": "bolder"
+                    },
+                    {
+                        "type": "Input.Text",
+                        "id": "donts",
+                        "placeholder": "Points to avoid",
+                        "isMultiline": True,
+                        "spacing": "small"
+                    }
+                ]
             },
             {
-                "type": "Input.Text",
-                "id": "topic",
-                "placeholder": "What is this email about?",
-                "isMultiline": True
-            },
-            {
-                "type": "TextBlock",
-                "text": "Do's (Optional)",
-                "wrap": True
-            },
-            {
-                "type": "Input.Text",
-                "id": "dos",
-                "placeholder": "Points to include",
-                "isMultiline": True
-            },
-            {
-                "type": "TextBlock",
-                "text": "Don'ts (Optional)",
-                "wrap": True
-            },
-            {
-                "type": "Input.Text",
-                "id": "donts",
-                "placeholder": "Points to avoid",
-                "isMultiline": True
-            },
-            {
-                "type": "TextBlock",
-                "text": "Previous Email (for replies)",
-                "wrap": True
-            },
-            {
-                "type": "Input.Text",
-                "id": "chain",
-                "placeholder": "Paste previous email if this is a reply",
-                "isMultiline": True
+                "type": "Container",
+                "style": "emphasis",
+                "spacing": "medium",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Previous Email (for replies)",
+                        "wrap": True,
+                        "weight": "bolder"
+                    },
+                    {
+                        "type": "Input.Text",
+                        "id": "chain",
+                        "placeholder": "Paste previous email if this is a reply",
+                        "isMultiline": True,
+                        "spacing": "small"
+                    }
+                ]
             },
             {
                 "type": "Input.Toggle",
                 "id": "hasAttachments",
                 "title": "Include attachments?",
-                "value": "false"
+                "value": "false",
+                "spacing": "medium"
             }
         ],
         "actions": [
             {
                 "type": "Action.Submit",
                 "title": "Generate Email",
+                "style": "positive",
                 "data": {
                     "action": "generate_email"
+                }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Cancel",
+                "style": "destructive",
+                "data": {
+                    "action": "new_chat"
                 }
             }
         ]
@@ -521,11 +805,67 @@ def create_email_card():
     )
     
     return attachment
+
 async def send_email_card(turn_context: TurnContext):
     """Sends an email composer card to the user"""
     reply = _create_reply(turn_context.activity)
     reply.attachments = [create_email_card()]
     await turn_context.send_activity(reply)
+
+# Example of handling email generation result
+def create_email_result_card(email_text):
+    """Creates a card displaying the generated email with copy options"""
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.3",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "Generated Email Template",
+                "size": "large",
+                "weight": "bolder",
+                "horizontalAlignment": "center",
+                "color": "accent"
+            },
+            {
+                "type": "Container",
+                "style": "emphasis",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": email_text,
+                        "wrap": True,
+                        "spacing": "medium"
+                    }
+                ]
+            }
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": "Create Another Email",
+                "style": "positive",
+                "data": {
+                    "action": "create_email"
+                }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Return to Home",
+                "data": {
+                    "action": "new_chat"
+                }
+            }
+        ]
+    }
+    
+    attachment = Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card
+    )
+    
+    return attachment
 
 async def generate_email(turn_context: TurnContext, state, recipient, subject, topic, dos, donts, chain, has_attachments):
     """Generates an email using AI based on provided parameters"""
@@ -567,39 +907,8 @@ async def generate_email(turn_context: TurnContext, state, recipient, subject, t
     if isinstance(result, dict) and "response" in result:
         email_text = result["response"]
         
-        # Create an email result card
-        email_card = {
-            "type": "AdaptiveCard",
-            "version": "1.0",
-            "body": [
-                {
-                    "type": "TextBlock",
-                    "text": "Generated Email Template",
-                    "size": "large",
-                    "weight": "bolder"
-                },
-                {
-                    "type": "TextBlock",
-                    "text": email_text,
-                    "wrap": True
-                }
-            ],
-            "actions": [
-                {
-                    "type": "Action.Submit",
-                    "title": "Create Another Email",
-                    "data": {
-                        "action": "create_email"
-                    }
-                }
-            ]
-        }
-        
-        # Create attachment
-        attachment = Attachment(
-            content_type="application/vnd.microsoft.card.adaptive",
-            content=email_card
-        )
+        # Use the enhanced email result card
+        attachment = create_email_result_card(email_text)
         
         reply = _create_reply(turn_context.activity)
         reply.attachments = [attachment]
@@ -612,51 +921,6 @@ async def send_new_chat_card(turn_context: TurnContext):
     reply.attachments = [create_new_chat_card()]
     await turn_context.send_activity(reply)
 
-async def handle_card_actions(turn_context: TurnContext, action_data):
-    """Handles actions from adaptive cards"""
-    try:
-        if action_data.get("action") == "new_chat":
-            # Get conversation ID
-            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-            conversation_id = conversation_reference.conversation.id
-            
-            # Reset conversation state
-            if conversation_id in conversation_states:
-                # Clear any pending messages
-                with pending_messages_lock:
-                    if conversation_id in pending_messages:
-                        pending_messages[conversation_id].clear()
-                
-                # Send typing indicator
-                await turn_context.send_activity(create_typing_activity())
-                
-                # Initialize new chat
-                await initialize_chat(turn_context, None)  # Pass None to force new state creation
-            else:
-                await initialize_chat(turn_context, None)
-        elif action_data.get("action") == "generate_email":
-            # Extract email details from the action data
-            recipient = action_data.get("recipient", "")
-            subject = action_data.get("subject", "")
-            topic = action_data.get("topic", "")
-            dos = action_data.get("dos", "")
-            donts = action_data.get("donts", "")
-            chain = action_data.get("chain", "")
-            has_attachments = action_data.get("hasAttachments", "false") == "true"
-            
-            # Get conversation state
-            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-            conversation_id = conversation_reference.conversation.id
-            state = conversation_states[conversation_id]
-            
-            # Generate email using AI
-            await generate_email(turn_context, state, recipient, subject, topic, dos, donts, chain, has_attachments)
-        elif action_data.get("action") == "create_email":
-            # Send a new blank email card
-            await send_email_card(turn_context)
-    except Exception as e:
-        logging.error(f"Error handling card action: {e}")
-        await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
 
 # ----- Teams Bot Logic Functions -----
 
@@ -2713,48 +2977,6 @@ async def send_message(turn_context: TurnContext, state):
             pass  # Last resort is to simply give up
 
 # Send welcome message when bot is added
-async def send_welcome_message(turn_context: TurnContext):
-    welcome_text = (
-        "# Welcome to Emal and Virtual Assistant! 👋\n\n"
-        "I'm here to help you with your email drafting and chat query. I can:\n\n"
-        "- Answer questions about uploaded documents (PDF, DOC, TXT)\n"
-        "- Analyze images and provide insights\n\n"
-        "To get started, you can:\n"
-        "- Send me a message with your request\n"
-        "- Upload a document for analysis\n"
-        "- Type '/email' to create an email template\n\n"
-        "Note: CSV and Excel files are not supported.\n\n"
-        "How can I assist you today?"
-    )
-    
-    await turn_context.send_activity(welcome_text)
-    
-    # Also send the new chat card
-    await send_new_chat_card(turn_context)
-    email_button_card = {
-        "type": "AdaptiveCard",
-        "version": "1.0",
-        "body": [
-            {
-                "type": "TextBlock",
-                "text": "Need to write an email?",
-                "weight": "bolder"
-            }
-        ],
-        "actions": [
-            {
-                "type": "Action.Submit",
-                "title": "Create Email Template",
-                "data": {
-                    "action": "create_email"
-                }
-            }
-        ]
-    }
-    
-    reply = _create_reply(turn_context.activity)
-    reply.attachments = [CardFactory.adaptive_card(email_button_card)]
-    await turn_context.send_activity(reply)
 
 # ----- Common API Functions -----
 
