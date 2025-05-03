@@ -127,14 +127,12 @@ class TeamsStreamingResponse:
         self.turn_context = turn_context
         self.conversation_id = TurnContext.get_conversation_reference(turn_context.activity).conversation.id
         self.message_parts = []
-        self.is_first_update = True
         self.stream_id = None
         self.sequence_number = 1
         self.last_update_time = 0
-        self.min_update_interval = 0.7  # Minimum time between updates in seconds - per Teams guidance
+        self.min_update_interval = 0.7  # Minimum time between updates in seconds
         self.active = True
         self.complete = False
-        self.informative_sent = False
         
     async def initialize(self):
         """Initialize the stream with first informative message"""
@@ -144,15 +142,27 @@ class TeamsStreamingResponse:
         
         # Send initial informative message
         message = "Generating response..."
-        await self._send_streaming_update(message, "informative")
-        self.informative_sent = True
+        await self._send_streaming_update(message, "start")
         
-    async def _send_streaming_update(self, text, stream_type="streaming"):
+    async def _send_streaming_update(self, text, stream_type="continue"):
         """Send a streaming update to Teams with proper sequencing"""
         try:
+            # Verify correct stream types based on activity type
+            if self.complete:
+                if stream_type != "end":
+                    stream_type = "end"  # Force correct type for message activity
+                activity_type = ActivityTypes.message
+            else:
+                if stream_type not in ["start", "continue"]:
+                    if self.stream_id is None:
+                        stream_type = "start"  # First message must be "start"
+                    else:
+                        stream_type = "continue"  # Subsequent messages must be "continue"
+                activity_type = ActivityTypes.typing
+            
             # Create the activity for a streaming update
             activity = Activity(
-                type=ActivityTypes.typing if not self.complete else ActivityTypes.message,
+                type=activity_type,
                 text=text,
                 channel_id="msteams",
                 entities=[{
@@ -176,14 +186,14 @@ class TeamsStreamingResponse:
             # Store the stream ID from the first response
             if self.stream_id is None and response is not None:
                 self.stream_id = response.id
-                logger.info(f"Initialized stream with ID: {self.stream_id}")
+                logging.info(f"Initialized stream with ID: {self.stream_id}")
                 
             # Update last update time
             self.last_update_time = time.time()
             
             return True
         except Exception as e:
-            logger.error(f"Error sending streaming update: {e}")
+            logging.error(f"Error sending streaming update: {e}")
             self.active = False
             return False
             
@@ -199,7 +209,7 @@ class TeamsStreamingResponse:
             )
             await self.turn_context.send_activity(activity)
         except Exception as e:
-            logger.error(f"Error sending typing indicator: {e}")
+            logging.error(f"Error sending typing indicator: {e}")
     
     async def queue_update(self, text_chunk):
         """Queues and potentially sends a text update"""
@@ -230,7 +240,9 @@ class TeamsStreamingResponse:
         if not self.active or self.complete:
             return False
             
-        return await self._send_streaming_update(message, "informative")
+        # For first message, use "start", otherwise use "continue"
+        stream_type = "start" if self.stream_id is None else "continue"
+        return await self._send_streaming_update(message, stream_type)
         
     async def send_final_message(self, attachments=None):
         """Sends the final complete message as a regular activity"""
@@ -238,7 +250,7 @@ class TeamsStreamingResponse:
             return False
             
         if self.complete:
-            logger.warning("Attempted to send final message for already completed stream")
+            logging.warning("Attempted to send final message for already completed stream")
             return False
             
         try:
@@ -255,7 +267,7 @@ class TeamsStreamingResponse:
                 entities=[{
                     "type": "streaminfo",
                     "streamId": self.stream_id,
-                    "streamType": "final"
+                    "streamType": "end"
                 }]
             )
             
@@ -273,7 +285,7 @@ class TeamsStreamingResponse:
             return True
             
         except Exception as e:
-            logger.error(f"Error sending final streaming message: {e}")
+            logging.error(f"Error sending final streaming message: {e}")
             
             # Try to send as a regular message if streaming fails
             try:
@@ -292,14 +304,13 @@ class TeamsStreamingResponse:
                     
                 return True
             except Exception as fallback_e:
-                logger.error(f"Failed to send final message even as regular message: {fallback_e}")
+                logging.error(f"Failed to send final message even as regular message: {fallback_e}")
                 return False
             finally:
                 # Clean up resources
                 with active_streamers_lock:
                     if self.conversation_id in active_streamers:
                         del active_streamers[self.conversation_id]
-
 async def upload_file_to_openai_thread(client: AzureOpenAI, file_content: bytes, filename: str, thread_id: str, message_content: str = None):
     """
     Uploads a file directly to OpenAI and attaches it to a thread.
