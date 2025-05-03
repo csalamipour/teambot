@@ -713,6 +713,7 @@ def _create_reply(activity, text=None, text_format=None):
     )
 
 # Bot logic handler
+# Modified bot_logic function to properly handle email card submissions
 async def bot_logic(turn_context: TurnContext):
     # Get the conversation reference for later use
     conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
@@ -794,6 +795,20 @@ async def bot_logic(turn_context: TurnContext):
     
     # Handle different activity types
     if turn_context.activity.type == ActivityTypes.message:
+        # First, check if this is a card submission before checking for text content
+        # This is the key fix for email card submissions
+        value_data = getattr(turn_context.activity, 'value', None)
+        if value_data:
+            logging.info(f"Card submission detected: {value_data}")
+            try:
+                # Handle card submission directly
+                await handle_card_actions(turn_context, value_data)
+                return  # Exit early since we've handled the card action
+            except Exception as card_e:
+                logging.error(f"Error handling card submission: {card_e}")
+                await turn_context.send_activity("I had trouble processing your form submission. Please try again.")
+                return
+        
         # Initialize pending messages queue if not exists (thread-safe)
         with pending_messages_lock:
             if conversation_id not in pending_messages:
