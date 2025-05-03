@@ -135,48 +135,7 @@ def create_message_card(message_text):
         "body": [{"type": "TextBlock", "wrap": True, "text": message_text}]
     }
     return CardFactory.adaptive_card(card)
-async def end_stream_handler(
-    context: TurnContext,
-    state: MemoryBase,
-    response: Any,  # Using Any instead of PromptResponse[str] for flexibility
-    streamer: TeamsStreamingResponse,
-):
-    """
-    Handles the end of streaming by creating an Adaptive Card with the response.
-    Called by the Teams AI framework when streaming is complete.
-    
-    Args:
-        context: The turn context
-        state: The conversation state
-        response: The response from the model
-        streamer: The streaming response object
-    """
-    if not streamer:
-        return
-    
-    try:
-        # Create an adaptive card with the full message
-        card = CardFactory.adaptive_card(
-            {
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.6",
-                "type": "AdaptiveCard",
-                "body": [
-                    {
-                        "type": "TextBlock", 
-                        "wrap": True, 
-                        "text": streamer.message
-                    }
-                ]
-            }
-        )
-        
-        # Set the attachment on the streamer
-        streamer.set_attachments([card])
-        
-        logging.info("End stream handler completed successfully with Adaptive Card")
-    except Exception as e:
-        logging.error(f"Error in end_stream_handler: {e}")
+
 class TeamsStreamingResponse:
     """Handles streaming responses to Teams using proper Teams streaming protocols with Teams AI compatibility"""
     
@@ -452,7 +411,48 @@ async def upload_file_to_openai_thread(client: AzureOpenAI, file_content: bytes,
         logging.error(f"Error uploading file to OpenAI: {str(e)}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to upload file to OpenAI: {str(e)}")
-
+async def end_stream_handler(
+    context: TurnContext,
+    state: MemoryBase,
+    response: Any,  # Using Any instead of PromptResponse[str] for flexibility
+    streamer: TeamsStreamingResponse,
+):
+    """
+    Handles the end of streaming by creating an Adaptive Card with the response.
+    Called by the Teams AI framework when streaming is complete.
+    
+    Args:
+        context: The turn context
+        state: The conversation state
+        response: The response from the model
+        streamer: The streaming response object
+    """
+    if not streamer:
+        return
+    
+    try:
+        # Create an adaptive card with the full message
+        card = CardFactory.adaptive_card(
+            {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.6",
+                "type": "AdaptiveCard",
+                "body": [
+                    {
+                        "type": "TextBlock", 
+                        "wrap": True, 
+                        "text": streamer.message
+                    }
+                ]
+            }
+        )
+        
+        # Set the attachment on the streamer
+        streamer.set_attachments([card])
+        
+        logging.info("End stream handler completed successfully with Adaptive Card")
+    except Exception as e:
+        logging.error(f"Error in end_stream_handler: {e}")
 def update_operation_status(operation_id: str, status: str, progress: float, message: str):
     """Update the status of a long-running operation."""
     operation_statuses[operation_id] = {
