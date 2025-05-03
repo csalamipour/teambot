@@ -1287,9 +1287,262 @@ async def handle_text_message(turn_context: TurnContext, state):
         logging.error(f"Error in handle_text_message for user {user_id}: {str(e)}")
         traceback.print_exc()
         await turn_context.send_activity("I'm sorry, I encountered a problem while processing your message. Please try again.")
-
-# Implement streaming with Teams AI integration
 async def stream_response_with_teams_ai(turn_context: TurnContext, state, user_message):
+    """
+    Stream responses using the Teams AI library's StreamingResponse class with direct OpenAI streaming.
+    
+    Args:
+        turn_context: The TurnContext object
+        state: The conversation state
+        user_message: The user's message
+    """
+    try:
+        client = create_client()
+        thread_id = state["session_id"]
+        assistant_id = state["assistant_id"]
+        
+        # Mark run as active in state
+        state["active_run"] = True
+        active_runs[thread_id] = True
+        
+        # Create a StreamingResponse instance from Teams AI
+        streamer = StreamingResponse(turn_context)
+        
+        # Send initial informative update
+        streamer.queue_informative_update("Processing your request...")
+        
+        try:
+            # First, add the user message to the thread if provided
+            if user_message:
+                try:
+                    # Check for any existing active runs first
+                    try:
+                        runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
+                        if runs.data:
+                            latest_run = runs.data[0]
+                            if latest_run.status in ["in_progress", "queued", "requires_action"]:
+                                active_run_id = latest_run.id
+                                logging.info(f"Found existing active run {active_run_id} with status {latest_run.status}")
+                                
+                                # Cancel the active run
+                                client.beta.threads.runs.cancel(thread_id=thread_id, run_id=active_run_id)
+                                logging.info(f"Requested cancellation of pre-existing run {active_run_id}")
+                                
+                                # Wait briefly for cancellation to take effect
+                                await asyncio.sleep(2)
+                    except Exception as check_e:
+                        logging.warning(f"Error checking for existing runs: {check_e}")
+                    
+                    # Add the user message to the thread
+                    client.beta.threads.messages.create(
+                        thread_id=thread_id,
+                        role="user",
+                        content=user_message
+                    )
+                    logging.info(f"Added user message to thread {thread_id}")
+                    
+                except Exception as msg_e:
+                    if "while a run" in str(msg_e):
+                        logging.warning(f"Could not add message due to active run: {msg_e}")
+                        # Create a new thread as fallback
+                        new_thread = client.beta.threads.create()
+                        thread_id = new_thread.id
+                        state["session_id"] = thread_id
+                        logging.info(f"Created new thread {thread_id} due to message add failure")
+                        
+                        # Add message to the new thread
+                        client.beta.threads.messages.create(
+                            thread_id=thread_id,
+                            role="user",
+                            content=user_message
+                        )
+                        logging.info(f"Added user message to new thread {thread_id}")
+                    else:
+                        logging.error(f"Error adding message to thread: {msg_e}")
+                        await streamer.end_stream()
+                        await turn_context.send_activity("I'm having trouble processing your request. Please try again.")
+                        return
+            
+            # Now create a run with stream=True for direct streaming
+            run = client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                stream=True
+            )
+            
+            # Variables to track state
+            buffer = ""
+            last_queue_time = time.time()
+            min_chunk_interval = 1.5  # Minimum time between chunks in seconds (Teams rate limit)
+            
+            # Handle streaming based on available methods
+            if hasattr(run, "iter_chunks"):
+                # Using iter_chunks for streaming
+                logging.info(f"Using iter_chunks streaming for thread {thread_id}")
+                
+                for chunk in run.iter_chunks():
+                    text_piece = ""
+                    
+                    # Extract text from chunk
+                    if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
+                        delta = chunk.data.delta
+                        if hasattr(delta, "content") and delta.content:
+                            for content in delta.content:
+                                if content.type == "text" and hasattr(content.text, "value"):
+                                    text_piece = content.text.value
+                    
+                    # Only process non-empty text
+                    if text_piece:
+                        buffer += text_piece
+                        
+                        # Check if enough time has passed since the last queue
+                        current_time = time.time()
+                        time_since_last_queue = current_time - last_queue_time
+                        
+                        # Queue text at natural breaks or when we have enough delay
+                        if (time_since_last_queue >= min_chunk_interval and 
+                            (buffer.endswith(".") or buffer.endswith("!") or buffer.endswith("?") or 
+                             buffer.endswith("\n") or len(buffer) > 100)):
+                            
+                            # Queue the accumulated text
+                            streamer.queue_text_chunk(buffer)
+                            buffer = ""
+                            last_queue_time = current_time
+                            
+                            # Small delay to allow for processing
+                            await asyncio.sleep(0.1)
+                
+                # Queue any remaining text
+                if buffer:
+                    streamer.queue_text_chunk(buffer)
+                
+            elif hasattr(run, "events"):
+                # Using events for streaming
+                logging.info(f"Using events streaming for thread {thread_id}")
+                
+                for event in run.events:
+                    if event.event == "thread.message.delta":
+                        if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
+                            for content in event.data.delta.content:
+                                if content.type == "text" and hasattr(content.text, "value"):
+                                    text_piece = content.text.value
+                                    
+                                    if text_piece:
+                                        buffer += text_piece
+                                        
+                                        # Check for natural breaks and time constraints
+                                        current_time = time.time()
+                                        time_since_last_queue = current_time - last_queue_time
+                                        
+                                        if (time_since_last_queue >= min_chunk_interval and 
+                                            (buffer.endswith(".") or buffer.endswith("!") or buffer.endswith("?") or 
+                                             buffer.endswith("\n") or len(buffer) > 100)):
+                                            
+                                            # Queue the accumulated text
+                                            streamer.queue_text_chunk(buffer)
+                                            buffer = ""
+                                            last_queue_time = current_time
+                                            
+                                            # Small delay to allow for processing
+                                            await asyncio.sleep(0.1)
+                
+                # Queue any remaining text
+                if buffer:
+                    streamer.queue_text_chunk(buffer)
+                
+            else:
+                # Fallback to a different approach if direct streaming isn't available
+                logging.warning(f"No streaming methods available, using fallback approach for thread {thread_id}")
+                
+                # Get the run ID for polling
+                run_id = run.id
+                
+                # Polling approach for older API versions that don't support direct streaming
+                streamer.queue_informative_update("Working on your response...")
+                
+                # Create a run without streaming if the streaming run didn't work
+                non_streaming_run = client.beta.threads.runs.create(
+                    thread_id=thread_id,
+                    assistant_id=assistant_id
+                )
+                run_id = non_streaming_run.id
+                
+                # Poll at reasonable intervals
+                while True:
+                    # Check the run status
+                    run_status = client.beta.threads.runs.retrieve(
+                        thread_id=thread_id,
+                        run_id=run_id
+                    )
+                    
+                    if run_status.status == "completed":
+                        # Get the final message
+                        messages = client.beta.threads.messages.list(
+                            thread_id=thread_id,
+                            order="desc",
+                            limit=1
+                        )
+                        
+                        if messages.data:
+                            message_text = ""
+                            latest_message = messages.data[0]
+                            
+                            for content_part in latest_message.content:
+                                if content_part.type == 'text':
+                                    message_text += content_part.text.value
+                            
+                            # Send the complete message
+                            streamer.queue_text_chunk(message_text)
+                        break
+                        
+                    elif run_status.status in ["failed", "cancelled", "expired"]:
+                        streamer.queue_text_chunk(f"Sorry, I encountered a problem (status: {run_status.status}). Please try again.")
+                        break
+                    
+                    # Wait before checking again
+                    await asyncio.sleep(2)
+            
+            # Enable feedback loop for the final message
+            streamer.set_feedback_loop(True)
+            streamer.set_generated_by_ai_label(True)
+            
+            # End the stream
+            await streamer.end_stream()
+            
+        except Exception as e:
+            logging.error(f"Error in streaming: {str(e)}")
+            traceback.print_exc()
+            
+            try:
+                # Try to end the stream gracefully
+                streamer.queue_text_chunk("I'm sorry, I encountered an error while processing your request.")
+                await streamer.end_stream()
+            except Exception as stream_end_error:
+                # If that fails, just send a direct message
+                logging.error(f"Error ending stream: {stream_end_error}")
+                await turn_context.send_activity("I encountered an error while processing your request. Please try again.")
+        
+        finally:
+            # Ensure run is marked as complete
+            with conversation_states_lock:
+                state["active_run"] = False
+            if thread_id in active_runs:
+                del active_runs[thread_id]
+    
+    except Exception as outer_e:
+        logging.error(f"Outer error in stream_response_with_teams_ai: {str(outer_e)}")
+        traceback.print_exc()
+        
+        # Send a user-friendly error message
+        await turn_context.send_activity("I encountered a problem while processing your request. Please try again or start a new chat.")
+        
+        # Mark as complete
+        with conversation_states_lock:
+            state["active_run"] = False
+        if state.get("session_id") in active_runs:
+            del active_runs[state.get("session_id", "")]
+# Implement streaming with Teams AI integration
+async def stream_response_with_teams_ai_old(turn_context: TurnContext, state, user_message):
     """
     Stream responses using the Teams AI library's StreamingResponse class.
     
