@@ -119,7 +119,15 @@ def create_client():
         api_key=AZURE_API_KEY,
         api_version=AZURE_API_VERSION,
     )
-
+def create_message_card(message_text):
+    """Creates an adaptive card for displaying message text"""
+    card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.6",
+        "type": "AdaptiveCard",
+        "body": [{"type": "TextBlock", "wrap": True, "text": message_text}]
+    }
+    return CardFactory.adaptive_card(card)
 class TeamsStreamingResponse:
     """Handles streaming responses to Teams using proper Teams streaming protocols"""
     
@@ -245,7 +253,7 @@ class TeamsStreamingResponse:
         return await self._send_streaming_update(message, stream_type)
         
     async def send_final_message(self, attachments=None):
-        """Sends the final complete message as a regular activity"""
+        """Sends the final complete message as an adaptive card with proper stream ending"""
         if not self.active:
             return False
             
@@ -259,22 +267,28 @@ class TeamsStreamingResponse:
             # Mark stream as complete before sending (avoid race conditions)
             self.complete = True
             
+            # Create an adaptive card with the message
+            message_card = create_message_card(complete_message)
+            
+            # Create attachments list with our card first
+            all_attachments = [message_card]
+            
+            # Add any additional attachments if provided
+            if attachments:
+                all_attachments.extend(attachments)
+            
             # Send the final message with proper streaming format
             activity = Activity(
                 type=ActivityTypes.message,
-                text=complete_message,
                 channel_id="msteams",
+                attachments=all_attachments,
                 entities=[{
                     "type": "streaminfo",
                     "streamId": self.stream_id,
                     "streamType": "end"
                 }]
             )
-            
-            # Add attachments if any
-            if attachments:
-                activity.attachments = attachments
-                
+                    
             await self.turn_context.send_activity(activity)
             
             # Clean up resources
@@ -291,17 +305,17 @@ class TeamsStreamingResponse:
             try:
                 complete_message = self.get_full_message()
                 
-                # Split long messages if needed (Teams has message size limits)
-                if len(complete_message) > 7000:
-                    chunks = [complete_message[i:i+7000] for i in range(0, len(complete_message), 7000)]
-                    for i, chunk in enumerate(chunks):
-                        if i == 0:
-                            await self.turn_context.send_activity(chunk)
-                        else:
-                            await self.turn_context.send_activity(f"(continued) {chunk}")
-                else:
-                    await self.turn_context.send_activity(complete_message)
-                    
+                # Create an adaptive card
+                message_card = create_message_card(complete_message)
+                
+                # Create a regular message activity with the card
+                activity = Activity(
+                    type=ActivityTypes.message,
+                    channel_id="msteams",
+                    attachments=[message_card]
+                )
+                
+                await self.turn_context.send_activity(activity)
                 return True
             except Exception as fallback_e:
                 logging.error(f"Failed to send final message even as regular message: {fallback_e}")
@@ -529,32 +543,32 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             if conversation_id in conversation_states:
                 # Clear any pending messages
                 # Process any queued messages
-        with pending_messages_lock:
-            if conversation_id in pending_messages and pending_messages[conversation_id]:
-                # Get the next message
-                next_message = pending_messages[conversation_id].popleft()
-                await turn_context.send_activity("Now addressing your follow-up message...")
-                
-                # Save original text
-                original_text = turn_context.activity.text
-                
-                try:
-                    # Set the new message text
-                    turn_context.activity.text = next_message
-                    
-                    # Process the message using the same turn context
-                    await handle_text_message(turn_context, state)
-                finally:
-                    # Restore original text
-                    turn_context.activity.text = original_text
-                
-                # Send typing indicator
-                await turn_context.send_activity(create_typing_activity())
-                
-                # Initialize new chat
-                await initialize_chat(turn_context, None)  # Pass None to force new state creation
-            else:
-                await initialize_chat(turn_context, None)
+                with pending_messages_lock:
+                    if conversation_id in pending_messages and pending_messages[conversation_id]:
+                        # Get the next message
+                        next_message = pending_messages[conversation_id].popleft()
+                        await turn_context.send_activity("Now addressing your follow-up message...")
+                        
+                        # Save original text
+                        original_text = turn_context.activity.text
+                        
+                        try:
+                            # Set the new message text
+                            turn_context.activity.text = next_message
+                            
+                            # Process the message using the same turn context
+                            await handle_text_message(turn_context, state)
+                        finally:
+                            # Restore original text
+                            turn_context.activity.text = original_text
+                        
+                        # Send typing indicator
+                        await turn_context.send_activity(create_typing_activity())
+                        
+                        # Initialize new chat
+                        await initialize_chat(turn_context, None)  # Pass None to force new state creation
+                    else:
+                        await initialize_chat(turn_context, None)
     except Exception as e:
         logging.error(f"Error handling card action: {e}")
         await turn_context.send_activity(f"I couldn't start a new chat. Please try again later.")
