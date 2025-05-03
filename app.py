@@ -1406,41 +1406,75 @@ async def process_pending_messages(turn_context: TurnContext, state, conversatio
     """Process any pending messages in the queue"""
     with pending_messages_lock:
         if conversation_id in pending_messages and pending_messages[conversation_id]:
-            # Process queued messages
+            # Get all the queued messages but DON'T clear the queue yet
             next_messages = list(pending_messages[conversation_id])
-            pending_messages[conversation_id].clear()
             
-            if len(next_messages) == 1:
-                # Handle single follow-up message
+            # Process first message and only clear after successful processing
+            if next_messages:
                 next_message = next_messages[0]
                 await turn_context.send_activity("Now addressing your follow-up message...")
                 
-                # Instead of creating a new context, use the existing one with modified text
-                original_text = turn_context.activity.text
-                turn_context.activity.text = next_message
-                
+                # IMPORTANT: Instead of modifying the existing turn_context, create
+                # a separate request to the bot with the follow-up message content
                 try:
-                    # Process with the same context - just different text
-                    await handle_text_message(turn_context, state)
-                finally:
-                    # Restore original text when done
-                    turn_context.activity.text = original_text
-            else:
-                # Process multiple messages as a batch
-                await turn_context.send_activity(f"Now addressing your {len(next_messages)} follow-up messages together...")
-                
-                # Use existing context with combined messages
-                original_text = turn_context.activity.text
-                combined_message = "\n\n".join([f"Question {i+1}: {msg}" for i, msg in enumerate(next_messages)])
-                turn_context.activity.text = f"Please answer all of these questions:\n{combined_message}"
-                
-                try:
-                    # Process with the same context
-                    await handle_text_message(turn_context, state)
-                finally:
-                    # Restore original text
-                    turn_context.activity.text = original_text
-
+                    # Process the message as a normal text input by creating a new response
+                    # but don't mutate the original activity
+                    await turn_context.send_activity(f"Your follow-up: {next_message}")
+                    
+                    # Create a fresh direct completion request instead of reusing context
+                    client = create_client()
+                    # Get thread and assistant info
+                    thread_id = state["session_id"]
+                    assistant_id = state["assistant_id"]
+                    
+                    # Add the message to the thread directly
+                    if thread_id and assistant_id:
+                        client.beta.threads.messages.create(
+                            thread_id=thread_id,
+                            role="user",
+                            content=next_message
+                        )
+                        
+                        # Create a normal run without context reuse
+                        run = client.beta.threads.runs.create(
+                            thread_id=thread_id,
+                            assistant_id=assistant_id
+                        )
+                        
+                        # Wait for completion and send the response
+                        await stream_with_teams_ai(turn_context, state, None)
+                        
+                        # Only now remove this message from the queue
+                        with pending_messages_lock:
+                            if conversation_id in pending_messages and pending_messages[conversation_id]:
+                                pending_messages[conversation_id].popleft()
+                    
+                except Exception as e:
+                    logging.error(f"Error processing follow-up message: {e}")
+                    await turn_context.send_activity("I had trouble processing your follow-up question. Please try asking again.")
+# Add this to the end of handle_text_message function
+# Right before the function returns
+async def cleanup_after_message():
+    """Ensure all state is properly reset after message processing"""
+    # Force reset of active run markers
+    with conversation_states_lock:
+        state["active_run"] = False
+    
+    with active_runs_lock:
+        if current_session_id in active_runs:
+            del active_runs[current_session_id]
+            
+    # Send a special "ready" signal to the client
+    # This doesn't need to be visible, but helps ensure the bot is ready
+    try:
+        activity = Activity(
+            type="event",
+            name="bot_ready",
+            value={"timestamp": str(time.time())}
+        )
+        await turn_context.send_activity(activity)
+    except:
+        pass  # Ignore errors with the ready signal
 async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
     """
     Stream responses using the Teams AI library's StreamingResponse class
