@@ -407,7 +407,191 @@ def create_new_chat_card():
         ]
     }
     return CardFactory.adaptive_card(card)
+def create_email_card():
+    """Creates an adaptive card for email composition"""
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.0",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "Email Template Creator",
+                "size": "large",
+                "weight": "bolder"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Recipient",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "recipient",
+                "placeholder": "Enter recipient(s)"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Subject",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "subject",
+                "placeholder": "Enter email subject"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Topic/Purpose",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "topic",
+                "placeholder": "What is this email about?",
+                "isMultiline": True
+            },
+            {
+                "type": "TextBlock",
+                "text": "Do's (Optional)",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "dos",
+                "placeholder": "Points to include",
+                "isMultiline": True
+            },
+            {
+                "type": "TextBlock",
+                "text": "Don'ts (Optional)",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "donts",
+                "placeholder": "Points to avoid",
+                "isMultiline": True
+            },
+            {
+                "type": "TextBlock",
+                "text": "Previous Email (for replies)",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "chain",
+                "placeholder": "Paste previous email if this is a reply",
+                "isMultiline": True
+            },
+            {
+                "type": "Input.Toggle",
+                "id": "hasAttachments",
+                "title": "Include attachments?",
+                "value": "false"
+            }
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": "Generate Email",
+                "data": {
+                    "action": "generate_email"
+                }
+            }
+        ]
+    }
+    
+    attachment = Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card
+    )
+    
+    return attachment
+async def send_email_card(turn_context: TurnContext):
+    """Sends an email composer card to the user"""
+    reply = _create_reply(turn_context.activity)
+    reply.attachments = [create_email_card()]
+    await turn_context.send_activity(reply)
 
+async def generate_email(turn_context: TurnContext, state, recipient, subject, topic, dos, donts, chain, has_attachments):
+    """Generates an email using AI based on provided parameters"""
+    # Send typing indicator
+    await turn_context.send_activity(create_typing_activity())
+    
+    # Create prompt for the AI
+    prompt = f"Generate a professional email with the following details:\n"
+    prompt += f"To: {recipient or 'Appropriate recipient'}\n"
+    prompt += f"Subject: {subject or 'Appropriate subject based on context'}\n"
+    prompt += f"Topic/Purpose: {topic or 'Unspecified'}\n"
+    
+    if dos:
+        prompt += f"Important points to include: {dos}\n"
+    if donts:
+        prompt += f"Points to avoid: {donts}\n"
+    if chain:
+        prompt += f"This is a reply to the following email thread: {chain}\n"
+    if has_attachments:
+        prompt += f"Mention that there are attachments included.\n"
+    
+    prompt += "Format the email professionally with an appropriate greeting, body, and signature. Make the tone professional yet conversational."
+    
+    # Initialize chat if needed
+    if not state.get("assistant_id"):
+        await initialize_chat(turn_context, state)
+    
+    # Use the existing process_conversation_internal function to get AI response
+    client = create_client()
+    result = await process_conversation_internal(
+        client=client,
+        session=state["session_id"],
+        prompt=prompt,
+        assistant=state["assistant_id"],
+        stream_output=False
+    )
+    
+    # Extract and format the email
+    if isinstance(result, dict) and "response" in result:
+        email_text = result["response"]
+        
+        # Create an email result card
+        email_card = {
+            "type": "AdaptiveCard",
+            "version": "1.0",
+            "body": [
+                {
+                    "type": "TextBlock",
+                    "text": "Generated Email Template",
+                    "size": "large",
+                    "weight": "bolder"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": email_text,
+                    "wrap": True
+                }
+            ],
+            "actions": [
+                {
+                    "type": "Action.Submit",
+                    "title": "Create Another Email",
+                    "data": {
+                        "action": "create_email"
+                    }
+                }
+            ]
+        }
+        
+        # Create attachment
+        attachment = Attachment(
+            content_type="application/vnd.microsoft.card.adaptive",
+            content=email_card
+        )
+        
+        reply = _create_reply(turn_context.activity)
+        reply.attachments = [attachment]
+        await turn_context.send_activity(reply)
+    else:
+        await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
 async def send_new_chat_card(turn_context: TurnContext):
     """Sends a card with a button to start a new chat session"""
     reply = _create_reply(turn_context.activity)
@@ -436,9 +620,29 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
                 await initialize_chat(turn_context, None)  # Pass None to force new state creation
             else:
                 await initialize_chat(turn_context, None)
+        elif action_data.get("action") == "generate_email":
+            # Extract email details from the action data
+            recipient = action_data.get("recipient", "")
+            subject = action_data.get("subject", "")
+            topic = action_data.get("topic", "")
+            dos = action_data.get("dos", "")
+            donts = action_data.get("donts", "")
+            chain = action_data.get("chain", "")
+            has_attachments = action_data.get("hasAttachments", "false") == "true"
+            
+            # Get conversation state
+            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+            conversation_id = conversation_reference.conversation.id
+            state = conversation_states[conversation_id]
+            
+            # Generate email using AI
+            await generate_email(turn_context, state, recipient, subject, topic, dos, donts, chain, has_attachments)
+        elif action_data.get("action") == "create_email":
+            # Send a new blank email card
+            await send_email_card(turn_context)
     except Exception as e:
         logging.error(f"Error handling card action: {e}")
-        await turn_context.send_activity(f"I couldn't start a new chat. Please try again later.")
+        await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
 
 # ----- Teams Bot Logic Functions -----
 
