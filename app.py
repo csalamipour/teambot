@@ -547,34 +547,51 @@ async def send_welcome_message(turn_context: TurnContext):
 
 # Add this to your handle_card_actions function
 async def handle_card_actions(turn_context: TurnContext, action_data):
-    """Handles actions from adaptive cards"""
+    """Handles actions from adaptive cards including template selection"""
     try:
-        if action_data.get("action") == "new_chat":
-            # Reset conversation state and initialize new chat
-            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-            conversation_id = conversation_reference.conversation.id
-            
+        action = action_data.get("action", "")
+        
+        # Get conversation state
+        conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+        conversation_id = conversation_reference.conversation.id
+        state = conversation_states.get(conversation_id, {})
+        
+        if action == "new_chat":
+            # Reset conversation state
             if conversation_id in conversation_states:
+                # Clear any pending messages
                 with pending_messages_lock:
                     if conversation_id in pending_messages:
                         pending_messages[conversation_id].clear()
                 
+                # Send typing indicator
                 await turn_context.send_activity(create_typing_activity())
-                await initialize_chat(turn_context, None)
+                
+                # Initialize new chat
+                await initialize_chat(turn_context, None)  # Pass None to force new state creation
             else:
                 await initialize_chat(turn_context, None)
                 
-        elif action_data.get("action") == "create_email":
-            # Send email card
-            await send_email_card(turn_context)
+        elif action == "create_email":
+            # Show template categories instead of direct email card
+            await send_template_selection_card(turn_context)
             
-        elif action_data.get("action") == "upload_document" or action_data.get("action") == "upload_image":
-            # Send message instructing how to upload
-            message = "Please use the attachment button in the Teams chat to upload your file."
-            await turn_context.send_activity(message)
+        elif action == "show_template_categories":
+            # Show template categories
+            await send_template_selection_card(turn_context)
             
-        elif action_data.get("action") == "generate_email":
-            # Extract email details from the action data
+        elif action == "template_category":
+            # Handle template category selection
+            category = action_data.get("category", "custom")
+            await handle_template_selection(turn_context, category, state)
+            
+        elif action == "generate_category_email":
+            # Handle category-specific email generation
+            category = action_data.get("category", "custom")
+            await generate_category_email(turn_context, state, category, action_data)
+            
+        elif action == "generate_email":
+            # Extract email details from the action data (for backward compatibility)
             recipient = action_data.get("recipient", "")
             subject = action_data.get("subject", "")
             topic = action_data.get("topic", "")
@@ -582,11 +599,6 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             donts = action_data.get("donts", "")
             chain = action_data.get("chain", "")
             has_attachments = action_data.get("hasAttachments", "false") == "true"
-            
-            # Get conversation state
-            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-            conversation_id = conversation_reference.conversation.id
-            state = conversation_states[conversation_id]
             
             # Generate email using AI
             await generate_email(turn_context, state, recipient, subject, topic, dos, donts, chain, has_attachments)
@@ -866,136 +878,844 @@ def create_email_result_card(email_text):
     )
     
     return attachment
-
-async def generate_email(turn_context: TurnContext, state, recipient, subject, topic, dos, donts, chain, has_attachments):
-    """Generates an email using AI based on provided parameters with improved loading indicators"""
-    
-    # First, send an explicit "processing" message
-    processing_message = await turn_context.send_activity("📝 Generating your email template...")
-    
-    # Send typing indicator
-    await turn_context.send_activity(create_typing_activity())
-    
-    # Start a background task to keep sending typing indicators while processing
-    typing_task = None
-    
-    try:
-        # Create a background task to send typing indicators every few seconds
-        typing_task = asyncio.create_task(send_periodic_typing(turn_context, 3))  # Send every 3 seconds
-        
-        # Create prompt for the AI
-        prompt = f"Generate a professional email with the following details:\n"
-        prompt += f"To: {recipient or 'Appropriate recipient'}\n"
-        prompt += f"Subject: {subject or 'Appropriate subject based on context'}\n"
-        prompt += f"Topic/Purpose: {topic or 'Unspecified'}\n"
-        
-        if dos:
-            prompt += f"Important points to include: {dos}\n"
-        if donts:
-            prompt += f"Points to avoid: {donts}\n"
-        if chain:
-            prompt += f"This is a reply to the following email thread: {chain}\n"
-        if has_attachments:
-            prompt += f"Mention that there are attachments included.\n"
-        
-        prompt += "Format the email professionally with an appropriate greeting, body, and signature. Make the tone professional yet conversational."
-        
-        # Initialize chat if needed
-        if not state.get("assistant_id"):
-            await initialize_chat(turn_context, state)
-        
-        # Use the existing process_conversation_internal function to get AI response
-        client = create_client()
-        result = await process_conversation_internal(
-            client=client,
-            session=state["session_id"],
-            prompt=prompt,
-            assistant=state["assistant_id"],
-            stream_output=False
-        )
-        
-        # Delete the "processing" message if possible
-        try:
-            # Note: Teams might not support message deletion in all contexts
-            if hasattr(processing_message, 'id'):
-                await turn_context.delete_activity(processing_message.id)
-        except Exception:
-            # If we can't delete it, just continue
-            pass
-        
-        # Extract and format the email
-        if isinstance(result, dict) and "response" in result:
-            email_text = result["response"]
-            
-            # Create an email result card with improved styling
-            email_card = {
-                "type": "AdaptiveCard",
-                "version": "1.3",
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "body": [
+def create_template_selection_card():
+    """Creates an adaptive card for selecting email template categories"""
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.0",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "Email Template Categories",
+                "size": "large",
+                "weight": "bolder"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Select a template category to start your email",
+                "wrap": True
+            },
+            {
+                "type": "Container",
+                "items": [
                     {
-                        "type": "TextBlock",
-                        "text": "✅ Email Template Generated",
-                        "size": "large",
-                        "weight": "bolder",
-                        "horizontalAlignment": "center",
-                        "color": "good"
+                        "type": "ColumnSet",
+                        "columns": [
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "📩 Introduction",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "introduction"
+                                                },
+                                                "style": "positive"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "🔄 Follow-up",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "followup"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
                     },
                     {
-                        "type": "Container",
-                        "style": "emphasis",
-                        "items": [
+                        "type": "ColumnSet",
+                        "columns": [
                             {
-                                "type": "TextBlock",
-                                "text": email_text,
-                                "wrap": True,
-                                "spacing": "medium"
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "📝 Request",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "request"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "🙏 Thank You",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "thankyou"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "type": "ColumnSet",
+                        "columns": [
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "📊 Status Update",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "status"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "📅 Meeting",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "meeting"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "type": "ColumnSet",
+                        "columns": [
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "⚠️ Urgent",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "urgent"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "✨ Custom",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "custom"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
                             }
                         ]
                     }
-                ],
-                "actions": [
-                    {
-                        "type": "Action.Submit",
-                        "title": "Create Another Email",
-                        "style": "positive",
-                        "data": {
-                            "action": "create_email"
-                        }
-                    },
-                    {
-                        "type": "Action.Submit",
-                        "title": "Return to Home",
-                        "data": {
-                            "action": "new_chat"
-                        }
-                    }
                 ]
             }
-            
-            # Create attachment
-            attachment = Attachment(
-                content_type="application/vnd.microsoft.card.adaptive",
-                content=email_card
-            )
-            
-            reply = _create_reply(turn_context.activity)
-            reply.attachments = [attachment]
-            await turn_context.send_activity(reply)
-        else:
-            await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
+        ]
+    }
+    
+    attachment = Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card
+    )
+    
+    return attachment
+async def send_template_selection_card(turn_context: TurnContext):
+    """Sends a template selection card to the user"""
+    reply = _create_reply(turn_context.activity)
+    reply.attachments = [create_template_selection_card()]
+    await turn_context.send_activity(reply)
+async def handle_template_selection(turn_context: TurnContext, category: str, state):
+    """Handles a user's selection of an email template category"""
+    try:
+        # Send typing indicator
+        await turn_context.send_activity(create_typing_activity())
+        
+        # Get template prompt for the selected category
+        template_prompt = get_template_prompt(category)
+        
+        # Get the category-specific email card
+        await send_category_email_card(turn_context, category)
+        
     except Exception as e:
-        logging.error(f"Error generating email: {e}")
-        await turn_context.send_activity("I encountered an error while generating your email. Please try again.")
-    finally:
-        # Cancel the typing indicator task if it's running
-        if typing_task and not typing_task.done():
-            typing_task.cancel()
-            try:
-                await typing_task
-            except asyncio.CancelledError:
-                pass  # Expected when we cancel the task
+        logging.error(f"Error handling template selection: {e}")
+        await turn_context.send_activity("I couldn't process your template selection. Please try again.")
+def get_template_prompt(category: str) -> str:
+    """Returns the specialized prompt for the selected template category"""
+    # Base prompt structure with enhanced instructions
+    base_prompt = {
+        "introduction": """
+You are composing an introduction email where the recipient doesn't know you. Your role is to create a professional, concise introduction email that accomplishes the following:
+1. Opens with a friendly but professional greeting
+2. Clearly identifies who you are and your organization
+3. Explains your purpose for writing with specific value proposition
+4. Includes a clear, low-pressure next step or call to action
+5. Ends with a professional sign-off
 
+Your tone should be warm, professional, and confident without being pushy. Avoid lengthy paragraphs - keep sentences short and focused. Use bullet points for any list of benefits or key points.
+
+FORMAT THE EMAIL WITH:
+- Greeting on its own line
+- 3-4 short paragraphs with clear spacing between them
+- Call to action as its own paragraph
+- Professional signature
+""",
+        "followup": """
+You are crafting a follow-up email to maintain momentum after a previous interaction. Your role is to create a message that:
+1. References the specific previous interaction with date and context
+2. Provides a concise summary of what was discussed/agreed upon
+3. Clearly states the purpose of the follow-up (next steps, additional information, etc.)
+4. Includes any relevant updates since the last interaction
+5. Ends with a specific action item or question
+
+Maintain a helpful, proactive tone that shows attention to detail and respect for the recipient's time. Avoid appearing passive-aggressive about response times - assume positive intent. Keep the email under 10 sentences total.
+
+FORMAT THE EMAIL WITH:
+- Brief, specific subject line referencing previous interaction
+- Friendly opening acknowledging previous contact
+- 2-3 concise paragraphs
+- Clear next step or question highlighted in some way
+- Professional but warm closing
+""",
+        "request": """
+You are writing an email to make a specific request. Your role is to create a persuasive but respectful email that:
+1. Opens with context that establishes relevance to the recipient
+2. Clearly defines the specific request with all necessary details
+3. Explains the rationale and benefits of fulfilling the request
+4. Acknowledges any imposition and expresses appreciation
+5. Provides a clear timeframe and process for response
+
+Maintain a confident but courteous tone that respects the recipient's authority while clearly communicating the importance of your request. Avoid vague language - be specific about what you're asking for and why it matters.
+
+FORMAT THE EMAIL WITH:
+- Subject line that clearly indicates a request
+- Brief context establishing relationship or relevance
+- Detailed but concise explanation of the request
+- Clear statement of timeline and preferred response method
+- Appreciative closing
+""",
+        "thankyou": """
+You are writing a thank-you email expressing genuine appreciation. Your role is to create a sincere, specific email that:
+1. Clearly states what you're thankful for with specific details
+2. Explains the positive impact or difference their action made
+3. Includes a personal touch that shows authentic appreciation
+4. If appropriate, mentions how you plan to pay it forward or reciprocate
+5. Ends with warm, genuine closing
+
+Maintain a warm, sincere tone throughout. Avoid generic platitudes - be specific about what was done and why it mattered. Keep the email concise but not rushed - quality over quantity.
+
+FORMAT THE EMAIL WITH:
+- Subject line clearly indicating gratitude
+- Immediate, direct expression of thanks in first line
+- 1-2 specific paragraphs detailing the impact
+- Warm, personal closing
+""",
+        "status": """
+You are creating a project status update email. Your role is to craft a clear, informative update that:
+1. Starts with an executive summary of overall status (on track, at risk, etc.)
+2. Provides specific updates on key workstreams with metrics where relevant
+3. Clearly identifies any blockers, risks, or issues requiring attention
+4. Outlines specific next steps and timeline
+5. Includes any requests for input or decisions needed
+
+Maintain a factual, solutions-oriented tone. Avoid placing blame or making excuses for delays. Use visual hierarchy (bullet points, bold text) to improve scannability. Keep the update concise but comprehensive.
+
+FORMAT THE EMAIL WITH:
+- Subject line with project name and update period
+- Executive summary (1-2 sentences)
+- Progress section with bullet points for each workstream
+- Risks/issues section if applicable
+- Next steps section with dates
+- Clear signature with your role
+""",
+        "meeting": """
+You are scheduling or following up on a meeting. Your role is to create a clear, actionable email that:
+1. States the purpose of the meeting concisely
+2. Provides essential logistical details (date, time, location/link)
+3. Includes a brief agenda with time allocations
+4. Specifies any preparation required from participants
+5. Clarifies next steps or follow-ups expected after the meeting
+
+Maintain an efficient, respectful tone that values everyone's time. Avoid unnecessary details - focus on what participants need to know. Make the email scannable for busy professionals.
+
+FORMAT THE EMAIL WITH:
+- Subject line with meeting purpose and date
+- Brief context paragraph
+- Clearly formatted logistics (When, Where, Who)
+- Numbered or bulleted agenda
+- Any preparation requirements clearly highlighted
+- Professional closing
+""",
+        "urgent": """
+You are writing an email requiring urgent attention. Your role is to create a clear, impactful message that:
+1. Immediately identifies the urgent situation in the first sentence
+2. Explains the specific impact or consequences if not addressed
+3. Provides clear, specific actions needed with deadlines
+4. Includes all necessary information to take action without follow-up questions
+5. Offers availability for immediate discussion if needed
+
+Maintain a serious, focused tone without creating panic. Avoid false urgency or hyperbole - be truthful about the timeline and impact. Use formatting to highlight key information and required actions.
+
+FORMAT THE EMAIL WITH:
+- Subject line starting with "URGENT:" followed by specific issue
+- First sentence clearly stating the situation and timeline
+- Brief explanation paragraph (3-5 sentences maximum)
+- Bulleted list of required actions with deadlines
+- Contact information for immediate response
+- Professional but urgent closing
+""",
+        "custom": """
+You are creating a custom professional email. Your role is to produce a well-structured message that:
+1. Has a clear purpose identifiable in the first paragraph
+2. Maintains appropriate tone for the business relationship
+3. Includes all necessary information without unnecessary details
+4. Has a logical flow from introduction to conclusion
+5. Ends with a clear next step or call to action
+
+Adapt your tone to match the context of the relationship and purpose. Use appropriate formality based on the recipient and situation. Make the email scannable with appropriate paragraph breaks and formatting.
+
+FORMAT THE EMAIL WITH:
+- Descriptive subject line 
+- Clear introduction establishing purpose
+- Logically organized body paragraphs
+- Specific closing with next steps
+- Professional signature
+"""
+    }
+    
+    # Return the prompt for the requested category
+    return base_prompt.get(category, base_prompt["custom"])
+
+async def send_category_email_card(turn_context: TurnContext, category: str):
+    """Sends a category-specific email composition card"""
+    # Get category-specific default values and placeholders
+    defaults = get_category_defaults(category)
+    
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.0",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": f"{defaults['title']} Email Template",
+                "size": "large",
+                "weight": "bolder"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Recipient",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "recipient",
+                "placeholder": defaults["recipient_placeholder"]
+            },
+            {
+                "type": "TextBlock",
+                "text": "Subject",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "subject",
+                "placeholder": defaults["subject_placeholder"],
+                "value": defaults["subject_default"]
+            },
+            {
+                "type": "TextBlock",
+                "text": "Purpose/Details",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "topic",
+                "placeholder": defaults["purpose_placeholder"],
+                "isMultiline": True
+            }
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": "Generate Email",
+                "data": {
+                    "action": "generate_category_email",
+                    "category": category
+                }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Back to Categories",
+                "data": {
+                    "action": "show_template_categories"
+                }
+            }
+        ]
+    }
+    
+    # Add category-specific fields
+    if category == "followup":
+        card["body"].insert(6, {
+            "type": "TextBlock",
+            "text": "Previous Interaction Date",
+            "wrap": True
+        })
+        card["body"].insert(7, {
+            "type": "Input.Text",
+            "id": "interaction_date",
+            "placeholder": "e.g., Last Tuesday, October 15th"
+        })
+        card["body"].insert(8, {
+            "type": "TextBlock",
+            "text": "Previous Email/Conversation",
+            "wrap": True
+        })
+        card["body"].insert(9, {
+            "type": "Input.Text",
+            "id": "chain",
+            "placeholder": "Paste previous email or summarize last conversation",
+            "isMultiline": True
+        })
+    
+    elif category == "request":
+        card["body"].insert(6, {
+            "type": "TextBlock",
+            "text": "Requested Action",
+            "wrap": True
+        })
+        card["body"].insert(7, {
+            "type": "Input.Text",
+            "id": "requested_action",
+            "placeholder": "Specific action you're requesting"
+        })
+        card["body"].insert(8, {
+            "type": "TextBlock",
+            "text": "Deadline (if applicable)",
+            "wrap": True
+        })
+        card["body"].insert(9, {
+            "type": "Input.Text",
+            "id": "deadline",
+            "placeholder": "When you need this by"
+        })
+    
+    elif category == "meeting":
+        card["body"].insert(6, {
+            "type": "TextBlock",
+            "text": "Meeting Date & Time",
+            "wrap": True
+        })
+        card["body"].insert(7, {
+            "type": "Input.Text",
+            "id": "meeting_time",
+            "placeholder": "e.g., Monday, Nov 8 at 2:00 PM EST"
+        })
+        card["body"].insert(8, {
+            "type": "TextBlock",
+            "text": "Location/Link",
+            "wrap": True
+        })
+        card["body"].insert(9, {
+            "type": "Input.Text",
+            "id": "meeting_location",
+            "placeholder": "Physical location or virtual meeting link"
+        })
+        card["body"].insert(10, {
+            "type": "TextBlock",
+            "text": "Agenda Items",
+            "wrap": True
+        })
+        card["body"].insert(11, {
+            "type": "Input.Text",
+            "id": "agenda",
+            "placeholder": "List main points to discuss",
+            "isMultiline": True
+        })
+    
+    # Common optional fields for all categories
+    card["body"].extend([
+        {
+            "type": "TextBlock",
+            "text": "Key Points to Include (Optional)",
+            "wrap": True
+        },
+        {
+            "type": "Input.Text",
+            "id": "dos",
+            "placeholder": "Important points, tone preferences, etc.",
+            "isMultiline": True
+        },
+        {
+            "type": "TextBlock",
+            "text": "Points to Avoid (Optional)",
+            "wrap": True
+        },
+        {
+            "type": "Input.Text",
+            "id": "donts",
+            "placeholder": "Topics to avoid, sensitive issues, etc.",
+            "isMultiline": True
+        },
+        {
+            "type": "Input.Toggle",
+            "id": "hasAttachments",
+            "title": "Include attachments?",
+            "value": "false"
+        }
+    ])
+    
+    attachment = Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card
+    )
+    
+    reply = _create_reply(turn_context.activity)
+    reply.attachments = [attachment]
+    await turn_context.send_activity(reply)
+
+
+def get_category_defaults(category: str) -> dict:
+    """Returns default values and placeholders for the selected category"""
+    defaults = {
+        "introduction": {
+            "title": "Introduction",
+            "recipient_placeholder": "Name of person you're introducing yourself to",
+            "subject_placeholder": "Introduction - [Your Name] from [Your Company]",
+            "subject_default": "Introduction - [Your Name] from [Your Company]",
+            "purpose_placeholder": "Why you're reaching out and what value you can provide"
+        },
+        "followup": {
+            "title": "Follow-Up",
+            "recipient_placeholder": "Name of person you're following up with",
+            "subject_placeholder": "Follow-up on our [meeting/conversation] about [topic]",
+            "subject_default": "Follow-up on our discussion",
+            "purpose_placeholder": "Key points from previous interaction and purpose of follow-up"
+        },
+        "request": {
+            "title": "Request",
+            "recipient_placeholder": "Name of person you're making the request to",
+            "subject_placeholder": "Request: [Brief description of what you're requesting]",
+            "subject_default": "Request: ",
+            "purpose_placeholder": "Context and details of your request, including why it's important"
+        },
+        "thankyou": {
+            "title": "Thank You",
+            "recipient_placeholder": "Name of person you're thanking",
+            "subject_placeholder": "Thank you for [what you're thanking them for]",
+            "subject_default": "Thank you for your help",
+            "purpose_placeholder": "Specific details about what you're thankful for and the impact it had"
+        },
+        "status": {
+            "title": "Status Update",
+            "recipient_placeholder": "Name(s) of person/team receiving the update",
+            "subject_placeholder": "[Project Name]: Status Update - [Date/Period]",
+            "subject_default": "Project Status Update",
+            "purpose_placeholder": "Overall status, key accomplishments, challenges, and next steps"
+        },
+        "meeting": {
+            "title": "Meeting",
+            "recipient_placeholder": "Name(s) of meeting attendees",
+            "subject_placeholder": "[Meeting Type]: [Topic] - [Date]",
+            "subject_default": "Meeting Invitation",
+            "purpose_placeholder": "Purpose of the meeting and expected outcomes"
+        },
+        "urgent": {
+            "title": "Urgent",
+            "recipient_placeholder": "Name of person who needs to take action",
+            "subject_placeholder": "URGENT: [Specific issue requiring immediate attention]",
+            "subject_default": "URGENT: Action Required",
+            "purpose_placeholder": "Description of the urgent situation, impact, and required actions"
+        },
+        "custom": {
+            "title": "Custom",
+            "recipient_placeholder": "Enter recipient name(s)",
+            "subject_placeholder": "Enter a clear, descriptive subject line",
+            "subject_default": "",
+            "purpose_placeholder": "Describe the purpose of your email and any specific details"
+        }
+    }
+    
+    return defaults.get(category, defaults["custom"])
+
+async def generate_category_email(turn_context: TurnContext, state, category: str, form_data: dict):
+    """Generates an email using AI based on category template and provided parameters"""
+    # Send typing indicator
+    await turn_context.send_activity(create_typing_activity())
+    
+    # Extract common form data
+    recipient = form_data.get("recipient", "")
+    subject = form_data.get("subject", "")
+    topic = form_data.get("topic", "")
+    dos = form_data.get("dos", "")
+    donts = form_data.get("donts", "")
+    has_attachments = form_data.get("hasAttachments", "false") == "true"
+    
+    # Get the specialized template prompt for this category
+    template_prompt = get_template_prompt(category)
+    
+    # Create prompt for the AI with category-specific instructions
+    prompt = f"You are generating a {category} email following these specialized instructions:\n\n{template_prompt}\n\n"
+    prompt += f"To: {recipient or 'Appropriate recipient'}\n"
+    prompt += f"Subject: {subject or 'Appropriate subject based on context'}\n"
+    prompt += f"Purpose/Details: {topic or 'Unspecified'}\n"
+    
+    # Add category-specific form data
+    if category == "followup":
+        interaction_date = form_data.get("interaction_date", "")
+        previous_communication = form_data.get("chain", "")
+        prompt += f"Previous Interaction Date: {interaction_date}\n"
+        prompt += f"Previous Communication: {previous_communication}\n"
+    
+    elif category == "request":
+        requested_action = form_data.get("requested_action", "")
+        deadline = form_data.get("deadline", "")
+        prompt += f"Requested Action: {requested_action}\n"
+        prompt += f"Deadline: {deadline}\n"
+    
+    elif category == "meeting":
+        meeting_time = form_data.get("meeting_time", "")
+        meeting_location = form_data.get("meeting_location", "")
+        agenda = form_data.get("agenda", "")
+        prompt += f"Meeting Date & Time: {meeting_time}\n"
+        prompt += f"Location/Link: {meeting_location}\n"
+        prompt += f"Agenda Items: {agenda}\n"
+    
+    # Add common optional fields
+    if dos:
+        prompt += f"Important points to include: {dos}\n"
+    if donts:
+        prompt += f"Points to avoid: {donts}\n"
+    
+    # Handle attachments instruction
+    if has_attachments:
+        prompt += "\nIMPORTANT: The user has indicated there are file attachments for this email. "
+        prompt += f"If any files have been uploaded to this conversation, use your file_search tool to retrieve relevant information related to '{subject} {topic}' "
+        prompt += "and incorporate key insights into the email content."
+        prompt += "\nInclude a line at the end mentioning that documents are attached for reference."
+    
+    # Add example-based instruction for better formatting
+    if category == "introduction":
+        prompt += "\n\nHere's an example of a good introduction email format (do not copy this content, just the structure):\n\n"
+        prompt += "Hi [Name],\n\n"
+        prompt += "I hope this email finds you well. My name is [Your Name] and I'm the [Your Position] at [Your Company], where we specialize in [brief description].\n\n"
+        prompt += "I'm reaching out because [specific reason with value proposition]. Our [product/service/expertise] has helped organizations like yours [specific benefit].\n\n"
+        prompt += "Would you be available for a 15-minute call next week to discuss how we might [specific value]? I'm free Tuesday or Wednesday afternoon if either works for you.\n\n"
+        prompt += "Looking forward to connecting,\n\n"
+        prompt += "[Your Name]\n"
+        prompt += "[Your Position]\n"
+        prompt += "[Your Company]\n"
+        prompt += "[Contact Information]"
+    
+    # Initialize chat if needed
+    if not state.get("assistant_id"):
+        await initialize_chat(turn_context, state)
+    
+    # Use the existing process_conversation_internal function to get AI response
+    client = create_client()
+    result = await process_conversation_internal(
+        client=client,
+        session=state["session_id"],
+        prompt=prompt,
+        assistant=state["assistant_id"],
+        stream_output=False
+    )
+    
+    # Extract and format the email
+    if isinstance(result, dict) and "response" in result:
+        email_text = result["response"]
+        
+        # Create an email result card
+        email_card = {
+            "type": "AdaptiveCard",
+            "version": "1.0",
+            "body": [
+                {
+                    "type": "TextBlock",
+                    "text": f"Generated {category.title()} Email",
+                    "size": "large",
+                    "weight": "bolder"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": email_text,
+                    "wrap": True
+                }
+            ],
+            "actions": [
+                {
+                    "type": "Action.Submit",
+                    "title": "Create Another Email",
+                    "data": {
+                        "action": "show_template_categories"
+                    }
+                }
+            ]
+        }
+        
+        # Create attachment
+        attachment = Attachment(
+            content_type="application/vnd.microsoft.card.adaptive",
+            content=email_card
+        )
+        
+        reply = _create_reply(turn_context.activity)
+        reply.attachments = [attachment]
+        await turn_context.send_activity(reply)
+    else:
+        await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
+
+async def generate_email(turn_context: TurnContext, state, recipient, subject, topic, dos, donts, chain, has_attachments):
+    """Generates an email using AI based on provided parameters with file content support"""
+    # Send typing indicator
+    await turn_context.send_activity(create_typing_activity())
+    
+    # Create prompt for the AI
+    prompt = f"Generate a professional email with the following details:\n"
+    prompt += f"To: {recipient or 'Appropriate recipient'}\n"
+    prompt += f"Subject: {subject or 'Appropriate subject based on context'}\n"
+    prompt += f"Topic/Purpose: {topic or 'Unspecified'}\n"
+    
+    if dos:
+        prompt += f"Important points to include: {dos}\n"
+    if donts:
+        prompt += f"Points to avoid: {donts}\n"
+    if chain:
+        prompt += f"This is a reply to the following email thread: {chain}\n"
+    
+    # If user has indicated attachments, instruct the AI to use file_search on already attached files
+    if has_attachments:
+        prompt += "\nIMPORTANT: The user has indicated there are file attachments for this email. "
+        prompt += f"If any files have been uploaded to this conversation, use your file_search tool to retrieve relevant information related to '{subject} {topic}' "
+        prompt += "and incorporate key insights into the email content."
+        prompt += "\nInclude a line at the end mentioning that documents are attached for reference."
+        
+        # Log the instruction
+        logging.info(f"Instructing assistant to search for email content related to: {subject} {topic} in any attached files")
+    
+    prompt += "\nFormat the email professionally with an appropriate greeting, body, and signature. Make the tone professional yet conversational."
+    
+    # Initialize chat if needed
+    if not state.get("assistant_id"):
+        await initialize_chat(turn_context, state)
+    
+    # Using the client to create or update the assistant happens automatically in the initialize_chat function
+    # and when files are uploaded, so we don't need to specifically configure it here
+    client = create_client()
+    
+    # Use the existing process_conversation_internal function to get AI response
+    result = await process_conversation_internal(
+        client=client,
+        session=state["session_id"],
+        prompt=prompt,
+        assistant=state["assistant_id"],
+        stream_output=False
+    )
+    
+    # Extract and format the email
+    if isinstance(result, dict) and "response" in result:
+        email_text = result["response"]
+        
+        # Create an email result card
+        email_card = {
+            "type": "AdaptiveCard",
+            "version": "1.0",
+            "body": [
+                {
+                    "type": "TextBlock",
+                    "text": "Generated Email Template",
+                    "size": "large",
+                    "weight": "bolder"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": email_text,
+                    "wrap": True
+                }
+            ],
+            "actions": [
+                {
+                    "type": "Action.Submit",
+                    "title": "Create Another Email",
+                    "data": {
+                        "action": "create_email"
+                    }
+                }
+            ]
+        }
+        
+        # Create attachment
+        attachment = Attachment(
+            content_type="application/vnd.microsoft.card.adaptive",
+            content=email_card
+        )
+        
+        reply = _create_reply(turn_context.activity)
+        reply.attachments = [attachment]
+        await turn_context.send_activity(reply)
+    else:
+        await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
 # Helper function to send periodic typing indicators
 async def send_periodic_typing(turn_context: TurnContext, interval_seconds: int):
     """Sends typing indicators periodically until the task is cancelled"""
