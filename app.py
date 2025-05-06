@@ -2294,10 +2294,7 @@ def get_category_defaults(category: str) -> dict:
     return defaults.get(category, defaults["custom"])
 
 async def generate_category_email(turn_context: TurnContext, state, category: str, form_data: dict):
-    """Generates an email using AI based on enhanced category template and provided parameters"""
-    # Send typing indicator
-    await turn_context.send_activity(create_typing_activity())
-    
+    """Generates an email using AI based on enhanced category template and provided parameters using streaming mode"""
     # Extract common form data
     recipient = form_data.get("recipient", "")
     subject = form_data.get("subject", "")
@@ -2393,118 +2390,311 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
     if not state.get("assistant_id"):
         await initialize_chat(turn_context, state)
     
-    # Use the existing process_conversation_internal function to get AI response
-    client = create_client()
-    result = await process_conversation_internal(
-        client=client,
-        session=state["session_id"],
-        prompt=prompt,
-        assistant=state["assistant_id"],
-        stream_output=False
-    )
-    
-    # Extract and format the email
-    if isinstance(result, dict) and "response" in result:
-        email_text = result["response"]
-        
-        # Create an enhanced email result card
-        email_card = {
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "type": "AdaptiveCard",
-            "version": "1.5",
-            "body": [
-                {
-                    "type": "TextBlock",
-                    "text": f"Generated {category.title()} Email",
-                    "size": "large",
-                    "weight": "bolder",
-                    "horizontalAlignment": "center",
-                    "wrap": True,
-                    "style": "heading"
-                },
-                {
-                    "type": "Container",
-                    "style": "accent",
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": subject,
-                            "weight": "bolder",
-                            "wrap": True
-                        },
-                        {
-                            "type": "TextBlock",
-                            "text": f"To: {recipient}",
-                            "wrap": True
-                        }
-                    ],
-                    "bleed": True
-                },
-                {
-                    "type": "Container",
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": email_text,
-                            "wrap": True
-                        }
-                    ],
-                    "style": "default"
-                }
-            ],
-            "actions": [
-                {
-                    "type": "Action.Submit",
-                    "title": "Create Another Email",
-                    "data": {
-                        "action": "show_template_categories"
-                    }
-                },
-                {
-                    "type": "Action.ShowCard",
-                    "title": "Edit Email",
-                    "card": {
-                        "type": "AdaptiveCard",
-                        "body": [
-                            {
-                                "type": "Input.Text",
-                                "label": "Edit Content",
-                                "id": "edit_content",
-                                "isMultiline": True,
-                                "value": email_text
-                            }
-                        ],
-                        "actions": [
-                            {
-                                "type": "Action.Submit",
-                                "title": "Update Email",
-                                "data": {
-                                    "action": "update_email_content"
-                                }
-                            }
-                        ]
-                    }
-                }
-            ]
-        }
-        
-        # Create attachment
-        attachment = Attachment(
-            content_type="application/vnd.microsoft.card.adaptive",
-            content=email_card
-        )
-        
-        reply = _create_reply(turn_context.activity)
-        reply.attachments = [attachment]
-        await turn_context.send_activity(reply)
-    else:
-        await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
-
-async def generate_email(turn_context: TurnContext, state, recipient, subject, topic, dos, donts, chain, has_attachments):
-    """Generates an email using AI based on provided parameters with file content support"""
-    # Send typing indicator
+    # Send typing indicator immediately
     await turn_context.send_activity(create_typing_activity())
     
+    # Create a background task for email generation
+    email_text = ""
+    
+    # Create a client
+    client = create_client()
+    
+    # Start the streaming process with typing indicators
+    try:
+        # Add the prompt to the thread
+        thread_id = state.get("session_id")
+        assistant_id = state.get("assistant_id")
+        
+        # Add message to thread to generate email
+        client.beta.threads.messages.create(
+            thread_id=thread_id,
+            role="user",
+            content=prompt
+        )
+        
+        # Mark thread as busy (thread-safe)
+        with conversation_states_lock:
+            state["active_run"] = True
+        
+        with active_runs_lock:
+            active_runs[thread_id] = True
+        
+        # Use streaming mode for better UX
+        if TEAMS_AI_AVAILABLE:
+            # Create a custom collector for the email text
+            class EmailCollector:
+                def __init__(self):
+                    self.complete_text = ""
+                
+                def collect_text(self, text):
+                    self.complete_text += text
+            
+            collector = EmailCollector()
+            
+            # Create a wrapper function for the streaming process
+            async def streaming_wrapper(tc, state, msg=None):
+                # Use enhanced streaming with Teams AI library
+                streamer = StreamingResponse(tc)
+                
+                # Track the run ID for proper cleanup
+                run_id = None
+                
+                try:
+                    # Create run with streaming
+                    run = client.beta.threads.runs.create(
+                        thread_id=thread_id,
+                        assistant_id=assistant_id,
+                        stream=True
+                    )
+                    
+                    run_id = run.id
+                    
+                    # Process the streaming response
+                    previous_text = ""
+                    for chunk in run.iter_chunks():
+                        if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
+                            delta = chunk.data.delta
+                            if hasattr(delta, "content") and delta.content:
+                                for content in delta.content:
+                                    if content.type == "text" and hasattr(content.text, "value"):
+                                        text_piece = content.text.value
+                                        # Collect the text for later use
+                                        collector.collect_text(text_piece)
+                                        # No need to send the email text as it's generated
+                
+                    # Don't send the response now; we'll use it to build the card
+                    
+                except Exception as e:
+                    logging.error(f"Error in streaming email generation: {e}")
+                    await tc.send_activity("I encountered an error while generating your email template. Please try again.")
+                finally:
+                    # Clean up active runs
+                    with conversation_states_lock:
+                        state["active_run"] = False
+                    
+                    with active_runs_lock:
+                        if thread_id in active_runs:
+                            del active_runs[thread_id]
+            
+            # Send progress message and typing indicators
+            await turn_context.send_activity("Generating your email template...")
+            
+            # Start a typing indicator task
+            typing_task = asyncio.create_task(send_periodic_typing(turn_context, 4))
+            
+            try:
+                # Run the streaming process to collect the email text
+                await streaming_wrapper(turn_context, state)
+                
+                # Get the generated email text from the collector
+                email_text = collector.complete_text
+            finally:
+                # Cancel the typing indicator task
+                typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
+        else:
+            # Use custom streaming implementation if Teams AI not available
+            # Setup a custom collector similar to above
+            class CustomEmailCollector:
+                def __init__(self):
+                    self.complete_text = ""
+                
+                def add_text(self, text):
+                    self.complete_text += text
+            
+            collector = CustomEmailCollector()
+            
+            # Send a progress message
+            await turn_context.send_activity("Generating your email template...")
+            
+            # Start typing indicator task
+            typing_task = asyncio.create_task(send_periodic_typing(turn_context, 4))
+            
+            try:
+                # Create a run
+                run = client.beta.threads.runs.create(
+                    thread_id=thread_id,
+                    assistant_id=assistant_id
+                )
+                
+                run_id = run.id
+                
+                # Poll for completion with typing indicators
+                max_wait_time = 120  # Maximum wait time in seconds
+                wait_interval = 2    # Check interval in seconds
+                elapsed_time = 0
+                
+                while elapsed_time < max_wait_time:
+                    # Check run status
+                    run_status = client.beta.threads.runs.retrieve(
+                        thread_id=thread_id,
+                        run_id=run_id
+                    )
+                    
+                    # Check for completion
+                    if run_status.status == "completed":
+                        # Get the complete message
+                        messages = client.beta.threads.messages.list(
+                            thread_id=thread_id,
+                            order="desc",
+                            limit=1
+                        )
+                        
+                        if messages.data:
+                            latest_message = messages.data[0]
+                            message_text = ""
+                            
+                            for content_part in latest_message.content:
+                                if content_part.type == 'text':
+                                    message_text += content_part.text.value
+                            
+                            # Collect the complete email text
+                            collector.add_text(message_text)
+                            break
+                            
+                    # Check for failure states
+                    elif run_status.status in ["failed", "cancelled", "expired"]:
+                        logging.error(f"Run {run_id} ended with status: {run_status.status}")
+                        await turn_context.send_activity(f"I encountered an issue while generating the email template. Please try again.")
+                        break
+                    
+                    # Wait before next check
+                    await asyncio.sleep(wait_interval)
+                    elapsed_time += wait_interval
+                
+                # Get the collected email text
+                email_text = collector.complete_text
+                
+            finally:
+                # Clean up
+                with conversation_states_lock:
+                    state["active_run"] = False
+                
+                with active_runs_lock:
+                    if thread_id in active_runs:
+                        del active_runs[thread_id]
+                
+                # Cancel typing indicator task
+                typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
+        
+        # If we have email text, create and send the card
+        if email_text:
+            # Create an enhanced email result card
+            email_card = {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.5",
+                "body": [
+                    {
+                        "type": "TextBlock",
+                        "text": f"Generated {category.title()} Email",
+                        "size": "large",
+                        "weight": "bolder",
+                        "horizontalAlignment": "center",
+                        "wrap": True,
+                        "style": "heading"
+                    },
+                    {
+                        "type": "Container",
+                        "style": "accent",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": subject,
+                                "weight": "bolder",
+                                "wrap": True
+                            },
+                            {
+                                "type": "TextBlock",
+                                "text": f"To: {recipient}",
+                                "wrap": True
+                            }
+                        ],
+                        "bleed": True
+                    },
+                    {
+                        "type": "Container",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": email_text,
+                                "wrap": True
+                            }
+                        ],
+                        "style": "default"
+                    }
+                ],
+                "actions": [
+                    {
+                        "type": "Action.Submit",
+                        "title": "Create Another Email",
+                        "data": {
+                            "action": "show_template_categories"
+                        }
+                    },
+                    {
+                        "type": "Action.ShowCard",
+                        "title": "Edit Email",
+                        "card": {
+                            "type": "AdaptiveCard",
+                            "body": [
+                                {
+                                    "type": "Input.Text",
+                                    "label": "Edit Content",
+                                    "id": "edit_content",
+                                    "isMultiline": True,
+                                    "value": email_text
+                                }
+                            ],
+                            "actions": [
+                                {
+                                    "type": "Action.Submit",
+                                    "title": "Update Email",
+                                    "data": {
+                                        "action": "update_email_content"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+            
+            # Create attachment
+            attachment = Attachment(
+                content_type="application/vnd.microsoft.card.adaptive",
+                content=email_card
+            )
+            
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [attachment]
+            await turn_context.send_activity(reply)
+        else:
+            await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
+            
+    except Exception as e:
+        logging.error(f"Error generating email: {e}")
+        traceback.print_exc()
+        
+        # Clean up active runs on error
+        with conversation_states_lock:
+            state["active_run"] = False
+        
+        with active_runs_lock:
+            if thread_id in active_runs:
+                del active_runs[thread_id]
+        
+        await turn_context.send_activity("I'm sorry, I encountered an error while generating your email template. Please try again.")
+
+async def generate_email(turn_context: TurnContext, state, recipient, subject, topic, dos, donts, chain, has_attachments):
+    """Generates an email using AI based on provided parameters with file content support using streaming mode"""
     # Create prompt for the AI
     prompt = f"Generate a professional email with the following details:\n"
     prompt += f"To: {recipient or 'Appropriate recipient'}\n"
@@ -2534,63 +2724,172 @@ async def generate_email(turn_context: TurnContext, state, recipient, subject, t
     if not state.get("assistant_id"):
         await initialize_chat(turn_context, state)
     
-    # Using the client to create or update the assistant happens automatically in the initialize_chat function
-    # and when files are uploaded, so we don't need to specifically configure it here
+    # Send typing indicator immediately
+    await turn_context.send_activity(create_typing_activity())
+    
+    # Create a client
     client = create_client()
+    thread_id = state.get("session_id")
+    assistant_id = state.get("assistant_id")
     
-    # Use the existing process_conversation_internal function to get AI response
-    result = await process_conversation_internal(
-        client=client,
-        session=state["session_id"],
-        prompt=prompt,
-        assistant=state["assistant_id"],
-        stream_output=False
-    )
-    
-    # Extract and format the email
-    if isinstance(result, dict) and "response" in result:
-        email_text = result["response"]
-        
-        # Create an email result card
-        email_card = {
-            "type": "AdaptiveCard",
-            "version": "1.0",
-            "body": [
-                {
-                    "type": "TextBlock",
-                    "text": "Generated Email Template",
-                    "size": "large",
-                    "weight": "bolder"
-                },
-                {
-                    "type": "TextBlock",
-                    "text": email_text,
-                    "wrap": True
-                }
-            ],
-            "actions": [
-                {
-                    "type": "Action.Submit",
-                    "title": "Create Another Email",
-                    "data": {
-                        "action": "create_email"
-                    }
-                }
-            ]
-        }
-        
-        # Create attachment
-        attachment = Attachment(
-            content_type="application/vnd.microsoft.card.adaptive",
-            content=email_card
+    # Start the streaming process
+    try:
+        # Add the prompt to the thread
+        client.beta.threads.messages.create(
+            thread_id=thread_id,
+            role="user",
+            content=prompt
         )
         
-        reply = _create_reply(turn_context.activity)
-        reply.attachments = [attachment]
-        await turn_context.send_activity(reply)
-    else:
-        await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
-# Helper function to send periodic typing indicators
+        # Mark thread as busy (thread-safe)
+        with conversation_states_lock:
+            state["active_run"] = True
+        
+        with active_runs_lock:
+            active_runs[thread_id] = True
+        
+        # Send progress message
+        await turn_context.send_activity("Generating your email template...")
+        
+        # Create email collector
+        class EmailCollector:
+            def __init__(self):
+                self.complete_text = ""
+            
+            def collect_text(self, text):
+                self.complete_text += text
+        
+        collector = EmailCollector()
+        
+        # Start typing indicator task
+        typing_task = asyncio.create_task(send_periodic_typing(turn_context, 4))
+        
+        try:
+            # Create a run
+            run = client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id
+            )
+            
+            run_id = run.id
+            
+            # Poll for completion
+            max_wait_time = 120  # Maximum wait time in seconds
+            wait_interval = 2    # Check interval in seconds
+            elapsed_time = 0
+            
+            while elapsed_time < max_wait_time:
+                # Check run status
+                run_status = client.beta.threads.runs.retrieve(
+                    thread_id=thread_id,
+                    run_id=run_id
+                )
+                
+                # Check for completion
+                if run_status.status == "completed":
+                    # Get the complete message
+                    messages = client.beta.threads.messages.list(
+                        thread_id=thread_id,
+                        order="desc",
+                        limit=1
+                    )
+                    
+                    if messages.data:
+                        latest_message = messages.data[0]
+                        message_text = ""
+                        
+                        for content_part in latest_message.content:
+                            if content_part.type == 'text':
+                                message_text += content_part.text.value
+                        
+                        # Collect the complete email text
+                        collector.collect_text(message_text)
+                        break
+                        
+                # Check for failure states
+                elif run_status.status in ["failed", "cancelled", "expired"]:
+                    logging.error(f"Run {run_id} ended with status: {run_status.status}")
+                    await turn_context.send_activity(f"I encountered an issue while generating the email template. Please try again.")
+                    break
+                
+                # Wait before next check
+                await asyncio.sleep(wait_interval)
+                elapsed_time += wait_interval
+            
+            # Get the collected email text
+            email_text = collector.complete_text
+            
+            # If we have email text, create and send the card
+            if email_text:
+                # Create an email result card
+                email_card = {
+                    "type": "AdaptiveCard",
+                    "version": "1.0",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Generated Email Template",
+                            "size": "large",
+                            "weight": "bolder"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": email_text,
+                            "wrap": True
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "type": "Action.Submit",
+                            "title": "Create Another Email",
+                            "data": {
+                                "action": "create_email"
+                            }
+                        }
+                    ]
+                }
+                
+                # Create attachment
+                attachment = Attachment(
+                    content_type="application/vnd.microsoft.card.adaptive",
+                    content=email_card
+                )
+                
+                reply = _create_reply(turn_context.activity)
+                reply.attachments = [attachment]
+                await turn_context.send_activity(reply)
+            else:
+                await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
+                
+        finally:
+            # Clean up
+            with conversation_states_lock:
+                state["active_run"] = False
+            
+            with active_runs_lock:
+                if thread_id in active_runs:
+                    del active_runs[thread_id]
+            
+            # Cancel typing indicator task
+            typing_task.cancel()
+            try:
+                await typing_task
+            except asyncio.CancelledError:
+                pass
+            
+    except Exception as e:
+        logging.error(f"Error generating email: {e}")
+        traceback.print_exc()
+        
+        # Clean up active runs on error
+        with conversation_states_lock:
+            state["active_run"] = False
+        
+        with active_runs_lock:
+            if thread_id in active_runs:
+                del active_runs[thread_id]
+        
+        await turn_context.send_activity("I'm sorry, I encountered an error while generating your email template. Please try again.")
 async def send_periodic_typing(turn_context: TurnContext, interval_seconds: int):
     """Sends typing indicators periodically until the task is cancelled"""
     try:
