@@ -3168,7 +3168,7 @@ async def bot_logic(turn_context: TurnContext):
                     # Attempt recovery
                     await handle_thread_recovery(turn_context, state, str(e))
             else:
-                await turn_context.send_activity("I didn't receive any text or files. How can I help you?")
+                await turn_context.send_activity("To upload files, use the paperclip icon and select from your device storage only - do not use OneDrive or shared locations. Text, PDF, Image and Doc files are presently supported.")
     
     # Handle Teams file consent card responses
     elif turn_context.activity.type == ActivityTypes.invoke:
@@ -3778,6 +3778,10 @@ async def handle_text_message(turn_context: TurnContext, state):
     if user_message in ["/email", "create email", "write email", "email template"]:
         await send_email_card(turn_context)
         return
+    if user_message.lower() in ["/new", "/reset", "new chat", "start over", "reset chat"]:
+        await handle_new_chat_command(turn_context, state, conversation_id)
+        return
+        
     # Extract user identity for security validation
     user_id = turn_context.activity.from_property.id if hasattr(turn_context.activity, 'from_property') else "unknown"
     
