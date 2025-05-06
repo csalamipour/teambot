@@ -4893,10 +4893,10 @@ async def initialize_chat(turn_context: TurnContext, state=None, context=None):
             await update_context_internal(client, thread.id, context)
             
         # Tell the user chat was initialized
-        await turn_context.send_activity("Hi! I'm the Product Management Bot. I'm ready to help you with your product management tasks.")
+        await turn_context.send_activity("Hi! I'm the AI Assistant here to help you with your tasks.")
         
         if context:
-            await turn_context.send_activity(f"I've initialized with your context: '{context}'")
+            #await turn_context.send_activity(f"I've initialized with your context: '{context}'")
             # Also send the first response
             await send_message(turn_context, state)
             
