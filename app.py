@@ -2982,14 +2982,14 @@ async def download_file(turn_context: TurnContext, attachment: Attachment):
 
 # Function to handle file uploads
 async def handle_file_upload(turn_context: TurnContext, state, message_text=None):
-    """Handle file uploads from Teams with optional message text"""
+    """Handle file uploads from Teams with clear messaging about supported types"""
     
     for attachment in turn_context.activity.attachments:
         try:
             # Send typing indicator
             await turn_context.send_activity(create_typing_activity())
             
-            # Check if it's a file download info
+            # Check if it's a direct file upload (locally uploaded file)
             if hasattr(attachment, 'content_type') and attachment.content_type == ContentType.FILE_DOWNLOAD_INFO:
                 # Download the file using the Teams-specific logic
                 file_path = await download_file(turn_context, attachment)
@@ -3007,24 +3007,27 @@ async def handle_file_upload(turn_context: TurnContext, state, message_text=None
                 # Process the file with message text if provided
                 await process_uploaded_file(turn_context, state, file_path, attachment.name, message_text)
             else:
-                # Only prompt for file uploads if this is actually a file-related attachment
-                # but not in the expected format (prevents the message when dealing with non-file attachments)
-                file_related_types = [
-                    ContentType.FILE_CONSENT_CARD,
-                    ContentType.FILE_INFO_CARD,
-                    "application/vnd.microsoft.teams.file."
-                ]
-                
-                is_file_related = False
+                # Check if this is likely an OneDrive or SharePoint file
+                is_internal_file = False
                 if hasattr(attachment, 'content_type'):
-                    for file_type in file_related_types:
-                        if file_type in attachment.content_type:
-                            is_file_related = True
+                    internal_file_indicators = [
+                        "sharepoint", 
+                        "onedrive", 
+                        "vnd.microsoft.teams.file", 
+                        "application/vnd.microsoft.teams.file"
+                    ]
+                    
+                    for indicator in internal_file_indicators:
+                        if indicator.lower() in attachment.content_type.lower():
+                            is_internal_file = True
                             break
                 
-                if is_file_related:
-                    await turn_context.send_activity("Please upload a file using the file upload feature in Teams.")
-                # If it's not file-related, we don't need to send any message
+                if is_internal_file:
+                    # Provide clear message that only local uploads are supported
+                    await turn_context.send_activity("I'm sorry, but I can only process files uploaded directly from your device. Files shared from OneDrive, SharePoint, or other internal sources are not currently supported. Please download the file to your device first, then upload it directly.")
+                else:
+                    # For other attachment types, provide general guidance
+                    await turn_context.send_activity("To upload a file, please use the file upload feature in Teams to send files directly from your device. Click the paperclip icon in the chat input area to upload a file.")
                 
         except Exception as e:
             logger.error(f"Error processing file: {str(e)}")
