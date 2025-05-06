@@ -378,63 +378,53 @@ async def send_fallback_response(turn_context: TurnContext, user_message: str):
         logging.error(f"Fallback response generation failed: {e}")
         await turn_context.send_activity("I'm experiencing technical difficulties right now. Please try again in a moment.")
 def create_welcome_card():
-    """Creates an enhanced adaptive card that mimics the Copilot interface"""
+    """Creates an enhanced welcome card with modern features"""
     card = {
-        "type": "AdaptiveCard",
-        "version": "1.3",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.5",
         "body": [
             {
-                "type": "Image",
-                "url": "https://cdn.vectorstock.com/i/500p/33/79/rag-blue-gradient-concept-icon-vector-50763379.jpg",  # Replace with your logo URL
-                "size": "medium",
-                "horizontalAlignment": "center"
-            },
-            {
-                "type": "TextBlock",
-                "text": "Email & Chat Assistant",
-                "weight": "bolder",
-                "size": "large",
-                "horizontalAlignment": "center"
-            },
-            {
                 "type": "Container",
+                "style": "emphasis",
+                "bleed": True,
                 "items": [
                     {
                         "type": "ColumnSet",
                         "columns": [
                             {
                                 "type": "Column",
+                                "width": "auto",
+                                "items": [
+                                    {
+                                        "type": "Image",
+                                        "url": "https://adaptivecards.io/content/email.png",
+                                        "size": "Small",
+                                        "altText": "Email assistant icon"
+                                    }
+                                ],
+                                "verticalContentAlignment": "Center"
+                            },
+                            {
+                                "type": "Column",
                                 "width": "stretch",
                                 "items": [
                                     {
                                         "type": "TextBlock",
-                                        "text": "✉️ Communicate effectively",
-                                        "weight": "bolder",
-                                        "color": "accent"
+                                        "text": "Email & Chat Assistant",
+                                        "wrap": True,
+                                        "size": "Large",
+                                        "weight": "Bolder",
+                                        "color": "Accent"
                                     },
                                     {
                                         "type": "TextBlock",
-                                        "text": "Create professional email templates",
+                                        "text": "Your AI-powered communication partner",
                                         "wrap": True,
-                                        "spacing": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.Submit",
-                                                "title": "Create Email",
-                                                "data": {
-                                                    "action": "create_email"
-                                                }
-                                            }
-                                        ]
+                                        "isSubtle": True
                                     }
                                 ],
-                                "style": "emphasis",
-                                "separator": True,
-                                "spacing": "medium"
+                                "verticalContentAlignment": "Center"
                             }
                         ]
                     }
@@ -444,94 +434,118 @@ def create_welcome_card():
                 "type": "Container",
                 "items": [
                     {
-                        "type": "ColumnSet",
-                        "columns": [
+                        "type": "TextBlock",
+                        "text": "👋 Welcome! I'm here to help with your communication needs.",
+                        "wrap": True,
+                        "size": "Medium",
+                        "weight": "Bolder",
+                        "spacing": "Medium"
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": "I can help you with:",
+                        "wrap": True,
+                        "spacing": "Medium"
+                    },
+                    {
+                        "type": "FactSet",
+                        "facts": [
                             {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "📄 Analyze documents",
-                                        "weight": "bolder",
-                                        "color": "accent"
-                                    },
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Upload files to get insights and summaries",
-                                        "wrap": True,
-                                        "spacing": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.Submit",
-                                                "title": "Upload Document",
-                                                "data": {
-                                                    "action": "upload_document"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ],
-                                "style": "emphasis",
-                                "separator": True,
-                                "spacing": "medium"
+                                "title": "📧",
+                                "value": "Drafting professional emails"
+                            },
+                            {
+                                "title": "📄",
+                                "value": "Analyzing documents (PDF, DOC, TXT)"
+                            },
+                            {
+                                "title": "🖼️",
+                                "value": "Describing and analyzing images"
+                            },
+                            {
+                                "title": "💬",
+                                "value": "Answering questions and providing assistance"
                             }
                         ]
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": "⚠️ Note: CSV and Excel files are not supported",
+                        "wrap": True,
+                        "color": "Attention",
+                        "isSubtle": True,
+                        "spacing": "Small"
                     }
                 ]
             },
             {
                 "type": "Container",
+                "style": "good",
                 "items": [
                     {
-                        "type": "ColumnSet",
-                        "columns": [
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "🖼️ Process images",
-                                        "weight": "bolder",
-                                        "color": "accent"
-                                    },
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Upload images for detailed analysis",
-                                        "wrap": True,
-                                        "spacing": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.Submit",
-                                                "title": "Upload Image",
-                                                "data": {
-                                                    "action": "upload_image"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ],
-                                "style": "emphasis",
-                                "separator": True,
-                                "spacing": "medium"
-                            }
-                        ]
+                        "type": "TextBlock",
+                        "text": "Get Started",
+                        "wrap": True,
+                        "size": "Medium",
+                        "weight": "Bolder"
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": "Select an option below or simply type a message to begin.",
+                        "wrap": True
                     }
-                ]
+                ],
+                "spacing": "Medium"
+            }
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": "✉️ Create Email Template",
+                "style": "positive",
+                "data": {
+                    "action": "create_email"
+                }
             },
             {
-                "type": "TextBlock",
-                "text": "Or simply type your question below...",
-                "wrap": True,
-                "horizontalAlignment": "center",
-                "spacing": "large"
+                "type": "Action.Submit",
+                "title": "📁 Upload a Document",
+                "style": "default",
+                "data": {
+                    "action": "show_upload_info"
+                }
+            },
+            {
+                "type": "Action.ShowCard",
+                "title": "❓ Help & Tips",
+                "card": {
+                    "type": "AdaptiveCard",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Quick Tips:",
+                            "wrap": True,
+                            "weight": "Bolder"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "• Type '/email' to create an email template anytime\n• Upload files using the paperclip button in Teams\n• Ask specific questions about uploaded documents\n• For best results, be clear and detailed in your requests",
+                            "wrap": True
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "Sample queries:",
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "spacing": "Medium"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "\"Draft a follow-up email to the marketing team\"\n\"Summarize the key points in this document\"\n\"Help me write a meeting invitation for Friday\"",
+                            "wrap": True
+                        }
+                    ]
+                }
             }
         ]
     }
@@ -539,15 +553,17 @@ def create_welcome_card():
     return CardFactory.adaptive_card(card)
 
 async def send_welcome_message(turn_context: TurnContext):
-    """Sends an enhanced welcome message when bot is added"""
-    # Send the welcome card
+    """Sends enhanced welcome message with modern adaptive card"""
+    welcome_card = create_welcome_card()
+    
     reply = _create_reply(turn_context.activity)
-    reply.attachments = [create_welcome_card()]
+    reply.attachments = [welcome_card]
     await turn_context.send_activity(reply)
+
 
 # Add this to your handle_card_actions function
 async def handle_card_actions(turn_context: TurnContext, action_data):
-    """Handles actions from adaptive cards including template selection"""
+    """Handles actions from adaptive cards including new menu options"""
     try:
         action = action_data.get("action", "")
         
@@ -590,6 +606,51 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             category = action_data.get("category", "custom")
             await generate_category_email(turn_context, state, category, action_data)
             
+        elif action == "update_email_content":
+            # Handle email content update
+            edited_content = action_data.get("edit_content", "")
+            if edited_content:
+                # Create a simple card with the updated content
+                email_card = {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.5",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Updated Email Content",
+                            "size": "Large",
+                            "weight": "Bolder",
+                            "horizontalAlignment": "Center"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": edited_content,
+                            "wrap": True
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "type": "Action.Submit",
+                            "title": "Create Another Email",
+                            "data": {
+                                "action": "show_template_categories"
+                            }
+                        }
+                    ]
+                }
+                
+                attachment = Attachment(
+                    content_type="application/vnd.microsoft.card.adaptive",
+                    content=email_card
+                )
+                
+                reply = _create_reply(turn_context.activity)
+                reply.attachments = [attachment]
+                await turn_context.send_activity(reply)
+            else:
+                await turn_context.send_activity("No changes were made to the email content.")
+            
         elif action == "generate_email":
             # Extract email details from the action data (for backward compatibility)
             recipient = action_data.get("recipient", "")
@@ -598,197 +659,451 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             dos = action_data.get("dos", "")
             donts = action_data.get("donts", "")
             chain = action_data.get("chain", "")
-            has_attachments = action_data.get("hasAttachments", "false") == "true"
+            formality = action_data.get("formality", "semi-formal")
+            attachment_type = action_data.get("attachment_type", "none")
             
-            # Generate email using AI
+            # Set has_attachments based on attachment_type
+            has_attachments = attachment_type in ["reference", "later"]
+            
+            # Generate email using AI with enhanced parameters
             await generate_email(turn_context, state, recipient, subject, topic, dos, donts, chain, has_attachments)
+            
+        elif action == "show_upload_info":
+            # Show information about uploading files
+            await handle_info_request(turn_context, "upload")
+            
+        elif action == "show_help":
+            # Show help and commands information
+            await handle_info_request(turn_context, "help")
             
     except Exception as e:
         logging.error(f"Error handling card action: {e}")
         await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
 def create_new_chat_card():
-    """Creates an adaptive card for starting a new chat session with additional options"""
+    """Creates an enhanced adaptive card for starting a new chat with improved UI"""
     card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
-        "version": "1.0",
+        "version": "1.5",
         "body": [
             {
-                "type": "TextBlock",
-                "text": "PM Bot Menu",
-                "size": "large",
-                "weight": "bolder"
+                "type": "Container",
+                "style": "accent",
+                "bleed": True,
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Virtual Assistant Menu",
+                        "size": "Large",
+                        "weight": "Bolder",
+                        "horizontalAlignment": "Center"
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": "How can I assist you today?",
+                        "wrap": True,
+                        "horizontalAlignment": "Center"
+                    }
+                ]
             },
             {
-                "type": "TextBlock",
-                "text": "Select an action below",
-                "wrap": True
-            }
-        ],
-        "actions": [
-            {
-                "type": "Action.Submit",
-                "title": "Start New Chat",
-                "data": {
-                    "action": "new_chat"
-                }
-            },
-            {
-                "type": "Action.Submit",
-                "title": "Create Email Template",
-                "data": {
-                    "action": "create_email"
-                }
-            },
-            {
-                "type": "Action.Submit",
-                "title": "Help / Commands",
-                "data": {
-                    "action": "show_help"
-                }
+                "type": "Container",
+                "items": [
+                    {
+                        "type": "ColumnSet",
+                        "columns": [
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "Container",
+                                        "style": "good",
+                                        "items": [
+                                            {
+                                                "type": "ColumnSet",
+                                                "columns": [
+                                                    {
+                                                        "type": "Column",
+                                                        "width": "auto",
+                                                        "items": [
+                                                            {
+                                                                "type": "Image",
+                                                                "url": "https://adaptivecards.io/content/chat.png",
+                                                                "size": "Small",
+                                                                "altText": "Chat icon"
+                                                            }
+                                                        ],
+                                                        "verticalContentAlignment": "Center"
+                                                    },
+                                                    {
+                                                        "type": "Column",
+                                                        "width": "stretch",
+                                                        "items": [
+                                                            {
+                                                                "type": "TextBlock",
+                                                                "text": "Start New Chat",
+                                                                "wrap": True,
+                                                                "weight": "Bolder"
+                                                            },
+                                                            {
+                                                                "type": "TextBlock",
+                                                                "text": "Begin a fresh conversation",
+                                                                "wrap": True,
+                                                                "isSubtle": True,
+                                                                "size": "Small"
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ],
+                                        "selectAction": {
+                                            "type": "Action.Submit",
+                                            "data": {
+                                                "action": "new_chat"
+                                            }
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "Container",
+                                        "style": "emphasis",
+                                        "items": [
+                                            {
+                                                "type": "ColumnSet",
+                                                "columns": [
+                                                    {
+                                                        "type": "Column",
+                                                        "width": "auto",
+                                                        "items": [
+                                                            {
+                                                                "type": "Image",
+                                                                "url": "https://adaptivecards.io/content/mail.png",
+                                                                "size": "Small",
+                                                                "altText": "Email icon"
+                                                            }
+                                                        ],
+                                                        "verticalContentAlignment": "Center"
+                                                    },
+                                                    {
+                                                        "type": "Column",
+                                                        "width": "stretch",
+                                                        "items": [
+                                                            {
+                                                                "type": "TextBlock",
+                                                                "text": "Create Email",
+                                                                "wrap": True,
+                                                                "weight": "Bolder"
+                                                            },
+                                                            {
+                                                                "type": "TextBlock",
+                                                                "text": "Draft a new email template",
+                                                                "wrap": True,
+                                                                "isSubtle": True,
+                                                                "size": "Small"
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ],
+                                        "selectAction": {
+                                            "type": "Action.Submit",
+                                            "data": {
+                                                "action": "create_email"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        ],
+                        "spacing": "Medium"
+                    },
+                    {
+                        "type": "ColumnSet",
+                        "columns": [
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "Container",
+                                        "style": "warning",
+                                        "items": [
+                                            {
+                                                "type": "ColumnSet",
+                                                "columns": [
+                                                    {
+                                                        "type": "Column",
+                                                        "width": "auto",
+                                                        "items": [
+                                                            {
+                                                                "type": "Image",
+                                                                "url": "https://adaptivecards.io/content/document.png",
+                                                                "size": "Small",
+                                                                "altText": "File icon"
+                                                            }
+                                                        ],
+                                                        "verticalContentAlignment": "Center"
+                                                    },
+                                                    {
+                                                        "type": "Column",
+                                                        "width": "stretch",
+                                                        "items": [
+                                                            {
+                                                                "type": "TextBlock",
+                                                                "text": "Document Analysis",
+                                                                "wrap": True,
+                                                                "weight": "Bolder"
+                                                            },
+                                                            {
+                                                                "type": "TextBlock",
+                                                                "text": "Upload and analyze files",
+                                                                "wrap": True,
+                                                                "isSubtle": True,
+                                                                "size": "Small"
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ],
+                                        "selectAction": {
+                                            "type": "Action.Submit",
+                                            "data": {
+                                                "action": "show_upload_info"
+                                            }
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "Container",
+                                        "style": "default",
+                                        "items": [
+                                            {
+                                                "type": "ColumnSet",
+                                                "columns": [
+                                                    {
+                                                        "type": "Column",
+                                                        "width": "auto",
+                                                        "items": [
+                                                            {
+                                                                "type": "Image",
+                                                                "url": "https://adaptivecards.io/content/help.png",
+                                                                "size": "Small",
+                                                                "altText": "Help icon"
+                                                            }
+                                                        ],
+                                                        "verticalContentAlignment": "Center"
+                                                    },
+                                                    {
+                                                        "type": "Column",
+                                                        "width": "stretch",
+                                                        "items": [
+                                                            {
+                                                                "type": "TextBlock",
+                                                                "text": "Help & Commands",
+                                                                "wrap": True,
+                                                                "weight": "Bolder"
+                                                            },
+                                                            {
+                                                                "type": "TextBlock",
+                                                                "text": "View available commands",
+                                                                "wrap": True,
+                                                                "isSubtle": True,
+                                                                "size": "Small"
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ],
+                                        "selectAction": {
+                                            "type": "Action.Submit",
+                                            "data": {
+                                                "action": "show_help"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        ],
+                        "spacing": "Medium"
+                    }
+                ]
             }
         ]
     }
+    
     return CardFactory.adaptive_card(card)
-
 def create_email_card():
-    """Creates an improved adaptive card for email composition with better styling"""
+    """Creates an enhanced adaptive card for email composition with improved UI"""
     card = {
-        "type": "AdaptiveCard",
-        "version": "1.3",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.5",
         "body": [
             {
-                "type": "TextBlock",
-                "text": "Email Template Creator",
-                "size": "large",
-                "weight": "bolder",
-                "horizontalAlignment": "center",
-                "color": "accent"
-            },
-            {
                 "type": "Container",
                 "style": "emphasis",
-                "spacing": "medium",
+                "bleed": True,
                 "items": [
                     {
                         "type": "TextBlock",
-                        "text": "Recipient",
+                        "text": "Email Template Creator",
+                        "size": "Large",
+                        "weight": "Bolder",
+                        "horizontalAlignment": "Center"
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": "Fill in the details to generate a professional email",
                         "wrap": True,
-                        "weight": "bolder"
+                        "horizontalAlignment": "Center",
+                        "isSubtle": True
+                    }
+                ]
+            },
+            {
+                "type": "Container",
+                "style": "default",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Basic Information",
+                        "wrap": True,
+                        "weight": "Bolder",
+                        "size": "Medium",
+                        "spacing": "Medium"
                     },
                     {
                         "type": "Input.Text",
+                        "label": "Recipient",
                         "id": "recipient",
                         "placeholder": "Enter recipient(s)",
-                        "spacing": "small"
-                    }
-                ]
-            },
-            {
-                "type": "Container",
-                "style": "emphasis",
-                "spacing": "medium",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Subject",
-                        "wrap": True,
-                        "weight": "bolder"
+                        "isRequired": True,
+                        "errorMessage": "Recipient is required"
                     },
                     {
                         "type": "Input.Text",
+                        "label": "Subject",
                         "id": "subject",
                         "placeholder": "Enter email subject",
-                        "spacing": "small"
-                    }
-                ]
-            },
-            {
-                "type": "Container",
-                "style": "emphasis",
-                "spacing": "medium",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Topic/Purpose",
-                        "wrap": True,
-                        "weight": "bolder"
+                        "isRequired": True,
+                        "errorMessage": "Subject is required"
                     },
                     {
                         "type": "Input.Text",
+                        "label": "Topic/Purpose",
                         "id": "topic",
                         "placeholder": "What is this email about?",
                         "isMultiline": True,
-                        "spacing": "small"
+                        "isRequired": True,
+                        "errorMessage": "Please describe the email purpose"
                     }
                 ]
             },
             {
                 "type": "Container",
-                "style": "emphasis",
-                "spacing": "medium",
+                "style": "default",
                 "items": [
                     {
                         "type": "TextBlock",
-                        "text": "Do's (Optional)",
+                        "text": "Content Guidance",
                         "wrap": True,
-                        "weight": "bolder"
+                        "weight": "Bolder",
+                        "size": "Medium",
+                        "spacing": "Medium"
                     },
                     {
                         "type": "Input.Text",
+                        "label": "Points to Include",
                         "id": "dos",
-                        "placeholder": "Points to include",
-                        "isMultiline": True,
-                        "spacing": "small"
-                    }
-                ]
-            },
-            {
-                "type": "Container",
-                "style": "emphasis",
-                "spacing": "medium",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Don'ts (Optional)",
-                        "wrap": True,
-                        "weight": "bolder"
+                        "placeholder": "Specific points you want to include",
+                        "isMultiline": True
                     },
                     {
                         "type": "Input.Text",
+                        "label": "Points to Avoid",
                         "id": "donts",
-                        "placeholder": "Points to avoid",
-                        "isMultiline": True,
-                        "spacing": "small"
+                        "placeholder": "Topics or points to avoid mentioning",
+                        "isMultiline": True
                     }
                 ]
             },
             {
                 "type": "Container",
-                "style": "emphasis",
-                "spacing": "medium",
+                "style": "default",
                 "items": [
                     {
                         "type": "TextBlock",
-                        "text": "Previous Email (for replies)",
+                        "text": "Additional Options",
                         "wrap": True,
-                        "weight": "bolder"
+                        "weight": "Bolder",
+                        "size": "Medium",
+                        "spacing": "Medium"
                     },
                     {
                         "type": "Input.Text",
+                        "label": "Previous Email (for replies)",
                         "id": "chain",
                         "placeholder": "Paste previous email if this is a reply",
-                        "isMultiline": True,
-                        "spacing": "small"
+                        "isMultiline": True
+                    },
+                    {
+                        "type": "Input.ChoiceSet",
+                        "id": "formality",
+                        "label": "Tone",
+                        "choices": [
+                            {
+                                "title": "Formal",
+                                "value": "formal"
+                            },
+                            {
+                                "title": "Semi-formal",
+                                "value": "semi-formal"
+                            },
+                            {
+                                "title": "Casual",
+                                "value": "casual"
+                            }
+                        ],
+                        "value": "semi-formal",
+                        "style": "compact"
+                    },
+                    {
+                        "type": "Input.ChoiceSet",
+                        "id": "attachment_type",
+                        "label": "Attachments",
+                        "choices": [
+                            {
+                                "title": "No attachments",
+                                "value": "none"
+                            },
+                            {
+                                "title": "Reference uploaded files",
+                                "value": "reference"
+                            },
+                            {
+                                "title": "Will send attachments later",
+                                "value": "later"
+                            }
+                        ],
+                        "value": "none",
+                        "style": "expanded"
                     }
                 ]
-            },
-            {
-                "type": "Input.Toggle",
-                "id": "hasAttachments",
-                "title": "Include attachments?",
-                "value": "false",
-                "spacing": "medium"
             }
         ],
         "actions": [
@@ -798,6 +1113,49 @@ def create_email_card():
                 "style": "positive",
                 "data": {
                     "action": "generate_email"
+                }
+            },
+            {
+                "type": "Action.ShowCard",
+                "title": "Email Templates",
+                "card": {
+                    "type": "AdaptiveCard",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Select a Template Category",
+                            "weight": "Bolder"
+                        },
+                        {
+                            "type": "ActionSet",
+                            "actions": [
+                                {
+                                    "type": "Action.Submit",
+                                    "title": "Introduction",
+                                    "data": {
+                                        "action": "template_category",
+                                        "category": "introduction"
+                                    }
+                                },
+                                {
+                                    "type": "Action.Submit",
+                                    "title": "Follow-up",
+                                    "data": {
+                                        "action": "template_category",
+                                        "category": "followup"
+                                    }
+                                },
+                                {
+                                    "type": "Action.Submit",
+                                    "title": "Meeting",
+                                    "data": {
+                                        "action": "template_category",
+                                        "category": "meeting"
+                                    }
+                                }
+                            ]
+                        }
+                    ]
                 }
             },
             {
@@ -819,10 +1177,197 @@ def create_email_card():
     return attachment
 
 async def send_email_card(turn_context: TurnContext):
-    """Sends an email composer card to the user"""
+    """Sends an enhanced email composer card to the user"""
     reply = _create_reply(turn_context.activity)
     reply.attachments = [create_email_card()]
     await turn_context.send_activity(reply)
+async def handle_info_request(turn_context: TurnContext, info_type: str):
+    """Handles requests for information about uploads or help"""
+    if info_type == "upload":
+        upload_info_card = {
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "type": "AdaptiveCard",
+            "version": "1.5",
+            "body": [
+                {
+                    "type": "Container",
+                    "style": "attention",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "How to Upload Files",
+                            "size": "Large",
+                            "weight": "Bolder",
+                            "horizontalAlignment": "Center"
+                        }
+                    ],
+                    "bleed": True
+                },
+                {
+                    "type": "Container",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "To upload and analyze files:",
+                            "wrap": True,
+                            "weight": "Bolder"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "1. Click the paperclip icon in the Teams chat input area\n2. Select your file from your device\n3. Send the file to me\n4. Once uploaded, you can ask questions about the file",
+                            "wrap": True
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "Supported File Types:",
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "spacing": "Medium"
+                        },
+                        {
+                            "type": "FactSet",
+                            "facts": [
+                                {
+                                    "title": "Documents",
+                                    "value": "PDF, DOC, DOCX, TXT"
+                                },
+                                {
+                                    "title": "Images",
+                                    "value": "JPG, JPEG, PNG, GIF, BMP"
+                                },
+                                {
+                                    "title": "Not Supported",
+                                    "value": "CSV, XLSX, XLS, XLSM"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "actions": [
+                {
+                    "type": "Action.Submit",
+                    "title": "Back to Menu",
+                    "data": {
+                        "action": "new_chat"
+                    }
+                }
+            ]
+        }
+        
+        attachment = Attachment(
+            content_type="application/vnd.microsoft.card.adaptive",
+            content=upload_info_card
+        )
+        
+        reply = _create_reply(turn_context.activity)
+        reply.attachments = [attachment]
+        await turn_context.send_activity(reply)
+        
+    elif info_type == "help":
+        help_card = {
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "type": "AdaptiveCard",
+            "version": "1.5",
+            "body": [
+                {
+                    "type": "Container",
+                    "style": "accent",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Available Commands & Tips",
+                            "size": "Large",
+                            "weight": "Bolder",
+                            "horizontalAlignment": "Center"
+                        }
+                    ],
+                    "bleed": True
+                },
+                {
+                    "type": "Container",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Text Commands:",
+                            "wrap": True,
+                            "weight": "Bolder"
+                        },
+                        {
+                            "type": "FactSet",
+                            "facts": [
+                                {
+                                    "title": "/email",
+                                    "value": "Create a new email template"
+                                },
+                                {
+                                    "title": "create email",
+                                    "value": "Create a new email template"
+                                },
+                                {
+                                    "title": "write email",
+                                    "value": "Create a new email template"
+                                },
+                                {
+                                    "title": "email template",
+                                    "value": "Create a new email template"
+                                }
+                            ]
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "Working with Files:",
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "spacing": "Medium"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "• Upload files using the paperclip icon in Teams\n• Ask questions about uploaded documents\n• Request analysis or summaries of documents\n• Reference file content in email drafts",
+                            "wrap": True
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "Sample Requests:",
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "spacing": "Medium"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "\"Write a professional email to the marketing team about the new product launch\"\n\n\"Summarize the key points from the document I just uploaded\"\n\n\"Draft a meeting invitation for a project kickoff on Friday\"",
+                            "wrap": True
+                        }
+                    ]
+                }
+            ],
+            "actions": [
+                {
+                    "type": "Action.Submit",
+                    "title": "Email Templates",
+                    "data": {
+                        "action": "show_template_categories"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Back to Menu",
+                    "data": {
+                        "action": "new_chat"
+                    }
+                }
+            ]
+        }
+        
+        attachment = Attachment(
+            content_type="application/vnd.microsoft.card.adaptive",
+            content=help_card
+        )
+        
+        reply = _create_reply(turn_context.activity)
+        reply.attachments = [attachment]
+        await turn_context.send_activity(reply)
+
 
 # Example of handling email generation result
 def create_email_result_card(email_text):
@@ -1249,51 +1794,55 @@ FORMAT THE EMAIL WITH:
     return base_prompt.get(category, base_prompt["custom"])
 
 async def send_category_email_card(turn_context: TurnContext, category: str):
-    """Sends a category-specific email composition card"""
+    """Sends a category-specific email composition card with advanced adaptive card features"""
     # Get category-specific default values and placeholders
     defaults = get_category_defaults(category)
     
+    # Base card structure with advanced features
     card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
-        "version": "1.0",
+        "version": "1.5",
         "body": [
             {
                 "type": "TextBlock",
+                "size": "medium",
+                "weight": "bolder",
                 "text": f"{defaults['title']} Email Template",
-                "size": "large",
-                "weight": "bolder"
+                "horizontalAlignment": "center",
+                "wrap": True,
+                "style": "heading"
             },
             {
-                "type": "TextBlock",
-                "text": "Recipient",
-                "wrap": True
-            },
-            {
-                "type": "Input.Text",
-                "id": "recipient",
-                "placeholder": defaults["recipient_placeholder"]
-            },
-            {
-                "type": "TextBlock",
-                "text": "Subject",
-                "wrap": True
-            },
-            {
-                "type": "Input.Text",
-                "id": "subject",
-                "placeholder": defaults["subject_placeholder"],
-                "value": defaults["subject_default"]
-            },
-            {
-                "type": "TextBlock",
-                "text": "Purpose/Details",
-                "wrap": True
-            },
-            {
-                "type": "Input.Text",
-                "id": "topic",
-                "placeholder": defaults["purpose_placeholder"],
-                "isMultiline": True
+                "type": "Container",
+                "style": "emphasis",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Basic Information",
+                        "weight": "bolder",
+                        "size": "medium"
+                    },
+                    {
+                        "type": "Input.Text",
+                        "label": "Recipient",
+                        "id": "recipient",
+                        "placeholder": defaults["recipient_placeholder"],
+                        "style": "text",
+                        "isRequired": True,
+                        "errorMessage": "Recipient is required"
+                    },
+                    {
+                        "type": "Input.Text",
+                        "label": "Subject",
+                        "id": "subject",
+                        "placeholder": defaults["subject_placeholder"],
+                        "value": defaults["subject_default"],
+                        "style": "text",
+                        "isRequired": True,
+                        "errorMessage": "Subject is required"
+                    }
+                ]
             }
         ],
         "actions": [
@@ -1306,6 +1855,58 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
                 }
             },
             {
+                "type": "Action.ShowCard",
+                "title": "Advanced Options",
+                "card": {
+                    "type": "AdaptiveCard",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Style and Formatting",
+                            "weight": "bolder"
+                        },
+                        {
+                            "type": "Input.ChoiceSet",
+                            "id": "formality",
+                            "label": "Formality Level",
+                            "style": "compact",
+                            "choices": [
+                                {
+                                    "title": "Formal",
+                                    "value": "formal"
+                                },
+                                {
+                                    "title": "Semi-formal",
+                                    "value": "semi-formal"
+                                },
+                                {
+                                    "title": "Casual",
+                                    "value": "casual"
+                                }
+                            ],
+                            "value": "semi-formal"
+                        },
+                        {
+                            "type": "Input.Toggle",
+                            "id": "use_bullets",
+                            "title": "Use bullet points for lists",
+                            "valueOn": "true",
+                            "valueOff": "false",
+                            "value": "true"
+                        },
+                        {
+                            "type": "Input.Number",
+                            "id": "max_length",
+                            "label": "Target Length (sentences)",
+                            "placeholder": "10-15",
+                            "min": 5,
+                            "max": 30,
+                            "value": 12
+                        }
+                    ]
+                }
+            },
+            {
                 "type": "Action.Submit",
                 "title": "Back to Categories",
                 "data": {
@@ -1315,116 +1916,310 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
         ]
     }
     
-    # Add category-specific fields
+    # Add purpose/details section based on category
+    purpose_container = {
+        "type": "Container",
+        "items": [
+            {
+                "type": "TextBlock",
+                "text": "Email Content",
+                "weight": "bolder",
+                "size": "medium"
+            },
+            {
+                "type": "Input.Text",
+                "label": "Purpose/Details",
+                "id": "topic",
+                "placeholder": defaults["purpose_placeholder"],
+                "isMultiline": True,
+                "style": "text",
+                "isRequired": True,
+                "errorMessage": "Please provide content details"
+            }
+        ]
+    }
+    
+    # Add category-specific sections
     if category == "followup":
-        card["body"].insert(6, {
-            "type": "TextBlock",
-            "text": "Previous Interaction Date",
-            "wrap": True
-        })
-        card["body"].insert(7, {
-            "type": "Input.Text",
-            "id": "interaction_date",
-            "placeholder": "e.g., Last Tuesday, October 15th"
-        })
-        card["body"].insert(8, {
-            "type": "TextBlock",
-            "text": "Previous Email/Conversation",
-            "wrap": True
-        })
-        card["body"].insert(9, {
-            "type": "Input.Text",
-            "id": "chain",
-            "placeholder": "Paste previous email or summarize last conversation",
-            "isMultiline": True
-        })
+        followup_container = {
+            "type": "Container",
+            "items": [
+                {
+                    "type": "TextBlock",
+                    "text": "Follow-up Details",
+                    "weight": "bolder",
+                    "size": "medium"
+                },
+                {
+                    "type": "Input.Date",
+                    "label": "Previous Interaction Date",
+                    "id": "interaction_date"
+                },
+                {
+                    "type": "Input.Text",
+                    "label": "Previous Email/Conversation",
+                    "id": "chain",
+                    "placeholder": "Paste previous email or summarize conversation",
+                    "isMultiline": True
+                },
+                {
+                    "type": "Input.ChoiceSet",
+                    "label": "Follow-up Type",
+                    "id": "followup_type",
+                    "style": "expanded",
+                    "choices": [
+                        {
+                            "title": "Request update on prior discussion",
+                            "value": "request_update"
+                        },
+                        {
+                            "title": "Provide additional information",
+                            "value": "provide_info"
+                        },
+                        {
+                            "title": "Schedule next steps",
+                            "value": "schedule_next"
+                        },
+                        {
+                            "title": "Other (specify in details)",
+                            "value": "other"
+                        }
+                    ],
+                    "value": "request_update"
+                }
+            ]
+        }
+        card["body"].append(followup_container)
     
     elif category == "request":
-        card["body"].insert(6, {
-            "type": "TextBlock",
-            "text": "Requested Action",
-            "wrap": True
-        })
-        card["body"].insert(7, {
-            "type": "Input.Text",
-            "id": "requested_action",
-            "placeholder": "Specific action you're requesting"
-        })
-        card["body"].insert(8, {
-            "type": "TextBlock",
-            "text": "Deadline (if applicable)",
-            "wrap": True
-        })
-        card["body"].insert(9, {
-            "type": "Input.Text",
-            "id": "deadline",
-            "placeholder": "When you need this by"
-        })
+        request_container = {
+            "type": "Container",
+            "items": [
+                {
+                    "type": "TextBlock",
+                    "text": "Request Details",
+                    "weight": "bolder",
+                    "size": "medium"
+                },
+                {
+                    "type": "Input.Text",
+                    "label": "Requested Action",
+                    "id": "requested_action",
+                    "placeholder": "Specific action you're requesting",
+                    "isRequired": True,
+                    "errorMessage": "Please specify the requested action"
+                },
+                {
+                    "type": "Input.Date",
+                    "label": "Deadline",
+                    "id": "deadline"
+                },
+                {
+                    "type": "Input.ChoiceSet",
+                    "label": "Priority Level",
+                    "id": "priority",
+                    "style": "compact",
+                    "choices": [
+                        {
+                            "title": "High",
+                            "value": "high"
+                        },
+                        {
+                            "title": "Medium",
+                            "value": "medium"
+                        },
+                        {
+                            "title": "Low",
+                            "value": "low"
+                        }
+                    ],
+                    "value": "medium"
+                }
+            ]
+        }
+        card["body"].append(request_container)
     
     elif category == "meeting":
-        card["body"].insert(6, {
-            "type": "TextBlock",
-            "text": "Meeting Date & Time",
-            "wrap": True
-        })
-        card["body"].insert(7, {
-            "type": "Input.Text",
-            "id": "meeting_time",
-            "placeholder": "e.g., Monday, Nov 8 at 2:00 PM EST"
-        })
-        card["body"].insert(8, {
-            "type": "TextBlock",
-            "text": "Location/Link",
-            "wrap": True
-        })
-        card["body"].insert(9, {
-            "type": "Input.Text",
-            "id": "meeting_location",
-            "placeholder": "Physical location or virtual meeting link"
-        })
-        card["body"].insert(10, {
-            "type": "TextBlock",
-            "text": "Agenda Items",
-            "wrap": True
-        })
-        card["body"].insert(11, {
-            "type": "Input.Text",
-            "id": "agenda",
-            "placeholder": "List main points to discuss",
-            "isMultiline": True
-        })
+        meeting_container = {
+            "type": "Container",
+            "items": [
+                {
+                    "type": "TextBlock",
+                    "text": "Meeting Details",
+                    "weight": "bolder",
+                    "size": "medium"
+                },
+                {
+                    "type": "Input.Date",
+                    "label": "Meeting Date",
+                    "id": "meeting_date",
+                    "isRequired": True,
+                    "errorMessage": "Please select a meeting date"
+                },
+                {
+                    "type": "Input.Time",
+                    "label": "Meeting Time",
+                    "id": "meeting_time",
+                    "isRequired": True,
+                    "errorMessage": "Please select a meeting time"
+                },
+                {
+                    "type": "Input.Text",
+                    "label": "Location/Link",
+                    "id": "meeting_location",
+                    "placeholder": "Physical location or virtual meeting link"
+                },
+                {
+                    "type": "Input.Text",
+                    "label": "Agenda Items",
+                    "id": "agenda",
+                    "placeholder": "List main points to discuss",
+                    "isMultiline": True
+                },
+                {
+                    "type": "Input.ChoiceSet",
+                    "label": "Meeting Type",
+                    "id": "meeting_type",
+                    "style": "expanded",
+                    "choices": [
+                        {
+                            "title": "Initial discussion",
+                            "value": "initial"
+                        },
+                        {
+                            "title": "Project update",
+                            "value": "update"
+                        },
+                        {
+                            "title": "Decision making",
+                            "value": "decision"
+                        },
+                        {
+                            "title": "Brainstorming session",
+                            "value": "brainstorm"
+                        },
+                        {
+                            "title": "Other (specify in details)",
+                            "value": "other"
+                        }
+                    ],
+                    "value": "initial"
+                }
+            ]
+        }
+        card["body"].append(meeting_container)
+    
+    elif category == "status":
+        status_container = {
+            "type": "Container",
+            "items": [
+                {
+                    "type": "TextBlock",
+                    "text": "Status Update Details",
+                    "weight": "bolder",
+                    "size": "medium"
+                },
+                {
+                    "type": "Input.Text",
+                    "label": "Project/Initiative Name",
+                    "id": "project_name",
+                    "placeholder": "Name of the project or initiative"
+                },
+                {
+                    "type": "Input.ChoiceSet",
+                    "label": "Overall Status",
+                    "id": "overall_status",
+                    "style": "expanded",
+                    "choices": [
+                        {
+                            "title": "On track (Green)",
+                            "value": "on_track"
+                        },
+                        {
+                            "title": "At risk (Yellow)",
+                            "value": "at_risk"
+                        },
+                        {
+                            "title": "Off track (Red)",
+                            "value": "off_track"
+                        },
+                        {
+                            "title": "Completed (Blue)",
+                            "value": "completed"
+                        }
+                    ],
+                    "value": "on_track"
+                },
+                {
+                    "type": "Input.Text",
+                    "label": "Key Accomplishments",
+                    "id": "accomplishments",
+                    "placeholder": "List major achievements since last update",
+                    "isMultiline": True
+                },
+                {
+                    "type": "Input.Text",
+                    "label": "Challenges/Blockers",
+                    "id": "blockers",
+                    "placeholder": "List any challenges or blockers",
+                    "isMultiline": True
+                }
+            ]
+        }
+        card["body"].append(status_container)
+
+    # Add purpose section after category-specific sections
+    card["body"].append(purpose_container)
     
     # Common optional fields for all categories
-    card["body"].extend([
-        {
-            "type": "TextBlock",
-            "text": "Key Points to Include (Optional)",
-            "wrap": True
-        },
-        {
-            "type": "Input.Text",
-            "id": "dos",
-            "placeholder": "Important points, tone preferences, etc.",
-            "isMultiline": True
-        },
-        {
-            "type": "TextBlock",
-            "text": "Points to Avoid (Optional)",
-            "wrap": True
-        },
-        {
-            "type": "Input.Text",
-            "id": "donts",
-            "placeholder": "Topics to avoid, sensitive issues, etc.",
-            "isMultiline": True
-        },
-        {
-            "type": "Input.Toggle",
-            "id": "hasAttachments",
-            "title": "Include attachments?",
-            "value": "false"
-        }
-    ])
+    optional_container = {
+        "type": "Container",
+        "items": [
+            {
+                "type": "TextBlock",
+                "text": "Additional Options",
+                "weight": "bolder",
+                "size": "medium"
+            },
+            {
+                "type": "Input.Text",
+                "label": "Key Points to Include",
+                "id": "dos",
+                "placeholder": "Important points, tone preferences, etc.",
+                "isMultiline": True
+            },
+            {
+                "type": "Input.Text",
+                "label": "Points to Avoid",
+                "id": "donts",
+                "placeholder": "Topics to avoid, sensitive issues, etc.",
+                "isMultiline": True
+            },
+            {
+                "type": "Input.ChoiceSet",
+                "label": "File Attachments",
+                "id": "attachment_type",
+                "style": "compact",
+                "choices": [
+                    {
+                        "title": "No attachments",
+                        "value": "none"
+                    },
+                    {
+                        "title": "Reference uploaded files",
+                        "value": "reference"
+                    },
+                    {
+                        "title": "Will send attachments later",
+                        "value": "later"
+                    }
+                ],
+                "value": "none"
+            }
+        ]
+    }
+    
+    card["body"].append(optional_container)
     
     attachment = Attachment(
         content_type="application/vnd.microsoft.card.adaptive",
@@ -1434,7 +2229,6 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
     reply = _create_reply(turn_context.activity)
     reply.attachments = [attachment]
     await turn_context.send_activity(reply)
-
 
 def get_category_defaults(category: str) -> dict:
     """Returns default values and placeholders for the selected category"""
@@ -1500,7 +2294,7 @@ def get_category_defaults(category: str) -> dict:
     return defaults.get(category, defaults["custom"])
 
 async def generate_category_email(turn_context: TurnContext, state, category: str, form_data: dict):
-    """Generates an email using AI based on category template and provided parameters"""
+    """Generates an email using AI based on enhanced category template and provided parameters"""
     # Send typing indicator
     await turn_context.send_activity(create_typing_activity())
     
@@ -1510,7 +2304,12 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
     topic = form_data.get("topic", "")
     dos = form_data.get("dos", "")
     donts = form_data.get("donts", "")
-    has_attachments = form_data.get("hasAttachments", "false") == "true"
+    
+    # Extract advanced options
+    formality = form_data.get("formality", "semi-formal")
+    use_bullets = form_data.get("use_bullets", "true") == "true"
+    max_length = form_data.get("max_length", "12")
+    attachment_type = form_data.get("attachment_type", "none")
     
     # Get the specialized template prompt for this category
     template_prompt = get_template_prompt(category)
@@ -1521,26 +2320,59 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
     prompt += f"Subject: {subject or 'Appropriate subject based on context'}\n"
     prompt += f"Purpose/Details: {topic or 'Unspecified'}\n"
     
+    # Add formality level instruction
+    prompt += f"\nFORMATTING INSTRUCTIONS:\n"
+    prompt += f"- Use a {formality} tone throughout the email\n"
+    
+    if use_bullets:
+        prompt += "- Use bullet points for any lists or multiple items\n"
+    else:
+        prompt += "- Use paragraph format instead of bullet points\n"
+        
+    prompt += f"- Target length: Approximately {max_length} sentences total\n"
+    
     # Add category-specific form data
     if category == "followup":
         interaction_date = form_data.get("interaction_date", "")
         previous_communication = form_data.get("chain", "")
+        followup_type = form_data.get("followup_type", "request_update")
+        
         prompt += f"Previous Interaction Date: {interaction_date}\n"
         prompt += f"Previous Communication: {previous_communication}\n"
+        prompt += f"Follow-up Type: {followup_type}\n"
     
     elif category == "request":
         requested_action = form_data.get("requested_action", "")
         deadline = form_data.get("deadline", "")
+        priority = form_data.get("priority", "medium")
+        
         prompt += f"Requested Action: {requested_action}\n"
         prompt += f"Deadline: {deadline}\n"
+        prompt += f"Priority Level: {priority}\n"
     
     elif category == "meeting":
+        meeting_date = form_data.get("meeting_date", "")
         meeting_time = form_data.get("meeting_time", "")
         meeting_location = form_data.get("meeting_location", "")
         agenda = form_data.get("agenda", "")
-        prompt += f"Meeting Date & Time: {meeting_time}\n"
+        meeting_type = form_data.get("meeting_type", "initial")
+        
+        prompt += f"Meeting Date: {meeting_date}\n"
+        prompt += f"Meeting Time: {meeting_time}\n"
         prompt += f"Location/Link: {meeting_location}\n"
         prompt += f"Agenda Items: {agenda}\n"
+        prompt += f"Meeting Type: {meeting_type}\n"
+    
+    elif category == "status":
+        project_name = form_data.get("project_name", "")
+        overall_status = form_data.get("overall_status", "on_track")
+        accomplishments = form_data.get("accomplishments", "")
+        blockers = form_data.get("blockers", "")
+        
+        prompt += f"Project/Initiative Name: {project_name}\n"
+        prompt += f"Overall Status: {overall_status}\n"
+        prompt += f"Key Accomplishments: {accomplishments}\n"
+        prompt += f"Challenges/Blockers: {blockers}\n"
     
     # Add common optional fields
     if dos:
@@ -1549,24 +2381,13 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
         prompt += f"Points to avoid: {donts}\n"
     
     # Handle attachments instruction
-    if has_attachments:
+    if attachment_type == "reference":
         prompt += "\nIMPORTANT: The user has indicated there are file attachments for this email. "
         prompt += f"If any files have been uploaded to this conversation, use your file_search tool to retrieve relevant information related to '{subject} {topic}' "
         prompt += "and incorporate key insights into the email content."
         prompt += "\nInclude a line at the end mentioning that documents are attached for reference."
-    
-    # Add example-based instruction for better formatting
-    if category == "introduction":
-        prompt += "\n\nHere's an example of a good introduction email format (do not copy this content, just the structure):\n\n"
-        prompt += "Hi [Name],\n\n"
-        prompt += "I hope this email finds you well. My name is [Your Name] and I'm the [Your Position] at [Your Company], where we specialize in [brief description].\n\n"
-        prompt += "I'm reaching out because [specific reason with value proposition]. Our [product/service/expertise] has helped organizations like yours [specific benefit].\n\n"
-        prompt += "Would you be available for a 15-minute call next week to discuss how we might [specific value]? I'm free Tuesday or Wednesday afternoon if either works for you.\n\n"
-        prompt += "Looking forward to connecting,\n\n"
-        prompt += "[Your Name]\n"
-        prompt += "[Your Position]\n"
-        prompt += "[Your Company]\n"
-        prompt += "[Contact Information]"
+    elif attachment_type == "later":
+        prompt += "\nInclude a line at the end mentioning that relevant documents will be sent in a follow-up email."
     
     # Initialize chat if needed
     if not state.get("assistant_id"):
@@ -1586,21 +2407,49 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
     if isinstance(result, dict) and "response" in result:
         email_text = result["response"]
         
-        # Create an email result card
+        # Create an enhanced email result card
         email_card = {
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
             "type": "AdaptiveCard",
-            "version": "1.0",
+            "version": "1.5",
             "body": [
                 {
                     "type": "TextBlock",
                     "text": f"Generated {category.title()} Email",
                     "size": "large",
-                    "weight": "bolder"
+                    "weight": "bolder",
+                    "horizontalAlignment": "center",
+                    "wrap": True,
+                    "style": "heading"
                 },
                 {
-                    "type": "TextBlock",
-                    "text": email_text,
-                    "wrap": True
+                    "type": "Container",
+                    "style": "accent",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": subject,
+                            "weight": "bolder",
+                            "wrap": True
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": f"To: {recipient}",
+                            "wrap": True
+                        }
+                    ],
+                    "bleed": True
+                },
+                {
+                    "type": "Container",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": email_text,
+                            "wrap": True
+                        }
+                    ],
+                    "style": "default"
                 }
             ],
             "actions": [
@@ -1609,6 +2458,31 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
                     "title": "Create Another Email",
                     "data": {
                         "action": "show_template_categories"
+                    }
+                },
+                {
+                    "type": "Action.ShowCard",
+                    "title": "Edit Email",
+                    "card": {
+                        "type": "AdaptiveCard",
+                        "body": [
+                            {
+                                "type": "Input.Text",
+                                "label": "Edit Content",
+                                "id": "edit_content",
+                                "isMultiline": True,
+                                "value": email_text
+                            }
+                        ],
+                        "actions": [
+                            {
+                                "type": "Action.Submit",
+                                "title": "Update Email",
+                                "data": {
+                                    "action": "update_email_content"
+                                }
+                            }
+                        ]
                     }
                 }
             ]
@@ -1727,7 +2601,7 @@ async def send_periodic_typing(turn_context: TurnContext, interval_seconds: int)
         # Task was cancelled, exit cleanly
         pass
 async def send_new_chat_card(turn_context: TurnContext):
-    """Sends a card with a button to start a new chat session"""
+    """Sends an enhanced card with buttons to start a new chat session"""
     reply = _create_reply(turn_context.activity)
     reply.attachments = [create_new_chat_card()]
     await turn_context.send_activity(reply)
