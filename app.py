@@ -281,7 +281,7 @@ async def handle_thread_recovery(turn_context: TurnContext, state, error_message
         client = create_client()
         
         # Send a message to indicate recovery
-        recovery_message = "I encountered an issue with our conversation. Creating a fresh session while keeping our context."
+        recovery_message = "Creating a fresh session while keeping our context."
         await turn_context.send_activity(recovery_message)
         
         # Create completely new resources
