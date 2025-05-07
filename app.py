@@ -560,7 +560,187 @@ async def send_welcome_message(turn_context: TurnContext):
     reply.attachments = [welcome_card]
     await turn_context.send_activity(reply)
 
-
+def create_edit_email_card(original_email):
+    """
+    Creates an adaptive card for email editing.
+    
+    Args:
+        original_email: The original email text to edit
+    
+    Returns:
+        Attachment: The card attachment
+    """
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.0",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "Edit Email",
+                "size": "large",
+                "weight": "bolder"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Current Email:",
+                "wrap": True
+            },
+            {
+                "type": "TextBlock",
+                "text": original_email,
+                "wrap": True,
+                "spacing": "Small"
+            },
+            {
+                "type": "TextBlock",
+                "text": "What changes would you like to make?",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "edit_instructions",
+                "placeholder": "E.g., 'Make it more concise', 'Add more details about payment options', 'Change the tone to be more urgent'",
+                "isMultiline": True
+            }
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": "Apply Changes",
+                "data": {
+                    "action": "apply_email_edits"
+                }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Cancel",
+                "data": {
+                    "action": "cancel_edit"
+                }
+            }
+        ]
+    }
+    
+    attachment = Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card
+    )
+    
+    return attachment
+async def send_edit_email_card(turn_context: TurnContext, state):
+    """
+    Sends an email editing card to the user.
+    
+    Args:
+        turn_context: The turn context
+        state: The conversation state containing the last generated email
+    """
+    with conversation_states_lock:
+        original_email = state.get("last_generated_email", "")
+    
+    if not original_email:
+        await turn_context.send_activity("I couldn't find a recently generated email to edit. Please create a new email first.")
+        return
+    
+    reply = _create_reply(turn_context.activity)
+    reply.attachments = [create_edit_email_card(original_email)]
+    await turn_context.send_activity(reply)
+async def apply_email_edits(turn_context: TurnContext, state, edit_instructions):
+    """
+    Applies edits to the previously generated email.
+    
+    Args:
+        turn_context: The turn context
+        state: The conversation state
+        edit_instructions: Instructions for editing the email
+    """
+    # Send typing indicator
+    await turn_context.send_activity(create_typing_activity())
+    
+    # Get the original email and template data
+    with conversation_states_lock:
+        original_email = state.get("last_generated_email", "")
+        template_id = state.get("last_email_template", "generic")
+        email_data = state.get("last_email_data", {})
+    
+    if not original_email:
+        await turn_context.send_activity("I couldn't find the original email to edit. Please create a new email.")
+        return
+    
+    # Create prompt for editing
+    prompt = f"Edit the following email based on these instructions: {edit_instructions}\n\n"
+    prompt += "ORIGINAL EMAIL:\n"
+    prompt += f"{original_email}\n\n"
+    prompt += "Please provide the complete revised email with all changes incorporated."
+    
+    # Initialize chat if needed
+    if not state.get("assistant_id"):
+        await initialize_chat(turn_context, state)
+    
+    # Use the existing process_conversation_internal function to get AI response
+    client = create_client()
+    result = await process_conversation_internal(
+        client=client,
+        session=state["session_id"],
+        prompt=prompt,
+        assistant=state["assistant_id"],
+        stream_output=False
+    )
+    
+    # Extract and format the edited email
+    if isinstance(result, dict) and "response" in result:
+        edited_email = result["response"]
+        
+        # Update the saved email
+        with conversation_states_lock:
+            state["last_generated_email"] = edited_email
+        
+        # Create an email result card
+        email_card = {
+            "type": "AdaptiveCard",
+            "version": "1.0",
+            "body": [
+                {
+                    "type": "TextBlock",
+                    "text": "Edited Email",
+                    "size": "large",
+                    "weight": "bolder"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": edited_email,
+                    "wrap": True
+                }
+            ],
+            "actions": [
+                {
+                    "type": "Action.Submit",
+                    "title": "Edit Again",
+                    "data": {
+                        "action": "edit_email"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Create Another Email",
+                    "data": {
+                        "action": "create_email"
+                    }
+                }
+            ]
+        }
+        
+        # Create attachment
+        attachment = Attachment(
+            content_type="application/vnd.microsoft.card.adaptive",
+            content=email_card
+        )
+        
+        reply = _create_reply(turn_context.activity)
+        reply.attachments = [attachment]
+        await turn_context.send_activity(reply)
+    else:
+        await turn_context.send_activity("I'm sorry, I couldn't edit the email. Please try again with different instructions.")
 # Add this to your handle_card_actions function
 async def handle_card_actions(turn_context: TurnContext, action_data):
     """Handles actions from adaptive cards"""
@@ -626,6 +806,80 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             
             # Send the appropriate template card
             await send_email_card(turn_context, template)
+        elif action_data.get("action") == "edit_email":
+            # Get conversation state
+            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+            conversation_id = conversation_reference.conversation.id
+            state = conversation_states[conversation_id]
+            
+            # Send edit email card
+            await send_edit_email_card(turn_context, state)
+        elif action_data.get("action") == "apply_email_edits":
+            # Get conversation state
+            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+            conversation_id = conversation_reference.conversation.id
+            state = conversation_states[conversation_id]
+            
+            # Get edit instructions
+            edit_instructions = action_data.get("edit_instructions", "")
+            
+            # Apply edits
+            await apply_email_edits(turn_context, state, edit_instructions)
+        elif action_data.get("action") == "cancel_edit":
+            # Cancel edit and go back to last generated email
+            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+            conversation_id = conversation_reference.conversation.id
+            state = conversation_states[conversation_id]
+            
+            with conversation_states_lock:
+                original_email = state.get("last_generated_email", "")
+            
+            if original_email:
+                # Create an email result card
+                email_card = {
+                    "type": "AdaptiveCard",
+                    "version": "1.0",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Generated Email",
+                            "size": "large",
+                            "weight": "bolder"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": original_email,
+                            "wrap": True
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "type": "Action.Submit",
+                            "title": "Edit This Email",
+                            "data": {
+                                "action": "edit_email"
+                            }
+                        },
+                        {
+                            "type": "Action.Submit",
+                            "title": "Create Another Email",
+                            "data": {
+                                "action": "create_email"
+                            }
+                        }
+                    ]
+                }
+                
+                attachment = Attachment(
+                    content_type="application/vnd.microsoft.card.adaptive",
+                    content=email_card
+                )
+                
+                reply = _create_reply(turn_context.activity)
+                reply.attachments = [attachment]
+                await turn_context.send_activity(reply)
+            else:
+                await send_email_card(turn_context)
     except Exception as e:
         logging.error(f"Error handling card action: {e}")
         await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
@@ -1151,8 +1405,15 @@ def create_email_card(template_mode="selection"):
                 {
                     "type": "Input.Toggle",
                     "id": "hasAttachments",
-                    "title": "Include attachments?",
+                    "title": "Mention attachments in email?",
                     "value": "false"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": "Note: This only mentions attachments in the text. To actually attach files, you'll need to add them when sending the email in your email client.",
+                    "wrap": True,
+                    "isSubtle": True,
+                    "size": "small"
                 }
             ],
             "actions": [
@@ -1227,14 +1488,27 @@ def create_email_card(template_mode="selection"):
         card["body"].extend([
             {
                 "type": "TextBlock",
-                "text": "Additional Instructions (Optional)",
+                "text": "Instructions (Optional)",
                 "wrap": True
             },
             {
                 "type": "Input.Text",
                 "id": "instructions",
-                "placeholder": "Any specific details or modifications to the template",
+                "placeholder": "Any specific details or modifications to the template - your instructions will take priority over the template",
                 "isMultiline": True
+            },
+            {
+                "type": "Input.Toggle",
+                "id": "hasAttachments",
+                "title": "Mention attachments in email?",
+                "value": "false"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Note: This only mentions attachments in the text. To actually attach files, you'll need to add them when sending the email in your email client.",
+                "wrap": True,
+                "isSubtle": True,
+                "size": "small"
             }
         ])
         
@@ -1263,7 +1537,6 @@ def create_email_card(template_mode="selection"):
     )
     
     return attachment
-
 async def send_email_card(turn_context: TurnContext, template_mode="selection"):
     """
     Sends an email composer card to the user.
@@ -2787,7 +3060,7 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
         
         await turn_context.send_activity("I'm sorry, I encountered an error while generating your email template. Please try again.")
 
-async def generate_email(turn_context: TurnContext, state, template_id, recipient, firstname=None, gateway=None, subject=None, instructions=None, chain=None, has_attachments=False):
+async def generate_email(turn_context: TurnContext, state, template_id, recipient=None, firstname=None, gateway=None, subject=None, instructions=None, chain=None, has_attachments=False):
     """
     Generates an email using AI based on template or provided parameters.
     
@@ -2795,12 +3068,12 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
         turn_context: The turn context
         state: The conversation state
         template_id: The template ID to use
-        recipient: The recipient's email
-        firstname: The client's first name
-        gateway: The payment gateway (for lost settlement template)
-        subject: The email subject (for generic template)
-        instructions: Additional instructions for customization
-        chain: Previous email chain
+        recipient: The recipient's email (optional)
+        firstname: The client's first name (optional)
+        gateway: The payment gateway (for lost settlement template) (optional)
+        subject: The email subject (for generic template) (optional)
+        instructions: Additional instructions for customization (optional)
+        chain: Previous email chain (optional)
         has_attachments: Whether to mention attachments
     """
     # Send typing indicator
@@ -2825,15 +3098,13 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
     
     if template_id == "generic":
         # For generic emails, use the provided subject and instructions
-        prompt += f"Subject: {subject or 'Please provide an appropriate subject'}\n"
-        prompt += f"Instructions: {instructions or 'Please write a professional email'}\n"
+        if subject:
+            prompt += f"Subject: {subject}\n"
+        prompt += f"Instructions: {instructions or 'Please write a professional email for First Choice Debt Relief.'}\n"
     else:
         # For templates, use the template content as a base
         prompt += f"Subject: {template_subject}\n"
         prompt += f"Template Base: {template_content}\n"
-        
-        if instructions:
-            prompt += f"Additional Instructions: {instructions}\n"
             
         if firstname:
             prompt += f"Use the name: {firstname}\n"
@@ -2847,7 +3118,14 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
     if has_attachments:
         prompt += f"Mention that there are attachments included.\n"
     
-    prompt += "Format the email professionally with appropriate greeting, body, and signature. The signature should include 'First Choice Debt Relief' as the company name."
+    # Add special instruction to prioritize user instructions
+    if instructions:
+        prompt += f"\nIMPORTANT - PRIORITIZE THESE USER INSTRUCTIONS ABOVE TEMPLATE GUIDELINES: {instructions}\n"
+        prompt += "Feel free to significantly modify the template based on these instructions while maintaining the general purpose and professional tone.\n"
+    else:
+        prompt += "\nFeel free to improve upon the template. You don't need to follow it exactly - make it sound natural and conversational while maintaining professionalism.\n"
+    
+    prompt += "\nFormat the email professionally with appropriate greeting, body, and signature. The signature should include 'First Choice Debt Relief' as the company name."
     
     # Initialize chat if needed
     if not state.get("assistant_id"):
@@ -2867,7 +3145,21 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
     if isinstance(result, dict) and "response" in result:
         email_text = result["response"]
         
-        # Create an email result card
+        # Save the generated email in the state for potential editing
+        with conversation_states_lock:
+            state["last_generated_email"] = email_text
+            state["last_email_template"] = template_id
+            state["last_email_data"] = {
+                "recipient": recipient,
+                "firstname": firstname,
+                "gateway": gateway,
+                "subject": subject,
+                "instructions": instructions,
+                "chain": chain,
+                "has_attachments": has_attachments
+            }
+        
+        # Create an email result card with edit option
         email_card = {
             "type": "AdaptiveCard",
             "version": "1.0",
@@ -2885,6 +3177,13 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
                 }
             ],
             "actions": [
+                {
+                    "type": "Action.Submit",
+                    "title": "Edit This Email",
+                    "data": {
+                        "action": "edit_email"
+                    }
+                },
                 {
                     "type": "Action.Submit",
                     "title": "Create Another Email",
