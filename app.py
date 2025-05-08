@@ -342,7 +342,58 @@ async def handle_thread_recovery(turn_context: TurnContext, state, error_message
             await send_fallback_response(turn_context, "I'm having trouble with our conversation system. Let me try to help directly. What can I assist you with?")
         except Exception as fallback_error:
             logging.error(f"Even fallback failed for user {user_id}: {fallback_error}")
-
+def create_channel_selection_card():
+    """Creates an adaptive card for selecting email channels (Sales or Customer Service)"""
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.0",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "First Choice Debt Relief Email Templates",
+                "size": "large",
+                "weight": "bolder"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Please select an email channel:",
+                "wrap": True
+            }
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": "Introduction Email",
+                "data": {
+                    "action": "select_channel",
+                    "channel": "intro"
+                }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Sales Email",
+                "data": {
+                    "action": "select_channel",
+                    "channel": "sales"
+                }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Customer Service Email",
+                "data": {
+                    "action": "select_channel",
+                    "channel": "customer_service"
+                }
+            }
+        ]
+    }
+    
+    attachment = Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card
+    )
+    
+    return attachment
 async def send_fallback_response(turn_context: TurnContext, user_message: str):
     """Last resort fallback using direct completion API"""
     try:
@@ -798,8 +849,14 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
                 has_attachments
             )
         elif action_data.get("action") == "create_email":
-            # Send a new email template selection card
-            await send_email_card(turn_context)
+            # Send channel selection card
+            await send_email_card(turn_context, "channel_selection")
+        elif action_data.get("action") == "select_channel":
+            # Get the selected channel
+            channel = action_data.get("channel", "intro")
+            
+            # Send the template selection card for this channel
+            await send_email_card(turn_context, "selection", channel)
         elif action_data.get("action") == "select_template":
             # Get the selected template
             template = action_data.get("template", "generic")
@@ -894,11 +951,23 @@ def get_template_title(template_id):
         str: Human-readable template title
     """
     template_titles = {
+        # Customer service templates
         "welcome": "Welcome Email",
         "legal_update": "Legal Document Update",
         "lost_settlement": "Lost Settlement",
         "legal_confirmation": "Legal Document Confirmation",
         "payment_returned": "Payment Returned",
+        
+        # Sales templates
+        "sales_quote": "Initial Quote Email",
+        "sales_analysis": "Financial Analysis Email",
+        "sales_overview": "Program Overview Email",
+        "sales_generic": "Generic Sales Email",
+        "sales_quick_quote": "Quick Quote Email",  # New template
+        
+        # Intro templates
+        "introduction": "Introduction Email",
+        "followup": "Follow-up Email",
         "generic": "Generic Email"
     }
     
@@ -918,6 +987,7 @@ def get_template_content(template_id, **kwargs):
     firstname = kwargs.get('firstname', '{FIRSTNAME}')
     gateway = kwargs.get('gateway', '{GATEWAY}')
     
+    # Customer service templates
     templates = {
         "welcome": (
             "Welcome to First Choice Debt Relief!",
@@ -1000,294 +1070,131 @@ def get_template_content(template_id, **kwargs):
             f"First Choice Debt Relief\n"
             f"Phone: 800-985-9319\n"
             f"Email: service@firstchoicedebtrelief.com"
+        ),
+        # Sales templates
+        "sales_quote": (
+            "Your Pre-Approved Debt Relief Quote",
+            f"Hi {firstname},\n\n"
+            f"It's been a few days since we last spoke, so I wanted to give you a snapshot of your quote should you still be interested. "
+            f"If you have some questions, let me know and we could hop on a call, and I can also go over the loan option that is offered within the program.\n\n"
+            f"Below you will find your approved quote for the program. As you will see, you could save significantly on a monthly basis. "
+            f"Through this program, your credit effects may have a shorter timeframe than out of the plan because you are working on eliminating your debt quickly, "
+            f"versus years of minimum payments.\n\n"
+            f"Feel free to contact me back by email or phone if you have any further questions or concerns. "
+            f"You can contact me on my direct line at [YOUR_PHONE].\n\n"
+            f"Thank you,\n"
+            f"[YOUR_NAME]\n"
+            f"First Choice Debt Relief\n"
+        ),
+        "sales_analysis": (
+            "Your Personal Financial Analysis",
+            f"Hi {firstname},\n\n"
+            f"I wanted to provide you with a brief analysis of your current financial situation. Please review so you can see where you stand.\n\n"
+            f"If you have any questions, you can call me at [YOUR_PHONE].\n\n"
+            f"I have included your quote which expires soon.\n\n"
+            f"As you can see, your debts are like an anchor holding you back, not just affecting your credit score and utilization, but your financial well-being. "
+            f"Our solution provides you with monthly relief on your payment, relief from high interest, relief from your credit utilization, "
+            f"and helps you become debt-free YEARS faster compared to just minimum payments.\n\n"
+            f"Thank you,\n"
+            f"[YOUR_NAME]\n"
+            f"First Choice Debt Relief\n"
+        ),
+        "sales_overview": (
+            "Pre-Approved for Our Debt Resolution Plan",
+            f"Hi {firstname},\n\n"
+            f"This is [YOUR_NAME] from First Choice. I have great news, you are pre-approved for our debt resolution plan!\n\n"
+            f"The monthly payment is for an estimated program at an affordable rate. That payment includes everything; "
+            f"the cost of the program and payments to the creditors. There are no pre-payment penalties, you can always pay more, "
+            f"and we'll just get the job done faster.\n\n"
+            f"Our solution provides real financial freedom with a clear end date, unlike minimum payments that can keep you in debt for 15+ years.\n\n"
+            f"I'd be happy to discuss this with you and answer any questions you might have. Feel free to call me at [YOUR_PHONE].\n\n"
+            f"Thank you,\n"
+            f"[YOUR_NAME]\n"
+            f"First Choice Debt Relief\n"
+        ),
+        "sales_quick_quote": (
+            "Your Debt Consolidation Quote - Lower Monthly Payment",
+            f"Hi {firstname},\n\n"
+            f"This is [YOUR_NAME] from First Choice. We got you a low payment option to consolidate your debt, "
+            f"saving you a significant amount every month compared to what you are paying now.\n\n"
+            f"This quote is valid for a limited time. If you are still serious about consolidating and getting that lower payment, "
+            f"please give me a call at [YOUR_PHONE].\n\n"
+            f"Our goal is to help you get your life back financially!\n\n"
+            f"Thank you,\n"
+            f"[YOUR_NAME]\n"
+            f"First Choice Debt Relief\n"
+        ),
+        # Intro templates
+        "introduction": (
+            "Introduction from First Choice Debt Relief",
+            f"Hi {firstname},\n\n"
+            f"My name is [YOUR_NAME] from First Choice Debt Relief. I'm reaching out because we specialize in helping people overcome overwhelming debt "
+            f"and regain financial control.\n\n"
+            f"Based on our initial analysis, we may be able to offer you a program that could significantly reduce your monthly payments and "
+            f"help you become debt-free in a shorter timeframe than making minimum payments.\n\n"
+            f"Would you be interested in learning more about your options? I'd be happy to provide you with a free consultation "
+            f"to discuss your specific situation and how we might be able to help.\n\n"
+            f"Feel free to reach out to me directly at [YOUR_PHONE] or simply reply to this email to schedule a time to chat.\n\n"
+            f"Best regards,\n"
+            f"[YOUR_NAME]\n"
+            f"First Choice Debt Relief\n"
+        ),
+        "followup": (
+            "Follow-up from First Choice Debt Relief",
+            f"Hi {firstname},\n\n"
+            f"I hope this email finds you well. I'm following up on our previous conversation about your debt relief options.\n\n"
+            f"I understand that taking steps to address financial challenges can require careful consideration, "
+            f"and I want to assure you that we're here to help whenever you're ready to move forward.\n\n"
+            f"If you have any questions about our debt resolution program or would like to revisit the details we discussed, "
+            f"please don't hesitate to reach out. I'm available at [YOUR_PHONE] or you can simply reply to this email.\n\n"
+            f"Looking forward to hearing from you.\n\n"
+            f"Best regards,\n"
+            f"[YOUR_NAME]\n"
+            f"First Choice Debt Relief\n"
         )
     }
     
+    # Default to empty template if not found
     return templates.get(template_id, ("", ""))
-def create_new_chat_card():
-    """Creates an enhanced adaptive card for starting a new chat with improved UI"""
-    card = {
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "type": "AdaptiveCard",
-        "version": "1.5",
-        "body": [
-            {
-                "type": "Container",
-                "style": "accent",
-                "bleed": True,
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Virtual Assistant Menu",
-                        "size": "Large",
-                        "weight": "Bolder",
-                        "horizontalAlignment": "Center"
-                    },
-                    {
-                        "type": "TextBlock",
-                        "text": "How can I assist you today?",
-                        "wrap": True,
-                        "horizontalAlignment": "Center"
-                    }
-                ]
-            },
-            {
-                "type": "Container",
-                "items": [
-                    {
-                        "type": "ColumnSet",
-                        "columns": [
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "Container",
-                                        "style": "good",
-                                        "items": [
-                                            {
-                                                "type": "ColumnSet",
-                                                "columns": [
-                                                    {
-                                                        "type": "Column",
-                                                        "width": "auto",
-                                                        "items": [
-                                                            {
-                                                                "type": "Image",
-                                                                "url": "https://adaptivecards.io/content/chat.png",
-                                                                "size": "Small",
-                                                                "altText": "Chat icon"
-                                                            }
-                                                        ],
-                                                        "verticalContentAlignment": "Center"
-                                                    },
-                                                    {
-                                                        "type": "Column",
-                                                        "width": "stretch",
-                                                        "items": [
-                                                            {
-                                                                "type": "TextBlock",
-                                                                "text": "Start New Chat",
-                                                                "wrap": True,
-                                                                "weight": "Bolder"
-                                                            },
-                                                            {
-                                                                "type": "TextBlock",
-                                                                "text": "Begin a fresh conversation",
-                                                                "wrap": True,
-                                                                "isSubtle": True,
-                                                                "size": "Small"
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        ],
-                                        "selectAction": {
-                                            "type": "Action.Submit",
-                                            "data": {
-                                                "action": "new_chat"
-                                            }
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "Container",
-                                        "style": "emphasis",
-                                        "items": [
-                                            {
-                                                "type": "ColumnSet",
-                                                "columns": [
-                                                    {
-                                                        "type": "Column",
-                                                        "width": "auto",
-                                                        "items": [
-                                                            {
-                                                                "type": "Image",
-                                                                "url": "https://adaptivecards.io/content/mail.png",
-                                                                "size": "Small",
-                                                                "altText": "Email icon"
-                                                            }
-                                                        ],
-                                                        "verticalContentAlignment": "Center"
-                                                    },
-                                                    {
-                                                        "type": "Column",
-                                                        "width": "stretch",
-                                                        "items": [
-                                                            {
-                                                                "type": "TextBlock",
-                                                                "text": "Create Email",
-                                                                "wrap": True,
-                                                                "weight": "Bolder"
-                                                            },
-                                                            {
-                                                                "type": "TextBlock",
-                                                                "text": "Draft a new email template",
-                                                                "wrap": True,
-                                                                "isSubtle": True,
-                                                                "size": "Small"
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        ],
-                                        "selectAction": {
-                                            "type": "Action.Submit",
-                                            "data": {
-                                                "action": "create_email"
-                                            }
-                                        }
-                                    }
-                                ]
-                            }
-                        ],
-                        "spacing": "Medium"
-                    },
-                    {
-                        "type": "ColumnSet",
-                        "columns": [
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "Container",
-                                        "style": "warning",
-                                        "items": [
-                                            {
-                                                "type": "ColumnSet",
-                                                "columns": [
-                                                    {
-                                                        "type": "Column",
-                                                        "width": "auto",
-                                                        "items": [
-                                                            {
-                                                                "type": "Image",
-                                                                "url": "https://adaptivecards.io/content/document.png",
-                                                                "size": "Small",
-                                                                "altText": "File icon"
-                                                            }
-                                                        ],
-                                                        "verticalContentAlignment": "Center"
-                                                    },
-                                                    {
-                                                        "type": "Column",
-                                                        "width": "stretch",
-                                                        "items": [
-                                                            {
-                                                                "type": "TextBlock",
-                                                                "text": "Document Analysis",
-                                                                "wrap": True,
-                                                                "weight": "Bolder"
-                                                            },
-                                                            {
-                                                                "type": "TextBlock",
-                                                                "text": "Upload and analyze files",
-                                                                "wrap": True,
-                                                                "isSubtle": True,
-                                                                "size": "Small"
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        ],
-                                        "selectAction": {
-                                            "type": "Action.Submit",
-                                            "data": {
-                                                "action": "show_upload_info"
-                                            }
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "Container",
-                                        "style": "default",
-                                        "items": [
-                                            {
-                                                "type": "ColumnSet",
-                                                "columns": [
-                                                    {
-                                                        "type": "Column",
-                                                        "width": "auto",
-                                                        "items": [
-                                                            {
-                                                                "type": "Image",
-                                                                "url": "https://adaptivecards.io/content/help.png",
-                                                                "size": "Small",
-                                                                "altText": "Help icon"
-                                                            }
-                                                        ],
-                                                        "verticalContentAlignment": "Center"
-                                                    },
-                                                    {
-                                                        "type": "Column",
-                                                        "width": "stretch",
-                                                        "items": [
-                                                            {
-                                                                "type": "TextBlock",
-                                                                "text": "Help & Commands",
-                                                                "wrap": True,
-                                                                "weight": "Bolder"
-                                                            },
-                                                            {
-                                                                "type": "TextBlock",
-                                                                "text": "View available commands",
-                                                                "wrap": True,
-                                                                "isSubtle": True,
-                                                                "size": "Small"
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        ],
-                                        "selectAction": {
-                                            "type": "Action.Submit",
-                                            "data": {
-                                                "action": "show_help"
-                                            }
-                                        }
-                                    }
-                                ]
-                            }
-                        ],
-                        "spacing": "Medium"
-                    }
-                ]
-            }
-        ]
-    }
+def get_template_channel(template_id):
+    """
+    Returns the channel for a given template ID.
     
-    return CardFactory.adaptive_card(card)
-def create_email_card(template_mode="selection"):
+    Args:
+        template_id (str): Template identifier
+    
+    Returns:
+        str: Channel name
+    """
+    # Sales templates
+    if template_id.startswith("sales_"):
+        return "sales"
+    # Customer service templates
+    elif template_id in ["welcome", "legal_update", "lost_settlement", "legal_confirmation", "payment_returned"]:
+        return "customer_service"
+    # Introduction templates
+    elif template_id in ["introduction", "followup", "generic"]:
+        return "intro"
+    # Default
+    else:
+        return "intro"
+def create_email_card(template_mode="selection", channel=None):
     """
     Creates an adaptive card for email composition with template selection.
     
     Args:
         template_mode (str): Mode of the card - "selection", "generic", or specific template name
+        channel (str): Email channel - "sales" or "customer_service"
     """
     if template_mode == "selection":
-        # Template selection card
+        # Template selection card based on channel
         card = {
             "type": "AdaptiveCard",
             "version": "1.0",
             "body": [
                 {
                     "type": "TextBlock",
-                    "text": "First Choice Debt Relief Email Templates",
+                    "text": f"First Choice Debt Relief {channel.replace('_', ' ').title() if channel else ''} Email Templates",
                     "size": "large",
                     "weight": "bolder"
                 },
@@ -1297,7 +1204,55 @@ def create_email_card(template_mode="selection"):
                     "wrap": True
                 }
             ],
-            "actions": [
+            "actions": []
+        }
+        
+        # Add actions based on channel
+        if channel == "sales":
+            card["actions"] = [
+                {
+                    "type": "Action.Submit",
+                    "title": "Quick Quote Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "sales_quick_quote"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Initial Quote Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "sales_quote"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Financial Analysis Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "sales_analysis"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Program Overview Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "sales_overview"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Generic Sales Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "sales_generic"
+                    }
+                }
+            ]
+        elif channel == "customer_service":
+            card["actions"] = [
                 {
                     "type": "Action.Submit",
                     "title": "Welcome Email",
@@ -1337,6 +1292,25 @@ def create_email_card(template_mode="selection"):
                         "action": "select_template",
                         "template": "payment_returned"
                     }
+                }
+            ]
+        elif channel == "intro":
+            card["actions"] = [
+                {
+                    "type": "Action.Submit",
+                    "title": "Introduction Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "introduction"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Follow-up Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "followup"
+                    }
                 },
                 {
                     "type": "Action.Submit",
@@ -1347,9 +1321,18 @@ def create_email_card(template_mode="selection"):
                     }
                 }
             ]
-        }
-    elif template_mode == "generic":
-        # Generic email card (similar to original but with improvements)
+        
+        # Add back button
+        card["actions"].append({
+            "type": "Action.Submit",
+            "title": "Back to Channels",
+            "data": {
+                "action": "create_email"
+            }
+        })
+            
+    elif template_mode == "generic" or template_mode == "sales_generic":
+        # Generic email card
         card = {
             "type": "AdaptiveCard",
             "version": "1.0",
@@ -1422,14 +1405,15 @@ def create_email_card(template_mode="selection"):
                     "title": "Generate Email",
                     "data": {
                         "action": "generate_email",
-                        "template": "generic"
+                        "template": template_mode
                     }
                 },
                 {
                     "type": "Action.Submit",
                     "title": "Back to Templates",
                     "data": {
-                        "action": "create_email"
+                        "action": "select_channel",
+                        "channel": "sales" if template_mode == "sales_generic" else "intro"
                     }
                 }
             ]
@@ -1526,7 +1510,8 @@ def create_email_card(template_mode="selection"):
                 "type": "Action.Submit",
                 "title": "Back to Templates",
                 "data": {
-                    "action": "create_email"
+                    "action": "select_channel",
+                    "channel": get_template_channel(template_mode)
                 }
             }
         ]
@@ -1537,16 +1522,24 @@ def create_email_card(template_mode="selection"):
     )
     
     return attachment
-async def send_email_card(turn_context: TurnContext, template_mode="selection"):
+async def send_email_card(turn_context: TurnContext, template_mode="channel_selection", channel=None):
     """
     Sends an email composer card to the user.
     
     Args:
         turn_context: The turn context
         template_mode: The template mode to display
+        channel: Email channel if in selection mode
     """
     reply = _create_reply(turn_context.activity)
-    reply.attachments = [create_email_card(template_mode)]
+    
+    if template_mode == "channel_selection":
+        reply.attachments = [create_channel_selection_card()]
+    elif template_mode == "selection":
+        reply.attachments = [create_email_card(template_mode, channel)]
+    else:
+        reply.attachments = [create_email_card(template_mode)]
+    
     await turn_context.send_activity(reply)
 async def handle_info_request(turn_context: TurnContext, info_type: str):
     """Handles requests for information about uploads or help"""
