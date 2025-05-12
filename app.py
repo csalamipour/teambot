@@ -5462,93 +5462,398 @@ async def process_conversation_internal(
         if stream_output:
             # For API endpoints, we'll use a simpler approach than the Teams integration
             async def async_generator():
+                """
+                Enhanced async generator for streaming assistant responses
+                with improved handling of events, tool calls, and error recovery.
+                """
+                buffer = []
+                run_id = None
+                completed = False
+                tool_outputs_submitted = False
+                wait_for_final_response = False
+                latest_message_id = None
+                last_yield_time = time.time()
+                
                 try:
-                    # Create run with stream=True
-                    run = client.beta.threads.runs.create(
-                        thread_id=session,
-                        assistant_id=assistant,
-                        stream=True
-                    )
+                    # Get most recent message ID before run
+                    try:
+                        pre_run_messages = client.beta.threads.messages.list(
+                            thread_id=session,
+                            order="desc",
+                            limit=1
+                        )
+                        if pre_run_messages and pre_run_messages.data:
+                            latest_message_id = pre_run_messages.data[0].id
+                            logging.info(f"Latest message before run: {latest_message_id}")
+                    except Exception as e:
+                        logging.warning(f"Could not get latest message before run: {e}")
                     
-                    # Handle the stream based on available methods
-                    if hasattr(run, "iter_chunks"):
-                        # Using iter_chunks synchronous iterator
-                        logging.info("Using iter_chunks() for API streaming")
-                        for chunk in run.iter_chunks():
-                            text_piece = ""
+                    # Try to use the streaming API directly if available
+                    try:
+                        # Check if stream method is available
+                        if hasattr(client.beta.threads.runs, 'stream'):
+                            logging.info("Using beta.threads.runs.stream() for streaming")
                             
-                            if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
-                                delta = chunk.data.delta
-                                if hasattr(delta, "content") and delta.content:
-                                    for content in delta.content:
-                                        if content.type == "text" and hasattr(content.text, "value"):
-                                            text_piece = content.text.value
+                            with client.beta.threads.runs.stream(
+                                thread_id=session,
+                                assistant_id=assistant,
+                            ) as stream:
+                                for event in stream:
+                                    # Store run ID
+                                    if hasattr(event, 'data') and hasattr(event.data, 'id') and event.event == "thread.run.created":
+                                        run_id = event.data.id
+                                        logging.info(f"Created streaming run {run_id}")
+                                        
+                                    # Handle message creation events
+                                    if event.event == "thread.message.created":
+                                        logging.info(f"New message created: {event.data.id}")
+                                        if tool_outputs_submitted and event.data.id != latest_message_id:
+                                            wait_for_final_response = True
+                                            latest_message_id = event.data.id
                                             
-                            if text_piece:
-                                yield text_piece
-                                # Small delay to make it work with asyncio
-                                await asyncio.sleep(0.01)
+                                    # Handle text deltas (the actual content streaming)
+                                    if event.event == "thread.message.delta":
+                                        delta = event.data.delta
+                                        if delta.content:
+                                            for content_part in delta.content:
+                                                if content_part.type == 'text' and content_part.text:
+                                                    text_value = content_part.text.value
+                                                    if text_value:
+                                                        # Add to buffer
+                                                        buffer.append(text_value)
+                                                        
+                                                        # Yield chunks either when buffer gets large enough
+                                                        # or when enough time has passed since last yield
+                                                        current_time = time.time()
+                                                        if len(buffer) >= 3 or (current_time - last_yield_time >= 0.5 and buffer):
+                                                            joined_text = ''.join(buffer)
+                                                            yield joined_text
+                                                            buffer = []
+                                                            last_yield_time = current_time
+                                    
+                                    # Handle run completion
+                                    if event.event == "thread.run.completed":
+                                        logging.info(f"Run completed: {event.data.id}")
+                                        completed = True
+                                        
+                                        # Yield any remaining text
+                                        if buffer:
+                                            joined_text = ''.join(buffer)
+                                            yield joined_text
+                                            buffer = []
+                                    
+                                    # Handle tool calls
+                                    elif event.event == "thread.run.requires_action":
+                                        if event.data.required_action.type == "submit_tool_outputs":
+                                            tool_calls = event.data.required_action.submit_tool_outputs.tool_calls
+                                            
+                                            # For now, just log and send a message about processing
+                                            tool_call_message = "\n[Processing additional actions...]\n"
+                                            yield tool_call_message
+                                            
+                                            logging.info(f"Run requires action: {len(tool_calls)} tool calls")
+                                            
+                                            # Create empty outputs array - in future this would handle actual tool calls
+                                            tool_outputs = []
+                                            for tool_call in tool_calls:
+                                                # Log tool call for debugging
+                                                logging.info(f"Tool call: {tool_call.function.name} - {tool_call.function.arguments[:100]}...")
+                                                
+                                                # Add a placeholder result
+                                                tool_outputs.append({
+                                                    "tool_call_id": tool_call.id,
+                                                    "output": "This function is not yet implemented in this version."
+                                                })
+                                            
+                                            # Submit the (placeholder) outputs
+                                            try:
+                                                client.beta.threads.runs.submit_tool_outputs(
+                                                    thread_id=session,
+                                                    run_id=event.data.id,
+                                                    tool_outputs=tool_outputs
+                                                )
+                                                tool_outputs_submitted = True
+                                                logging.info(f"Submitted tool outputs for run {event.data.id}")
+                                                yield "\n[Continuing with response...]\n"
+                                            except Exception as submit_e:
+                                                logging.error(f"Error submitting tool outputs: {submit_e}")
+                                                yield f"\n[Error handling tools: {str(submit_e)}]\n"
                                 
-                    elif hasattr(run, "events"):
-                        # Using events iterator
-                        logging.info("Using events iterator for API streaming")
-                        for event in run.events:
-                            if event.event == "thread.message.delta":
-                                if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
-                                    for content in event.data.delta.content:
-                                        if content.type == "text" and hasattr(content.text, "value"):
-                                            yield content.text.value
-                                            await asyncio.sleep(0.01)
-                    else:
-                        # Fallback to polling
-                        logging.info("Using fallback polling for API streaming")
-                        yield "Processing your request...\n"
+                                # Yield any remaining buffer at the end
+                                if buffer:
+                                    joined_text = ''.join(buffer)
+                                    yield joined_text
+                                    buffer = []
+                                
+                                # Exit if completed
+                                if completed:
+                                    return
+                        else:
+                            raise NotImplementedError("Stream method not available")
+                            
+                    except (NotImplementedError, AttributeError) as stream_not_available:
+                        # Fallback to iter_chunks if stream is not available
+                        logging.info(f"Direct streaming not available: {stream_not_available}. Falling back to iter_chunks")
+                        
+                        # Create run with stream=True for iter_chunks approach
+                        run = client.beta.threads.runs.create(
+                            thread_id=session,
+                            assistant_id=assistant,
+                            stream=True
+                        )
                         
                         run_id = run.id
-                        max_wait_time = 90  # seconds
-                        wait_interval = 2   # seconds
-                        elapsed_time = 0
                         
-                        while elapsed_time < max_wait_time:
-                            run_status = client.beta.threads.runs.retrieve(
-                                thread_id=session, 
-                                run_id=run_id
-                            )
+                        # Use iter_chunks if available
+                        if hasattr(run, "iter_chunks"):
+                            logging.info(f"Using iter_chunks() for streaming run {run_id}")
                             
-                            if run_status.status == "completed":
-                                yield "\n"  # Clear the progress line
+                            for chunk in run.iter_chunks():
+                                text_piece = ""
                                 
-                                # Get the complete message
-                                messages = client.beta.threads.messages.list(
-                                    thread_id=session,
-                                    order="desc",
-                                    limit=1
-                                )
+                                if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
+                                    delta = chunk.data.delta
+                                    if hasattr(delta, "content") and delta.content:
+                                        for content in delta.content:
+                                            if content.type == "text" and hasattr(content.text, "value"):
+                                                text_piece = content.text.value
+                                                
+                                if text_piece:
+                                    # Add to buffer
+                                    buffer.append(text_piece)
+                                    
+                                    # Yield chunks periodically
+                                    current_time = time.time()
+                                    if len(buffer) >= 3 or (current_time - last_yield_time >= 0.5 and buffer):
+                                        joined_text = ''.join(buffer)
+                                        yield joined_text
+                                        buffer = []
+                                        last_yield_time = current_time
                                 
-                                if messages.data:
-                                    latest_message = messages.data[0]
-                                    for content_part in latest_message.content:
-                                        if content_part.type == 'text':
-                                            yield content_part.text.value
-                                break
+                                # Small delay to work with asyncio
+                                await asyncio.sleep(0.01)
                             
-                            elif run_status.status in ["failed", "cancelled", "expired"]:
-                                yield f"\nError: Run ended with status {run_status.status}. Please try again."
-                                break
+                            # Yield any remaining text
+                            if buffer:
+                                joined_text = ''.join(buffer)
+                                yield joined_text
+                                buffer = []
+                                    
+                        # Fallback to events iterator
+                        elif hasattr(run, "events"):
+                            logging.info(f"Using events iterator for streaming run {run_id}")
                             
-                            yield "."  # Show progress
-                            await asyncio.sleep(wait_interval)
-                            elapsed_time += wait_interval
+                            for event in run.events:
+                                if event.event == "thread.message.delta":
+                                    if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
+                                        for content in event.data.delta.content:
+                                            if content.type == "text" and hasattr(content.text, "value"):
+                                                # Add to buffer
+                                                buffer.append(content.text.value)
+                                                
+                                                # Yield chunks periodically
+                                                current_time = time.time()
+                                                if len(buffer) >= 3 or (current_time - last_yield_time >= 0.5 and buffer):
+                                                    joined_text = ''.join(buffer)
+                                                    yield joined_text
+                                                    buffer = []
+                                                    last_yield_time = current_time
+                                                
+                                                # Small delay
+                                                await asyncio.sleep(0.01)
+                            
+                            # Yield any remaining text
+                            if buffer:
+                                joined_text = ''.join(buffer)
+                                yield joined_text
+                                buffer = []
                         
-                        if elapsed_time >= max_wait_time:
-                            yield "\nResponse timed out. Please try again."
+                        # Final fallback to polling
+                        else:
+                            logging.info(f"Falling back to polling for streaming run {run_id}")
+                            yield "Processing your request...\n"
+                            
+                            max_wait_time = 90  # seconds
+                            wait_interval = 2   # seconds
+                            elapsed_time = 0
+                            last_status = None
+                            
+                            while elapsed_time < max_wait_time:
+                                try:
+                                    run_status = client.beta.threads.runs.retrieve(
+                                        thread_id=session, 
+                                        run_id=run_id
+                                    )
+                                    
+                                    # Only log when status changes
+                                    if last_status != run_status.status:
+                                        logging.info(f"Run {run_id} status: {run_status.status}")
+                                        last_status = run_status.status
+                                    
+                                    if run_status.status == "completed":
+                                        yield "\n"  # Clear the progress line
+                                        
+                                        # Get the complete message
+                                        messages = client.beta.threads.messages.list(
+                                            thread_id=session,
+                                            order="desc",
+                                            limit=1
+                                        )
+                                        
+                                        if messages.data:
+                                            latest_message = messages.data[0]
+                                            message_text = ""
+                                            
+                                            for content_part in latest_message.content:
+                                                if content_part.type == 'text':
+                                                    message_text += content_part.text.value
+                                            
+                                            # Split long responses into chunks for better streaming
+                                            if len(message_text) > 500:
+                                                # Use sentence-aware chunking if possible
+                                                sentences = message_text.split('. ')
+                                                current_chunk = ""
+                                                
+                                                for sentence in sentences:
+                                                    current_chunk += sentence + '. '
+                                                    
+                                                    if len(current_chunk) >= 200:
+                                                        yield current_chunk
+                                                        current_chunk = ""
+                                                        await asyncio.sleep(0.05)  # Small delay between chunks
+                                                
+                                                # Yield any remaining text
+                                                if current_chunk:
+                                                    yield current_chunk
+                                            else:
+                                                # For shorter responses, just yield the whole thing
+                                                yield message_text
+                                        break
+                                    
+                                    elif run_status.status in ["failed", "cancelled", "expired"]:
+                                        yield f"\nError: Run ended with status {run_status.status}. Please try again."
+                                        break
+                                    
+                                    elif run_status.status == "requires_action":
+                                        yield "\n[Run requires additional actions which cannot be handled in polling mode.]\n"
+                                        # Try to cancel the run since we can't handle actions in polling mode
+                                        try:
+                                            client.beta.threads.runs.cancel(
+                                                thread_id=session,
+                                                run_id=run_id
+                                            )
+                                            logging.info(f"Cancelled run {run_id} that required actions in polling mode")
+                                        except Exception as cancel_e:
+                                            logging.error(f"Failed to cancel run requiring actions: {cancel_e}")
+                                        break
+                                    
+                                    yield "."  # Show progress
+                                    await asyncio.sleep(wait_interval)
+                                    elapsed_time += wait_interval
+                                    
+                                except Exception as poll_e:
+                                    logging.error(f"Error polling run status: {poll_e}")
+                                    yield "E"  # Show error in progress
+                                    await asyncio.sleep(wait_interval)
+                                    elapsed_time += wait_interval
+                            
+                            if elapsed_time >= max_wait_time:
+                                yield "\nResponse timed out. Please try again with a simpler request."
                 
                 except Exception as e:
-                    logging.error(f"Error in streaming generation: {e}")
+                    error_details = traceback.format_exc()
+                    logging.error(f"Error in streaming generation: {e}\n{error_details}")
                     yield f"\n[ERROR] An error occurred while generating the response: {str(e)}. Please try again.\n"
-            
             # Return streaming generator
             return async_generator()
+            # async def async_generator():
+            #     try:
+            #         # Create run with stream=True
+            #         run = client.beta.threads.runs.create(
+            #             thread_id=session,
+            #             assistant_id=assistant,
+            #             stream=True
+            #         )
+                    
+            #         # Handle the stream based on available methods
+            #         if hasattr(run, "iter_chunks"):
+            #             # Using iter_chunks synchronous iterator
+            #             logging.info("Using iter_chunks() for API streaming")
+            #             for chunk in run.iter_chunks():
+            #                 text_piece = ""
+                            
+            #                 if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
+            #                     delta = chunk.data.delta
+            #                     if hasattr(delta, "content") and delta.content:
+            #                         for content in delta.content:
+            #                             if content.type == "text" and hasattr(content.text, "value"):
+            #                                 text_piece = content.text.value
+                                            
+            #                 if text_piece:
+            #                     yield text_piece
+            #                     # Small delay to make it work with asyncio
+            #                     await asyncio.sleep(0.01)
+                                
+            #         elif hasattr(run, "events"):
+            #             # Using events iterator
+            #             logging.info("Using events iterator for API streaming")
+            #             for event in run.events:
+            #                 if event.event == "thread.message.delta":
+            #                     if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
+            #                         for content in event.data.delta.content:
+            #                             if content.type == "text" and hasattr(content.text, "value"):
+            #                                 yield content.text.value
+            #                                 await asyncio.sleep(0.01)
+            #         else:
+            #             # Fallback to polling
+            #             logging.info("Using fallback polling for API streaming")
+            #             yield "Processing your request...\n"
+                        
+            #             run_id = run.id
+            #             max_wait_time = 90  # seconds
+            #             wait_interval = 2   # seconds
+            #             elapsed_time = 0
+                        
+            #             while elapsed_time < max_wait_time:
+            #                 run_status = client.beta.threads.runs.retrieve(
+            #                     thread_id=session, 
+            #                     run_id=run_id
+            #                 )
+                            
+            #                 if run_status.status == "completed":
+            #                     yield "\n"  # Clear the progress line
+                                
+            #                     # Get the complete message
+            #                     messages = client.beta.threads.messages.list(
+            #                         thread_id=session,
+            #                         order="desc",
+            #                         limit=1
+            #                     )
+                                
+            #                     if messages.data:
+            #                         latest_message = messages.data[0]
+            #                         for content_part in latest_message.content:
+            #                             if content_part.type == 'text':
+            #                                 yield content_part.text.value
+            #                     break
+                            
+            #                 elif run_status.status in ["failed", "cancelled", "expired"]:
+            #                     yield f"\nError: Run ended with status {run_status.status}. Please try again."
+            #                     break
+                            
+            #                 yield "."  # Show progress
+            #                 await asyncio.sleep(wait_interval)
+            #                 elapsed_time += wait_interval
+                        
+            #             if elapsed_time >= max_wait_time:
+            #                 yield "\nResponse timed out. Please try again."
+                
+            #     except Exception as e:
+            #         logging.error(f"Error in streaming generation: {e}")
+            #         yield f"\n[ERROR] An error occurred while generating the response: {str(e)}. Please try again.\n"
+            
+            # # Return streaming generator
+            # return async_generator()
         
         # Handle non-streaming mode (/chat endpoint)
         else:
