@@ -196,13 +196,7 @@ You are an Email and Chat Assistant that helps manage communications and analyze
 
 Remember to be thorough yet efficient with your responses, anticipating follow-up needs while addressing the immediate question.
 '''
-def create_typing_stop_activity():
-    """Creates an activity to explicitly stop the typing indicator"""
-    return Activity(
-        type=ActivityTypes.message,
-        text="",  # Empty text message to replace typing indicator
-        value={"action": "stop_typing"}  # Metadata for debugging
-    )
+
 # Custom TeamsStreamingResponse for better control when official library not available
 class TeamsStreamingResponse:
     """Handles streaming responses to Teams in a more controlled way"""
@@ -249,6 +243,68 @@ class TeamsStreamingResponse:
         else:
             await self.turn_context.send_activity(complete_message)
         await self.turn_context.send_activity(create_typing_stop_activity())
+def create_permanent_prompt_card():
+    """Creates an adaptive card for setting a permanent custom instruction"""
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.0",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "Set Permanent Custom Instructions",
+                "size": "large",
+                "weight": "bolder"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Enter instructions you want applied to every message you send. This will be saved throughout your conversation.",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "permanent_instruction",
+                "placeholder": "E.g., 'Always respond in bullet points' or 'Explain concepts as if I'm a beginner'",
+                "isMultiline": True,
+                "style": "text"
+            }
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": "Save Instructions",
+                "data": {
+                    "action": "save_permanent_prompt"
+                }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Cancel",
+                "data": {
+                    "action": "cancel_permanent_prompt"
+                }
+            }
+        ]
+        
+    }
+    
+    attachment = Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card
+    )
+    
+    return attachment
+async def send_permanent_prompt_card(turn_context: TurnContext):
+    """Sends a card for setting permanent custom instructions"""
+    reply = _create_reply(turn_context.activity)
+    reply.attachments = [create_permanent_prompt_card()]
+    await turn_context.send_activity(reply)
+def create_typing_stop_activity():
+    """Creates an activity to explicitly stop the typing indicator"""
+    return Activity(
+        type=ActivityTypes.message,
+        text="",  # Empty text message to replace typing indicator
+        value={"action": "stop_typing"}  # Metadata for debugging
+    )
 # Create typing indicator activity for Teams
 def create_typing_activity() -> Activity:
     return Activity(
@@ -603,6 +659,13 @@ def create_welcome_card():
                         }
                     ]
                 }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "⚙️ Set Prompt / Instructions",
+                "data": {
+                    "action": "send_permanent_prompt_card"
+                }
             }
         ]
     }
@@ -741,7 +804,8 @@ async def apply_email_edits(turn_context: TurnContext, state, edit_instructions)
         session=state["session_id"],
         prompt=prompt,
         assistant=state["assistant_id"],
-        stream_output=False
+        stream_output=True,
+        state=state
     )
     
     # Extract and format the edited email
@@ -798,6 +862,49 @@ async def apply_email_edits(turn_context: TurnContext, state, edit_instructions)
         await turn_context.send_activity(reply)
     else:
         await turn_context.send_activity("I'm sorry, I couldn't edit the email. Please try again with different instructions.")
+def create_view_permanent_prompt_card(instruction):
+    """Creates a card showing the current permanent instruction with options to edit/remove"""
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.0",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "Current Custom Instructions",
+                "size": "large",
+                "weight": "bolder"
+            },
+            {
+                "type": "TextBlock",
+                "text": instruction,
+                "wrap": True,
+                "style": "default"
+            }
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": "Edit Instructions",
+                "data": {
+                    "action": "edit_permanent_prompt"
+                }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Remove Instructions",
+                "data": {
+                    "action": "remove_permanent_prompt"
+                }
+            }
+        ]
+    }
+    
+    attachment = Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card
+    )
+    
+    return attachment
 # Add this to your handle_card_actions function
 async def handle_card_actions(turn_context: TurnContext, action_data):
     """Handles actions from adaptive cards"""
@@ -888,6 +995,63 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             
             # Apply edits
             await apply_email_edits(turn_context, state, edit_instructions)
+
+        elif action_data.get("action") == "save_permanent_prompt":
+            # Get conversation state
+            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+            conversation_id = conversation_reference.conversation.id
+            state = conversation_states[conversation_id]
+            
+            # Get the permanent instruction
+            permanent_instruction = action_data.get("permanent_instruction", "")
+            
+            # Save it to the state (thread-safe)
+            with conversation_states_lock:
+                state["permanent_instruction"] = permanent_instruction
+            
+            # Confirm to the user
+            await turn_context.send_activity(f"✅ Your custom instructions have been saved and will be applied to all future messages.")
+        
+        elif action_data.get("action") == "cancel_permanent_prompt":
+            await turn_context.send_activity("Custom instruction setup cancelled.")
+        elif action_data.get("action") == "edit_permanent_prompt":
+            # Send the card to edit the permanent prompt
+            await send_permanent_prompt_card(turn_context)
+        
+        elif action_data.get("action") == "remove_permanent_prompt":
+            # Get conversation state
+            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+            conversation_id = conversation_reference.conversation.id
+            state = conversation_states[conversation_id]
+            
+            # Remove the permanent instruction (thread-safe)
+            with conversation_states_lock:
+                if "permanent_instruction" in state:
+                    del state["permanent_instruction"]
+            
+            # Confirm to the user
+            await turn_context.send_activity("Custom instructions have been removed.")
+        
+        elif action_data.get("action") == "view_permanent_prompt":
+            # Get conversation state
+            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+            conversation_id = conversation_reference.conversation.id
+            state = conversation_states[conversation_id]
+            
+            # Get the permanent instruction (thread-safe)
+            instruction = ""
+            with conversation_states_lock:
+                instruction = state.get("permanent_instruction", "")
+            
+            if instruction:
+                # Show the current instruction with options
+                reply = _create_reply(turn_context.activity)
+                reply.attachments = [create_view_permanent_prompt_card(instruction)]
+                await turn_context.send_activity(reply)
+            else:
+                await turn_context.send_activity("You don't have any custom instructions set. Type '/set-instructions' to set them.")
+        elif action_data.get("action") == "send_permanent_prompt_card":
+            await send_permanent_prompt_card(turn_context)
         elif action_data.get("action") == "cancel_edit":
             # Cancel edit and go back to last generated email
             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
@@ -3139,7 +3303,8 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
         session=state["session_id"],
         prompt=prompt,
         assistant=state["assistant_id"],
-        stream_output=False
+        stream_output=True,
+        state=state
     )
     
     # Extract and format the email
@@ -3952,10 +4117,10 @@ async def summarize_thread_if_needed(client: AzureOpenAI, thread_id: str, state:
             return False
             
         # Determine how many messages to summarize (leave 5-10 recent messages untouched)
-        messages_to_keep = 7  # Keep the 7 most recent messages
+        messages_to_keep = 20  # Keep the 7 most recent messages
         messages_to_summarize = message_count - messages_to_keep
         
-        if messages_to_summarize <= 5:  # Not worth summarizing if too few
+        if messages_to_summarize <= 10:  # Not worth summarizing if too few
             return False
             
         # Get messages to summarize (all except the most recent)
@@ -4097,7 +4262,24 @@ async def handle_text_message(turn_context: TurnContext, state):
     if user_message.lower() in ["/new", "/reset", "new chat", "start over", "reset chat"]:
         await handle_new_chat_command(turn_context, state, conversation_id)
         return
+        # Add this near the beginning of handle_text_message function, with the other command checks
+    if user_message.lower() in ["/set-instructions", "/instructions", "/prompt"]:
+        await send_permanent_prompt_card(turn_context)
+        return
+    
+    if user_message.lower() in ["/view-instructions", "/view-prompt"]:
+        # Get the permanent instruction (thread-safe)
+        with conversation_states_lock:
+            instruction = state.get("permanent_instruction", "")
         
+        if instruction:
+            # Show the current instruction with options
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [create_view_permanent_prompt_card(instruction)]
+            await turn_context.send_activity(reply)
+        else:
+            await turn_context.send_activity("You don't have any custom instructions set. Type '/set-instructions' to set them.")
+        return
     # Extract user identity for security validation
     user_id = turn_context.activity.from_property.id if hasattr(turn_context.activity, 'from_property') else "unknown"
     
@@ -4130,7 +4312,7 @@ async def handle_text_message(turn_context: TurnContext, state):
     summarized = False
     if stored_session_id:
         client = create_client()
-        summarized = await summarize_thread_if_needed(client, stored_session_id, state, threshold=30)
+        summarized = await summarize_thread_if_needed(client, stored_session_id, state, threshold=100)
         
         if summarized:
             # Update stored_session_id after summarization (thread may have changed)
@@ -5257,7 +5439,8 @@ async def send_message(turn_context: TurnContext, state):
                 session=state["session_id"],
                 assistant=state["assistant_id"],
                 prompt=None,
-                stream_output=False
+                stream_output=True,
+                state=state
             )
             
             if isinstance(result, dict) and "response" in result:
@@ -5295,7 +5478,8 @@ async def process_conversation_internal(
     session: Optional[str] = None,
     prompt: Optional[str] = None,
     assistant: Optional[str] = None,
-    stream_output: bool = True
+    stream_output: bool = True,
+    state: Optional[dict] = None
 ):
     """
     Core function to process conversation with the assistant.
@@ -5372,6 +5556,13 @@ async def process_conversation_internal(
 
         # Add user message to the thread if prompt is given
         if prompt:
+            # Enhance prompt with permanent instructions if they exist
+            enhanced_prompt = prompt
+            if state and "permanent_instruction" in state and state["permanent_instruction"]:
+                permanent_instruction = state["permanent_instruction"]
+                enhanced_prompt = f"{prompt}\n\nAPPLY THESE INSTRUCTIONS TO YOUR RESPONSE: {permanent_instruction}"
+                logging.info(f"Applied permanent instructions to prompt")
+
             max_retries = 5
             base_retry_delay = 3
             success = False
@@ -5432,7 +5623,7 @@ async def process_conversation_internal(
                     client.beta.threads.messages.create(
                         thread_id=session,
                         role="user",
-                        content=prompt
+                        content=enhanced_prompt  # Use enhanced prompt instead of original prompt
                     )
                     logging.info(f"Added user message to thread {session} (attempt {attempt+1})")
                     success = True
@@ -5455,7 +5646,7 @@ async def process_conversation_internal(
                                 client.beta.threads.messages.create(
                                     thread_id=session,
                                     role="user",
-                                    content=prompt
+                                    content=enhanced_prompt  # Use enhanced prompt
                                 )
                                 success = True
                                 break
@@ -5777,94 +5968,6 @@ async def process_conversation_internal(
                     yield f"\n[ERROR] An error occurred while generating the response: {str(e)}. Please try again.\n"
             # Return streaming generator
             return async_generator()
-            # async def async_generator():
-            #     try:
-            #         # Create run with stream=True
-            #         run = client.beta.threads.runs.create(
-            #             thread_id=session,
-            #             assistant_id=assistant,
-            #             stream=True
-            #         )
-                    
-            #         # Handle the stream based on available methods
-            #         if hasattr(run, "iter_chunks"):
-            #             # Using iter_chunks synchronous iterator
-            #             logging.info("Using iter_chunks() for API streaming")
-            #             for chunk in run.iter_chunks():
-            #                 text_piece = ""
-                            
-            #                 if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
-            #                     delta = chunk.data.delta
-            #                     if hasattr(delta, "content") and delta.content:
-            #                         for content in delta.content:
-            #                             if content.type == "text" and hasattr(content.text, "value"):
-            #                                 text_piece = content.text.value
-                                            
-            #                 if text_piece:
-            #                     yield text_piece
-            #                     # Small delay to make it work with asyncio
-            #                     await asyncio.sleep(0.01)
-                                
-            #         elif hasattr(run, "events"):
-            #             # Using events iterator
-            #             logging.info("Using events iterator for API streaming")
-            #             for event in run.events:
-            #                 if event.event == "thread.message.delta":
-            #                     if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
-            #                         for content in event.data.delta.content:
-            #                             if content.type == "text" and hasattr(content.text, "value"):
-            #                                 yield content.text.value
-            #                                 await asyncio.sleep(0.01)
-            #         else:
-            #             # Fallback to polling
-            #             logging.info("Using fallback polling for API streaming")
-            #             yield "Processing your request...\n"
-                        
-            #             run_id = run.id
-            #             max_wait_time = 90  # seconds
-            #             wait_interval = 2   # seconds
-            #             elapsed_time = 0
-                        
-            #             while elapsed_time < max_wait_time:
-            #                 run_status = client.beta.threads.runs.retrieve(
-            #                     thread_id=session, 
-            #                     run_id=run_id
-            #                 )
-                            
-            #                 if run_status.status == "completed":
-            #                     yield "\n"  # Clear the progress line
-                                
-            #                     # Get the complete message
-            #                     messages = client.beta.threads.messages.list(
-            #                         thread_id=session,
-            #                         order="desc",
-            #                         limit=1
-            #                     )
-                                
-            #                     if messages.data:
-            #                         latest_message = messages.data[0]
-            #                         for content_part in latest_message.content:
-            #                             if content_part.type == 'text':
-            #                                 yield content_part.text.value
-            #                     break
-                            
-            #                 elif run_status.status in ["failed", "cancelled", "expired"]:
-            #                     yield f"\nError: Run ended with status {run_status.status}. Please try again."
-            #                     break
-                            
-            #                 yield "."  # Show progress
-            #                 await asyncio.sleep(wait_interval)
-            #                 elapsed_time += wait_interval
-                        
-            #             if elapsed_time >= max_wait_time:
-            #                 yield "\nResponse timed out. Please try again."
-                
-            #     except Exception as e:
-            #         logging.error(f"Error in streaming generation: {e}")
-            #         yield f"\n[ERROR] An error occurred while generating the response: {str(e)}. Please try again.\n"
-            
-            # # Return streaming generator
-            # return async_generator()
         
         # Handle non-streaming mode (/chat endpoint)
         else:
