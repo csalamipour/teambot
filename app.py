@@ -804,7 +804,7 @@ async def apply_email_edits(turn_context: TurnContext, state, edit_instructions)
         session=state["session_id"],
         prompt=prompt,
         assistant=state["assistant_id"],
-        stream_output=True,
+        stream_output=False,
         state=state
     )
     
@@ -3303,7 +3303,7 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
         session=state["session_id"],
         prompt=prompt,
         assistant=state["assistant_id"],
-        stream_output=True,
+        stream_output=False,
         state=state
     )
     
@@ -5439,7 +5439,7 @@ async def send_message(turn_context: TurnContext, state):
                 session=state["session_id"],
                 assistant=state["assistant_id"],
                 prompt=None,
-                stream_output=True,
+                stream_output=False,
                 state=state
             )
             
