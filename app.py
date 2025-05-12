@@ -196,7 +196,13 @@ You are an Email and Chat Assistant that helps manage communications and analyze
 
 Remember to be thorough yet efficient with your responses, anticipating follow-up needs while addressing the immediate question.
 '''
-
+def create_typing_stop_activity():
+    """Creates an activity to explicitly stop the typing indicator"""
+    return Activity(
+        type=ActivityTypes.message,
+        text="",  # Empty text message to replace typing indicator
+        value={"action": "stop_typing"}  # Metadata for debugging
+    )
 # Custom TeamsStreamingResponse for better control when official library not available
 class TeamsStreamingResponse:
     """Handles streaming responses to Teams in a more controlled way"""
@@ -242,7 +248,7 @@ class TeamsStreamingResponse:
                     await self.turn_context.send_activity(f"(continued) {chunk}")
         else:
             await self.turn_context.send_activity(complete_message)
-
+        await self.turn_context.send_activity(create_typing_stop_activity())
 # Create typing indicator activity for Teams
 def create_typing_activity() -> Activity:
     return Activity(
@@ -2855,6 +2861,7 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
                     await typing_task
                 except asyncio.CancelledError:
                     pass
+                await turn_context.send_activity(create_typing_stop_activity())
         else:
             # Use custom streaming implementation if Teams AI not available
             # Setup a custom collector similar to above
@@ -2943,6 +2950,7 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
                     await typing_task
                 except asyncio.CancelledError:
                     pass
+                await turn_context.send_activity(create_typing_stop_activity())
         
         # If we have email text, create and send the card
         if email_text:
@@ -4652,7 +4660,10 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
                 with active_runs_lock:
                     if thread_id in active_runs:
                         del active_runs[thread_id]
-                
+                try:
+                    await turn_context.send_activity(create_typing_stop_activity())
+                except Exception as typing_stop_error:
+                    logging.error(f"Error stopping typing indicator: {typing_stop_error}")
                 # Try to cancel the run if it's still active
                 if run_id:
                     try:
@@ -4884,7 +4895,7 @@ async def stream_with_custom_implementation(turn_context: TurnContext, state, us
             logging.error(f"Error in custom streaming: {e}")
             traceback.print_exc()
             await turn_context.send_activity("I encountered an error while processing your request. Please try again.")
-            
+            await turn_context.send_activity(create_typing_stop_activity())
             # Try a fallback direct completion
             await send_fallback_response(turn_context, user_message)
     
