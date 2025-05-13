@@ -65,7 +65,10 @@ except ImportError:
 
 import uuid
 from collections import deque
-
+# Add these imports at the top
+from msal import ConfidentialClientApplication
+import requests
+from urllib.parse import urlparse, parse_qs
 # Dictionary to store pending messages for each conversation
 pending_messages = {}
 # Lock for thread-safe operations on the pending_messages dict
@@ -95,7 +98,10 @@ AZURE_API_VERSION = os.environ.get("OPENAI_API_VERSION", "")
 # App credentials from environment variables for Bot Framework
 APP_ID = os.environ.get("MicrosoftAppId", "")
 APP_PASSWORD = os.environ.get("MicrosoftAppPassword", "")
-
+TENANT_ID = os.environ.get("TENANT_ID", "")
+CLIENT_ID = os.environ.get("MicrosoftAppId", APP_ID)  # Reuse your existing app ID
+CLIENT_SECRET = os.environ.get("MicrosoftAppPassword", APP_PASSWORD)  # Reuse your existing password
+GRAPH_SCOPE = ["https://graph.microsoft.com/.default"]
 # Dictionary to store conversation state for each user in Teams
 # Key: conversation_id, Value: dict with assistant_id, session_id, etc.
 conversation_states = {}
@@ -604,6 +610,114 @@ First Choice Debt Relief
 
 
 '''
+
+def get_sharepoint_access_token():
+    """Gets an access token for Microsoft Graph API to access SharePoint/OneDrive files."""
+    try:
+        app = ConfidentialClientApplication(
+            client_id=CLIENT_ID,
+            client_credential=CLIENT_SECRET,
+            authority=f"https://login.microsoftonline.com/{TENANT_ID}"
+        )
+        
+        result = app.acquire_token_silent(scopes=GRAPH_SCOPE, account=None)
+        
+        if not result:
+            logging.info("No suitable token in cache, getting new token")
+            result = app.acquire_token_for_client(scopes=GRAPH_SCOPE)
+        
+        if "access_token" in result:
+            logging.info("Access token obtained successfully")
+            return result["access_token"]
+        else:
+            logging.error(f"Error getting token: {result.get('error')}")
+            logging.error(f"Error description: {result.get('error_description')}")
+            return None
+    except Exception as e:
+        logging.error(f"Exception in get_sharepoint_access_token: {str(e)}")
+        return None
+
+async def download_sharepoint_file(file_url, filename):
+    """
+    Downloads a file from SharePoint using Microsoft Graph API.
+    
+    Args:
+        file_url: The URL to the file
+        filename: The filename to save as
+        
+    Returns:
+        str: Local file path if successful, None otherwise
+    """
+    try:
+        # Parse the URL to extract important components
+        parsed_url = urlparse(file_url)
+        
+        # Get access token
+        access_token = get_sharepoint_access_token()
+        if not access_token:
+            logging.error("Failed to get access token for SharePoint file")
+            return None
+        
+        # Extract drive ID and item ID from URL if present
+        # This is a simplified approach, actual extraction might depend on your specific URL format
+        path_parts = parsed_url.path.split('/')
+        
+        # If this is a sharing URL, we need to resolve it first
+        if "sharepointonline.com" in parsed_url.netloc and "/s/" in parsed_url.path:
+            # This is a sharing link, we need to resolve it
+            sharing_url = file_url
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json"
+            }
+            
+            # Use Graph API to resolve the sharing link
+            resolve_url = "https://graph.microsoft.com/v1.0/shares/u!{encoded_url}/driveItem"
+            # URL needs to be encoded properly for the API
+            encoded_url = sharing_url.replace(':', '%3A').replace('/', '%2F')
+            
+            resolve_response = requests.get(
+                resolve_url.format(encoded_url=encoded_url),
+                headers=headers
+            )
+            
+            if resolve_response.status_code != 200:
+                logging.error(f"Failed to resolve sharing URL: {resolve_response.status_code} - {resolve_response.text}")
+                return None
+                
+            item_info = resolve_response.json()
+            # Now we can download using the item's download URL
+            download_url = item_info.get('@microsoft.graph.downloadUrl')
+            
+            if not download_url:
+                logging.error("Could not get download URL from sharing link resolution")
+                return None
+                
+            # Download the file
+            download_response = requests.get(download_url)
+            if download_response.status_code != 200:
+                logging.error(f"Failed to download file: {download_response.status_code}")
+                return None
+                
+            # Save the file locally
+            file_path = os.path.join(FILE_DIRECTORY, filename)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            
+            with open(file_path, 'wb') as f:
+                f.write(download_response.content)
+                
+            logging.info(f"Successfully downloaded SharePoint file to {file_path}")
+            return file_path
+            
+        else:
+            # Handle other SharePoint/OneDrive URL formats
+            logging.error(f"Unrecognized SharePoint URL format: {file_url}")
+            return None
+            
+    except Exception as e:
+        logging.error(f"Error downloading SharePoint file: {str(e)}")
+        traceback.print_exc()
+        return None
 def create_typing_stop_activity():
     """Creates an activity to explicitly stop the typing indicator"""
     return Activity(
@@ -4170,8 +4284,60 @@ async def download_file(turn_context: TurnContext, attachment: Attachment):
         return None
 
 # Function to handle file uploads
+# async def handle_file_upload(turn_context: TurnContext, state, message_text=None):
+#     """Handle file uploads from Teams with clear messaging about supported types"""
+    
+#     for attachment in turn_context.activity.attachments:
+#         try:
+#             # Send typing indicator
+#             await turn_context.send_activity(create_typing_activity())
+            
+#             # Check if it's a direct file upload (locally uploaded file)
+#             if hasattr(attachment, 'content_type') and attachment.content_type == ContentType.FILE_DOWNLOAD_INFO:
+#                 # Download the file using the Teams-specific logic
+#                 file_path = await download_file(turn_context, attachment)
+                
+#                 if not file_path:
+#                     # File was either not downloaded or rejected
+#                     continue
+                    
+#                 # Check file extension to ensure we only accept supported types
+#                 file_ext = os.path.splitext(attachment.name)[1].lower()
+#                 if file_ext in ['.csv', '.xlsx', '.xls', '.xlsm']:
+#                     await turn_context.send_activity("Sorry, CSV and Excel files are not supported. Please upload PDF, DOC, DOCX, or TXT files only.")
+#                     continue
+                
+#                 # Process the file with message text if provided
+#                 await process_uploaded_file(turn_context, state, file_path, attachment.name, message_text)
+#             else:
+#                 # Check if this is likely an OneDrive or SharePoint file
+#                 is_internal_file = False
+#                 if hasattr(attachment, 'content_type'):
+#                     internal_file_indicators = [
+#                         "sharepoint", 
+#                         "onedrive", 
+#                         "vnd.microsoft.teams.file", 
+#                         "application/vnd.microsoft.teams.file"
+#                     ]
+                    
+#                     for indicator in internal_file_indicators:
+#                         if indicator.lower() in attachment.content_type.lower():
+#                             is_internal_file = True
+#                             break
+                
+#                 if is_internal_file:
+#                     # Provide clear message that only local uploads are supported
+#                     await turn_context.send_activity("I'm sorry, but I can only process files uploaded directly from your device. Files shared from OneDrive, SharePoint, or other internal sources are not currently supported. Please download the file to your device first, then upload it directly.")
+#                 else:
+#                     # For other attachment types, provide general guidance
+#                     await turn_context.send_activity("To upload a file, please use the file upload feature in Teams to send files directly from your device. Click the paperclip icon in the chat input area to upload a file.")
+                
+#         except Exception as e:
+#             logger.error(f"Error processing file: {str(e)}")
+#             traceback.print_exc()
+#             await turn_context.send_activity(f"Error processing file: {str(e)}")
 async def handle_file_upload(turn_context: TurnContext, state, message_text=None):
-    """Handle file uploads from Teams with clear messaging about supported types"""
+    """Handle file uploads from Teams with support for both direct uploads and SharePoint guest links"""
     
     for attachment in turn_context.activity.attachments:
         try:
@@ -4198,6 +4364,8 @@ async def handle_file_upload(turn_context: TurnContext, state, message_text=None
             else:
                 # Check if this is likely an OneDrive or SharePoint file
                 is_internal_file = False
+                sharepoint_url = None
+
                 if hasattr(attachment, 'content_type'):
                     internal_file_indicators = [
                         "sharepoint", 
@@ -4210,13 +4378,68 @@ async def handle_file_upload(turn_context: TurnContext, state, message_text=None
                         if indicator.lower() in attachment.content_type.lower():
                             is_internal_file = True
                             break
-                
+
                 if is_internal_file:
-                    # Provide clear message that only local uploads are supported
-                    await turn_context.send_activity("I'm sorry, but I can only process files uploaded directly from your device. Files shared from OneDrive, SharePoint, or other internal sources are not currently supported. Please download the file to your device first, then upload it directly.")
+                    # Try to handle SharePoint/OneDrive files
+                    try:
+                        # Extract the SharePoint URL from the attachment
+                        if hasattr(attachment, 'content_url'):
+                            sharepoint_url = attachment.content_url
+                        elif hasattr(attachment, 'content') and isinstance(attachment.content, dict):
+                            # Check various possible content structures
+                            if 'downloadUrl' in attachment.content:
+                                sharepoint_url = attachment.content['downloadUrl']
+                            elif 'webUrl' in attachment.content:
+                                sharepoint_url = attachment.content['webUrl']
+                            elif 'contentUrl' in attachment.content:
+                                sharepoint_url = attachment.content['contentUrl']
+                        # Sometimes the URL might be in the contentUrl property directly
+                        elif hasattr(attachment, 'contentUrl'):
+                            sharepoint_url = attachment.contentUrl
+                            
+                        # Log the attachment structure for debugging
+                        logging.info(f"SharePoint attachment structure: {vars(attachment)}")
+                        
+                        if sharepoint_url:
+                            await turn_context.send_activity(f"Processing shared file from SharePoint/OneDrive: {attachment.name}")
+                            
+                            # Download the file using SharePoint authentication
+                            file_path = await download_sharepoint_file(sharepoint_url, attachment.name)
+                            
+                            if file_path:
+                                # Check file extension to ensure we only accept supported types
+                                file_ext = os.path.splitext(attachment.name)[1].lower()
+                                if file_ext in ['.csv', '.xlsx', '.xls', '.xlsm']:
+                                    await turn_context.send_activity("Sorry, CSV and Excel files are not supported. Please upload PDF, DOC, DOCX, or TXT files only.")
+                                    # Clean up the downloaded file
+                                    if os.path.exists(file_path):
+                                        try:
+                                            os.remove(file_path)
+                                        except Exception as del_e:
+                                            logging.error(f"Error removing rejected file: {del_e}")
+                                    continue
+                                
+                                # Process the file as normal
+                                await process_uploaded_file(turn_context, state, file_path, attachment.name, message_text)
+                            else:
+                                await turn_context.send_activity("I had trouble accessing that shared file. Please check permissions or try uploading directly from your device.")
+                        else:
+                            # If URL extraction failed, log the attachment details for debugging
+                            logging.error(f"Could not extract SharePoint URL from attachment: {attachment}")
+                            logging.error(f"Attachment type: {type(attachment)}")
+                            if hasattr(attachment, 'content'):
+                                logging.error(f"Content type: {type(attachment.content)}")
+                                if isinstance(attachment.content, dict):
+                                    logging.error(f"Content keys: {attachment.content.keys()}")
+                            
+                            await turn_context.send_activity("I couldn't extract the file URL from the shared file. Please try uploading directly from your device.")
+                    except Exception as sp_e:
+                        logging.error(f"Error processing SharePoint file: {str(sp_e)}")
+                        traceback.print_exc()
+                        await turn_context.send_activity(f"Error processing shared file: {str(sp_e)}. Please try uploading directly from your device.")
                 else:
                     # For other attachment types, provide general guidance
-                    await turn_context.send_activity("To upload a file, please use the file upload feature in Teams to send files directly from your device. Click the paperclip icon in the chat input area to upload a file.")
+                    await turn_context.send_activity("To upload a file, please use the file upload feature in Teams to send files directly from your device or share from SharePoint/OneDrive. Click the paperclip icon in the chat input area to upload a file.")
                 
         except Exception as e:
             logger.error(f"Error processing file: {str(e)}")
