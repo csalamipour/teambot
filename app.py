@@ -295,7 +295,7 @@ async def handle_thread_recovery(turn_context: TurnContext, state, error_message
         # Create completely new resources
         try:
             # Create a new vector store
-            vector_store = client.beta.vector_stores.create(
+            vector_store = client.vector_stores.create(
                 name=f"recovery_user_{user_id}_convo_{conversation_id}_{int(time.time())}"
             )
             
@@ -3839,13 +3839,13 @@ async def process_uploaded_file(turn_context: TurnContext, state, file_path: str
                             vector_store_id = state["vector_store_id"]
                             if not vector_store_id:
                                 # Create a new vector store if needed
-                                vector_store = client.beta.vector_stores.create(name=f"Assistant_{state['assistant_id']}_Store")
+                                vector_store = client.vector_stores.create(name=f"Assistant_{state['assistant_id']}_Store")
                                 vector_store_id = vector_store.id
                                 state["vector_store_id"] = vector_store_id
                             
                             # Upload to vector store
                             with open(temp_path, "rb") as file_stream:
-                                file_batch = client.beta.vector_stores.file_batches.upload_and_poll(
+                                file_batch = client.vector_stores.file_batches.upload_and_poll(
                                     vector_store_id=vector_store_id,
                                     files=[file_stream]
                                 )
@@ -5167,7 +5167,7 @@ async def initialize_chat(turn_context: TurnContext, state=None, context=None):
         
         # Create a vector store
         try:
-            vector_store = client.beta.vector_stores.create(
+            vector_store = client.vector_stores.create(
                 name=f"user_{user_id}_convo_{conversation_id}_{int(time.time())}"
             )
             logging.info(f"Created vector store: {vector_store.id} for user {user_id}")
