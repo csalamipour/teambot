@@ -202,7 +202,7 @@ def create_typing_stop_activity():
     """Creates an activity to explicitly stop the typing indicator"""
     return Activity(
         type=ActivityTypes.message,
-        text="",  # Empty text message to replace typing indicator
+        text=" ",  # Empty text message to replace typing indicator
         value={"action": "stop_typing"}  # Metadata for debugging
     )
 # Custom TeamsStreamingResponse for better control when official library not available
