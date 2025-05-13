@@ -19,3 +19,4 @@ tables
 openpyxl
 teams-ai
 msal
+requests
