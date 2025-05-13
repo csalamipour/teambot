@@ -86,10 +86,12 @@ logging.basicConfig(
 logger = logging.getLogger("pmbot")
 
 # Azure OpenAI client configuration
-AZURE_ENDPOINT = "https://kb-stellar.openai.azure.com/"  # Replace with your endpoint if different
-AZURE_API_KEY = "bc0ba854d3644d7998a5034af62d03ce"  # Replace with your key if different
-AZURE_API_VERSION = "2024-05-01-preview"
-
+# AZURE_ENDPOINT = "https://kb-stellar.openai.azure.com/"  # Replace with your endpoint if different
+# AZURE_API_KEY = "bc0ba854d3644d7998a5034af62d03ce"  # Replace with your key if different
+# AZURE_API_VERSION = "2024-05-01-preview"
+AZURE_ENDPOINT = os.environ["OPENAI_ENDPOINT"]
+AZURE_API_KEY = os.environ["OPENAI_KEY"]
+AZURE_API_VERSION = os.environ["OPENAI_API_VERSION"]
 # App credentials from environment variables for Bot Framework
 APP_ID = os.environ.get("MicrosoftAppId", "")
 APP_PASSWORD = os.environ.get("MicrosoftAppPassword", "")
@@ -301,7 +303,7 @@ async def handle_thread_recovery(turn_context: TurnContext, state, error_message
             unique_name = f"recovery_assistant_user_{user_id}_{int(time.time())}"
             assistant_obj = client.beta.assistants.create(
                 name=unique_name,
-                model="gpt-4o-mini",
+                model="gpt-4.1-mini",
                 instructions="You are a helpful assistant recovering from a system error. Please continue the conversation naturally.",
                 tools=[{"type": "file_search"}],
                 tool_resources={"file_search": {"vector_store_ids": [vector_store.id]}},
@@ -417,7 +419,7 @@ async def send_fallback_response(turn_context: TurnContext, user_message: str):
         
         # Create a simple completion request with minimal context
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             messages=[
                 {"role": "system", "content": "You are a helpful product management assistant. Keep your response concise and helpful."},
                 {"role": "user", "content": user_message}
@@ -4999,7 +5001,7 @@ async def image_analysis_internal(image_data: bytes, filename: str, prompt: Opti
 
         # Use the existing client
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Ensure this model supports vision
+            model="gpt-4.1-mini",  # Ensure this model supports vision
             messages=[{
                 "role": "user",
                 "content": [
@@ -5184,7 +5186,7 @@ async def initialize_chat(turn_context: TurnContext, state=None, context=None):
             unique_name = f"pm_copilot_user_{user_id}_convo_{conversation_id}_{int(time.time())}"
             assistant = client.beta.assistants.create(
                 name=unique_name,
-                model="gpt-4o-mini",
+                model="gpt-4.1-mini",
                 instructions=SYSTEM_PROMPT,
                 tools=assistant_tools,
                 tool_resources=assistant_tool_resources,
@@ -5308,7 +5310,7 @@ async def process_conversation_internal(
             try:
                 assistant_obj = client.beta.assistants.create(
                     name="default_conversation_assistant",
-                    model="gpt-4o-mini",
+                    model="gpt-4.1-mini",
                     instructions="You are a helpful conversation assistant.",
                 )
                 assistant = assistant_obj.id
@@ -5345,7 +5347,7 @@ async def process_conversation_internal(
             try:
                 assistant_obj = client.beta.assistants.create(
                     name=f"recovery_assistant_{int(time.time())}",
-                    model="gpt-4o-mini",
+                    model="gpt-4.1-mini",
                     instructions="You are a helpful assistant recovering from a system error.",
                 )
                 assistant = assistant_obj.id
