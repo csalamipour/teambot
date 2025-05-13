@@ -722,7 +722,7 @@ def create_typing_stop_activity():
     """Creates an activity to explicitly stop the typing indicator"""
     return Activity(
         type=ActivityTypes.message,
-        text="",  # Empty text message to replace typing indicator
+        text=" ",  # Empty text message to replace typing indicator
         value={"action": "stop_typing"}  # Metadata for debugging
     )
 # Custom TeamsStreamingResponse for better control when official library not available
@@ -1721,7 +1721,8 @@ def get_template_content(template_id, **kwargs):
             f"First Choice Debt Relief\n"
         )
     }
-    
+    if template_id == "introduction":
+        return templates.get(template_id, ("", ""))
     # Default to empty template if not found
     return templates.get(template_id, ("", ""))
 def get_template_channel(template_id):
@@ -2101,7 +2102,79 @@ async def send_email_card(turn_context: TurnContext, template_mode="channel_sele
     """
     reply = _create_reply(turn_context.activity)
     
-    if template_mode == "channel_selection":
+    # Special handling for introduction emails - simplified
+    if template_mode == "introduction":
+        intro_card = {
+            "type": "AdaptiveCard",
+            "version": "1.0",
+            "body": [
+                {
+                    "type": "TextBlock",
+                    "text": "First Choice Debt Relief - Introduction Email",
+                    "size": "large",
+                    "weight": "bolder"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": "Recipient (Optional)",
+                    "wrap": True
+                },
+                {
+                    "type": "Input.Text",
+                    "id": "recipient",
+                    "placeholder": "Enter recipient(s)"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": "Client First Name",
+                    "wrap": True
+                },
+                {
+                    "type": "Input.Text",
+                    "id": "firstname",
+                    "placeholder": "Enter client's first name"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": "Instructions (Optional)",
+                    "wrap": True
+                },
+                {
+                    "type": "Input.Text",
+                    "id": "instructions",
+                    "placeholder": "Any specific details or modifications to the template",
+                    "isMultiline": True
+                },
+                {
+                    "type": "Input.Toggle",
+                    "id": "hasAttachments",
+                    "title": "Mention attachments in email?",
+                    "value": "false"
+                }
+            ],
+            "actions": [
+                {
+                    "type": "Action.Submit",
+                    "title": "Generate Email",
+                    "data": {
+                        "action": "generate_email",
+                        "template": "introduction"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Back",
+                    "data": {
+                        "action": "create_email"
+                    }
+                }
+            ]
+        }
+        reply.attachments = [Attachment(
+            content_type="application/vnd.microsoft.card.adaptive",
+            content=intro_card
+        )]
+    elif template_mode == "channel_selection":
         reply.attachments = [create_channel_selection_card()]
     elif template_mode == "selection":
         reply.attachments = [create_email_card(template_mode, channel)]
