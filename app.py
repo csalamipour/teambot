@@ -89,9 +89,9 @@ logger = logging.getLogger("pmbot")
 # AZURE_ENDPOINT = "https://kb-stellar.openai.azure.com/"  # Replace with your endpoint if different
 # AZURE_API_KEY = "bc0ba854d3644d7998a5034af62d03ce"  # Replace with your key if different
 # AZURE_API_VERSION = "2024-05-01-preview"
-AZURE_ENDPOINT = os.environ["OPENAI_ENDPOINT"]
-AZURE_API_KEY = os.environ["OPENAI_KEY"]
-AZURE_API_VERSION = os.environ["OPENAI_API_VERSION"]
+AZURE_ENDPOINT = os.environ.get("OPENAI_ENDPOINT". "")
+AZURE_API_KEY = os.environ.get("OPENAI_KEY", "")
+AZURE_API_VERSION = os.environ.get("OPENAI_API_VERSION", "")
 # App credentials from environment variables for Bot Framework
 APP_ID = os.environ.get("MicrosoftAppId", "")
 APP_PASSWORD = os.environ.get("MicrosoftAppPassword", "")
