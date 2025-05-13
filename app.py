@@ -198,6 +198,391 @@ You are an Email and Chat Assistant that helps manage communications and analyze
 
 Remember to be thorough yet efficient with your responses, anticipating follow-up needs while addressing the immediate question.
 '''
+EMAIL_PROMPT = '''
+# First Choice Debt Relief - Comprehensive Email Communication Guidelines
+
+## Company Profile
+First Choice Debt Relief is a professional debt resolution company with over 17 years of industry experience. We help clients achieve financial freedom through customized debt settlement programs that significantly reduce their overall debt burden. Our services include debt negotiation, creditor communications management, legal representation coordination for clients facing lawsuits, and comprehensive financial education. Our mission is to provide a clear path to financial recovery while offering empathetic, transparent support throughout the debt resolution journey.
+
+## Core Values
+- Integrity in all client interactions
+- Transparency about process, timelines, and expectations
+- Empathy for clients' financial challenges
+- Expertise in debt resolution strategies
+- Client advocacy when dealing with creditors and legal matters
+
+## Brand Voice
+- Professional yet approachable
+- Confident without being pushy
+- Empathetic without being condescending
+- Solution-focused rather than problem-focused
+- Clear and direct while remaining supportive
+
+## Email Communication Channels
+
+### 1. CUSTOMER SERVICE CHANNEL
+Used for client updates, account maintenance, and responding to existing client inquiries.
+**Tone**: Helpful, informative, supportive
+**Key characteristics**: Clear explanations, specific next steps, reassurance
+
+### 2. SALES CHANNEL
+Used for communicating with prospects and leads about program benefits and enrollment.
+**Tone**: Consultative, solution-oriented, value-focused
+**Key characteristics**: Clear value propositions, personalized options, gentle urgency
+
+### 3. INTRODUCTION CHANNEL
+Used for initial contact with potential clients.
+**Tone**: Professional, informative, non-pushy
+**Key characteristics**: Brief introduction, clear value proposition, easy next steps
+
+## Email Templates By Category
+
+### CUSTOMER SERVICE TEMPLATES:
+
+#### 1. WELCOME EMAIL
+**Purpose**: Sent to new clients upon enrollment to welcome them to the program
+**When to use**: Immediately after client enrollment is confirmed
+**Key elements**: Program confirmation, what to expect next, contact information
+
+Example:
+Subject: Welcome to First Choice Debt Relief!
+---
+Hi {FIRSTNAME},
+
+Welcome to First Choice Debt Relief! We're excited to have you on board. You've officially been approved and enrolled in our Debt Resolution Program — your journey to financial freedom starts now.
+
+Please take a few moments to review your Program Guide, which includes important details about what to expect, how settlements work, and how to make the most of your program.
+
+If you have any questions, we're just an email or call away.
+
+Sincerely,
+The FCDR Team
+
+#### 2. LEGAL UPDATE EMAIL
+**Purpose**: Update clients when their account has legal action pending
+**When to use**: When a client's account involves legal proceedings
+**Key elements**: Status update, explanation of legal provider's role, information about potential settlements
+
+Example:
+Subject: Update Regarding Your Legal Account
+---
+Hi {FIRSTNAME},
+
+I'm reaching out with a quick update on your legal case. Your assigned legal provider is actively working on your behalf, and we're staying in close communication with their office to support the process.
+
+Important: Your legal provider may contact you directly, especially if a potential settlement becomes available. If that happens, please connect with us before making any decisions. We'll help you review the offer based on your available funds and program progress so you can make the most informed decision.
+
+If you're able to contribute additional funds — through a one-time deposit or an increase in your monthly draft — this may help resolve the account faster and give your legal provider more flexibility during negotiations. Just let us know if that's something you'd like to explore.
+
+We're here to support you every step of the way. Feel free to reply to this email or call us at 800-985-9319 with any questions.
+
+Best regards,
+First Choice Debt Relief - Client Services
+
+#### 3. LOST SETTLEMENT EMAIL
+**Purpose**: Alert clients about a missed settlement payment and its implications
+**When to use**: When a client's scheduled payment fails and jeopardizes a settlement
+**Key elements**: Clear explanation of the situation, potential consequences, urgent call to action
+
+Example:
+Subject: Missed Settlement Payment – Immediate Attention Needed
+---
+Hi {FIRSTNAME},
+
+We're reaching out regarding a missed payment tied to one of your settlements. This payment was scheduled to be drafted from your {GATEWAY} account, but due to insufficient funds, it could not be processed.
+
+Unfortunately, when a settlement payment is missed, the agreement is typically voided. This means:
+- The savings originally negotiated could be lost
+- Past payments may be applied to the full balance owed
+- The account may revert to the original amount, plus possible interest or fees
+
+At this time, we've paused any future payments to the creditor. However, in some cases, acting quickly may allow us to reinstate the settlement or renegotiate similar terms.
+
+We understand this can be stressful, and we're here to help. Please call us at (714) 589-2245 as soon as possible so we can review your options and help preserve your progress.
+
+We look forward to helping you get back on track.
+
+Sincerely,
+First Choice Debt Relief - Client Services
+
+#### 4. LEGAL CONFIRMATION EMAIL
+**Purpose**: Confirm receipt of legal documents and explain next steps
+**When to use**: When a client has submitted lawsuit documents
+**Key elements**: Confirmation of receipt, explanation of legal review process, request for additional funds if needed
+
+Example:
+Subject: Lawsuit Document Received – Legal Review in Progress
+---
+Hi {FIRSTNAME},
+
+We've received the lawsuit related to your enrolled account and have forwarded it to your Legal Plan provider for review. Our office will work closely with your assigned legal representative to help bring this matter to resolution.
+
+With over 17 years of experience resolving cases like this, you can trust that you're in capable hands. You have a highly experienced and dedicated team working on your behalf.
+
+If you're able to deposit additional funds — either as a one-time amount or by increasing your monthly draft — please let us know. This may help expedite the resolution of your account.
+
+Important: Your assigned law office may contact you directly regarding possible settlement offers. If that happens, please speak with our team before making any decisions. We'll help you review your funds and make sure the offer aligns with your program.
+
+If you have any questions, feel free to reply to this email or give us a call at 800-985-9319.
+
+Thank you,
+First Choice Debt Relief – Client Support Team
+800-985-9319
+
+#### 5. PAYMENT RETURNED EMAIL
+**Purpose**: Notify clients about a returned payment and request contact
+**When to use**: When a client's payment is returned or rejected
+**Key elements**: Payment status notification, request for contact, mention of potential settlement impact
+
+Example:
+Subject: Returned Payment – Please Contact Us
+---
+Hi {FIRSTNAME},
+
+We wanted to let you know that your most recent program payment was returned. When you have a moment, please reach out—even if you're not yet able to reschedule the payment.
+
+Talking with us gives us a chance to go over your options and review any potential program impacts. If you're currently in the middle of a settlement term, it's especially important to stay on track, as a delayed payment could affect your savings agreement.
+
+Our goal is to help you stay on course and succeed in resolving your debt. Please don't hesitate to contact us—we'll work with you to accommodate your needs.
+
+Best regards,
+Client Services Team
+First Choice Debt Relief
+Phone: 800-985-9319
+Email: service@firstchoicedebtrelief.com
+
+### SALES TEMPLATES:
+
+#### 1. SALES QUOTE EMAIL
+**Purpose**: Provide a formal quote after initial consultation
+**When to use**: As a follow-up after speaking with a prospect who showed interest
+**Key elements**: Brief recap of conversation, program quote, monthly savings, call to action
+
+Example:
+Subject: Your Pre-Approved Debt Relief Quote
+---
+Hi {FIRSTNAME},
+
+It's been a few days since we last spoke, so I wanted to give you a snapshot of your quote should you still be interested. If you have some questions, let me know and we could hop on a call, and I can also go over the loan option that is offered within the program.
+
+Below you will find your approved quote for the program. As you will see, you could save significantly on a monthly basis. Through this program, your credit effects may have a shorter timeframe than out of the plan because you are working on eliminating your debt quickly, versus years of minimum payments.
+
+Feel free to contact me back by email or phone if you have any further questions or concerns. You can contact me on my direct line at [YOUR_PHONE].
+
+Thank you,
+[YOUR_NAME]
+First Choice Debt Relief
+
+#### 2. SALES ANALYSIS EMAIL
+**Purpose**: Provide a financial analysis to demonstrate program value
+**When to use**: When a prospect needs more details about how the program will impact their finances
+**Key elements**: Financial analysis, current vs. program comparison, expiring quote mention
+
+Example:
+Subject: Your Personal Financial Analysis
+---
+Hi {FIRSTNAME},
+
+I wanted to provide you with a brief analysis of your current financial situation. Please review so you can see where you stand.
+
+If you have any questions, you can call me at [YOUR_PHONE].
+
+I have included your quote which expires soon.
+
+As you can see, your debts are like an anchor holding you back, not just affecting your credit score and utilization, but your financial well-being. Our solution provides you with monthly relief on your payment, relief from high interest, relief from your credit utilization, and helps you become debt-free YEARS faster compared to just minimum payments.
+
+Thank you,
+[YOUR_NAME]
+First Choice Debt Relief
+
+#### 3. SALES OVERVIEW EMAIL
+**Purpose**: Provide high-level program overview to interested prospects
+**When to use**: For prospects who need a concise explanation of program benefits
+**Key elements**: Pre-approval notification, program highlights, financial freedom positioning
+
+Example:
+Subject: Pre-Approved for Our Debt Resolution Plan
+---
+Hi {FIRSTNAME},
+
+This is [YOUR_NAME] from First Choice. I have great news, you are pre-approved for our debt resolution plan!
+
+The monthly payment is for an estimated program at an affordable rate. That payment includes everything; the cost of the program and payments to the creditors. There are no pre-payment penalties, you can always pay more, and we'll just get the job done faster.
+
+Our solution provides real financial freedom with a clear end date, unlike minimum payments that can keep you in debt for 15+ years.
+
+I'd be happy to discuss this with you and answer any questions you might have. Feel free to call me at [YOUR_PHONE].
+
+Thank you,
+[YOUR_NAME]
+First Choice Debt Relief
+
+#### 4. SALES QUICK QUOTE EMAIL
+**Purpose**: Provide a quick quote to capture interest of busy prospects
+**When to use**: For initial outreach to prospects who might need immediate information
+**Key elements**: Low payment option, savings emphasis, time-limited offer, call to action
+
+Example:
+Subject: Your Debt Consolidation Quote - Lower Monthly Payment
+---
+Hi {FIRSTNAME},
+
+This is [YOUR_NAME] from First Choice. We got you a low payment option to consolidate your debt, saving you a significant amount every month compared to what you are paying now.
+
+This quote is valid for a limited time. If you are still serious about consolidating and getting that lower payment, please give me a call at [YOUR_PHONE].
+
+Our goal is to help you get your life back financially!
+
+Thank you,
+[YOUR_NAME]
+First Choice Debt Relief
+
+#### 5. SALES GENERIC EMAIL
+**Purpose**: For custom sales communications that don't fit other templates
+**When to use**: When a unique sales situation requires personalized messaging
+**Key elements**: Clear value proposition, personal connection, strong call to action
+
+Example:
+Subject: [Customized Based on Situation]
+---
+Hi {FIRSTNAME},
+
+[Customized content addressing specific prospect needs and situation]
+
+Our debt resolution program at First Choice Debt Relief has helped thousands of clients reduce their debt burden and achieve financial freedom faster than they thought possible.
+
+I'd be happy to discuss how we might be able to help with your specific situation. Please feel free to reach out at [YOUR_PHONE] at your convenience.
+
+Thank you,
+[YOUR_NAME]
+First Choice Debt Relief
+
+### INTRODUCTION TEMPLATES:
+
+#### 1. INTRODUCTION EMAIL
+**Purpose**: Make initial contact with potential clients
+**When to use**: For first outreach to new leads or referrals
+**Key elements**: Brief company introduction, value proposition, invitation to learn more
+
+Example:
+Subject: Introduction from First Choice Debt Relief
+---
+Hi {FIRSTNAME},
+
+My name is [YOUR_NAME] from First Choice Debt Relief. I'm reaching out because we specialize in helping people overcome overwhelming debt and regain financial control.
+
+Based on our initial analysis, we may be able to offer you a program that could significantly reduce your monthly payments and help you become debt-free in a shorter timeframe than making minimum payments.
+
+Would you be interested in learning more about your options? I'd be happy to provide you with a free consultation to discuss your specific situation and how we might be able to help.
+
+Feel free to reach out to me directly at [YOUR_PHONE] or simply reply to this email to schedule a time to chat.
+
+Best regards,
+[YOUR_NAME]
+First Choice Debt Relief
+
+#### 2. FOLLOW-UP EMAIL
+**Purpose**: Follow up after initial contact with no response
+**When to use**: When there has been no response to previous outreach
+**Key elements**: Reference to previous contact, gentle reminder, invitation to respond
+
+Example:
+Subject: Follow-up from First Choice Debt Relief
+---
+Hi {FIRSTNAME},
+
+I hope this email finds you well. I'm following up on our previous conversation about your debt relief options.
+
+I understand that taking steps to address financial challenges can require careful consideration, and I want to assure you that we're here to help whenever you're ready to move forward.
+
+If you have any questions about our debt resolution program or would like to revisit the details we discussed, please don't hesitate to reach out. I'm available at [YOUR_PHONE] or you can simply reply to this email.
+
+Looking forward to hearing from you.
+
+Best regards,
+[YOUR_NAME]
+First Choice Debt Relief
+
+#### 3. GENERIC EMAIL
+**Purpose**: For communications that don't fit standard templates
+**When to use**: When unique situations require custom messaging
+**Key elements**: Clear purpose statement, structured information, professional tone
+
+Example:
+Subject: [Customized Based on Purpose]
+---
+Hi {FIRSTNAME},
+
+[Customized content addressing specific situation]
+
+At First Choice Debt Relief, we're committed to helping our clients achieve financial freedom through personalized debt resolution strategies.
+
+[Additional custom content relevant to the specific purpose]
+
+Please don't hesitate to contact us at 800-985-9319 if you have any questions or need further assistance.
+
+Best regards,
+[YOUR_NAME]
+First Choice Debt Relief
+
+## Email Structure Guidelines
+
+1. **Subject Lines**
+   - Clear and specific
+   - 40-60 characters in length
+   - Include action words for urgent communications
+   - Avoid all caps, excessive punctuation, and spam trigger words
+
+2. **Greetings**
+   - Use the client's first name when available
+   - Default to "Hi [FirstName]," for most communications
+   - "Dear [FirstName]," for more formal communications
+
+3. **Body Content**
+   - Begin with clear purpose statement
+   - Use short paragraphs (3-5 sentences maximum)
+   - Include bullet points for multiple items or steps
+   - Highlight important information in its own paragraph
+   - Use bold formatting sparingly for critical information
+
+4. **Closings**
+   - Include clear next steps or call to action
+   - Provide relevant contact information
+   - Use appropriate sign-off based on context:
+     * "Sincerely," for formal communications
+     * "Best regards," for standard communications
+     * "Thank you," for sales communications
+   - Include name, title (if applicable), and company name
+
+5. **Contact Information**
+   - Customer Service: 800-985-9319
+   - Urgent Account Issues: 714-589-2245
+   - Email: service@firstchoicedebtrelief.com
+
+## Special Considerations
+
+1. **When Discussing Settlements**
+   - Be clear about potential savings without making guarantees
+   - Emphasize the importance of staying on track with payments
+   - Explain potential consequences of missed payments
+
+2. **When Discussing Legal Matters**
+   - Emphasize partnership with legal providers
+   - Advise consulting with First Choice before accepting offers
+   - Maintain professional, confident tone without creating unnecessary alarm
+
+3. **When Communicating Urgency**
+   - Clearly state timeframes
+   - Explain potential consequences of inaction
+   - Provide direct contact information
+   - Use "Urgent" in subject line only for truly time-sensitive matters
+
+4. **When Replying to Client Queries**
+   - Address all questions raised
+   - Provide additional relevant information
+   - End with invitation for further questions
+   - Aim for same-day or next-business-day response
+'''
 def create_typing_stop_activity():
     """Creates an activity to explicitly stop the typing indicator"""
     return Activity(
@@ -890,6 +1275,46 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             
             # Apply edits
             await apply_email_edits(turn_context, state, edit_instructions)
+        # Add this to the handle_card_actions function
+        elif action_data.get("action") == "regenerate_email":
+            # Get conversation state
+            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+            conversation_id = conversation_reference.conversation.id
+            state = conversation_states[conversation_id]
+            
+            # Extract parameters
+            template_id = action_data.get("template", "generic")
+            recipient = action_data.get("recipient", "")
+            firstname = action_data.get("firstname", "")
+            gateway = action_data.get("gateway", "")
+            subject = action_data.get("subject", "")
+            instructions = action_data.get("instructions", "")
+            chain = action_data.get("chain", "")
+            has_attachments = action_data.get("hasAttachments", "false") == "true"
+            
+            # Get previous instructions and add a request for more creativity/variation
+            with conversation_states_lock:
+                previous_instructions = state.get("last_email_data", {}).get("instructions", "")
+            
+            # Combine previous instructions with request for variation
+            if previous_instructions:
+                new_instructions = f"{previous_instructions}\n\nPlease provide a different variation of this email with alternative wording while keeping the same message intent."
+            else:
+                new_instructions = "Please provide a different variation of this email with alternative wording while keeping the same message intent."
+            
+            # Generate a new version
+            await generate_email(
+                turn_context, 
+                state, 
+                template_id, 
+                recipient, 
+                firstname, 
+                gateway, 
+                subject, 
+                new_instructions, 
+                chain, 
+                has_attachments
+            )
         elif action_data.get("action") == "cancel_edit":
             # Cancel edit and go back to last generated email
             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
@@ -3065,7 +3490,7 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
 
 async def generate_email(turn_context: TurnContext, state, template_id, recipient=None, firstname=None, gateway=None, subject=None, instructions=None, chain=None, has_attachments=False):
     """
-    Generates an email using AI based on template or provided parameters.
+    Generates an email using AI based on template or provided parameters with enhanced flexibility and creativity.
     
     Args:
         turn_context: The turn context
@@ -3082,132 +3507,258 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
     # Send typing indicator
     await turn_context.send_activity(create_typing_activity())
     
-    # Get base template content if using a template
-    template_subject = ""
-    template_content = ""
-    
-    if template_id != "generic":
-        template_subject, template_content = get_template_content(
-            template_id, 
-            firstname=firstname or "{FIRSTNAME}",
-            gateway=gateway or "{GATEWAY}"
-        )
-    
-    # Create prompt for the AI
-    prompt = f"Generate a professional email for First Choice Debt Relief with the following details:\n"
-    
-    if recipient:
-        prompt += f"To: {recipient}\n"
-    
-    if template_id == "generic":
-        # For generic emails, use the provided subject and instructions
-        if subject:
-            prompt += f"Subject: {subject}\n"
-        prompt += f"Instructions: {instructions or 'Please write a professional email for First Choice Debt Relief.'}\n"
-    else:
-        # For templates, use the template content as a base
-        prompt += f"Subject: {template_subject}\n"
-        prompt += f"Template Base: {template_content}\n"
-            
-        if firstname:
-            prompt += f"Use the name: {firstname}\n"
-            
-        if gateway and template_id == "lost_settlement":
-            prompt += f"Payment Gateway: {gateway}\n"
-    
-    if chain:
-        prompt += f"This is a reply to the following email thread: {chain}\n"
-        
-    if has_attachments:
-        prompt += f"Mention that there are attachments included.\n"
-    
-    # Add special instruction to prioritize user instructions
-    if instructions:
-        prompt += f"\nIMPORTANT - PRIORITIZE THESE USER INSTRUCTIONS ABOVE TEMPLATE GUIDELINES: {instructions}\n"
-        prompt += "Feel free to significantly modify the template based on these instructions while maintaining the general purpose and professional tone.\n"
-    else:
-        prompt += "\nFeel free to improve upon the template. You don't need to follow it exactly - make it sound natural and conversational while maintaining professionalism.\n"
-    
-    prompt += "\nFormat the email professionally with appropriate greeting, body, and signature. The signature should include 'First Choice Debt Relief' as the company name."
-    
     # Initialize chat if needed
     if not state.get("assistant_id"):
         await initialize_chat(turn_context, state)
     
-    # Use the existing process_conversation_internal function to get AI response
-    client = create_client()
-    result = await process_conversation_internal(
-        client=client,
-        session=state["session_id"],
-        prompt=prompt,
-        assistant=state["assistant_id"],
-        stream_output=False
-    )
-    
-    # Extract and format the email
-    if isinstance(result, dict) and "response" in result:
-        email_text = result["response"]
+    try:
+        # Get template channel, title and type information
+        template_channel = get_template_channel(template_id)
+        template_title = get_template_title(template_id)
         
-        # Save the generated email in the state for potential editing
-        with conversation_states_lock:
-            state["last_generated_email"] = email_text
-            state["last_email_template"] = template_id
-            state["last_email_data"] = {
-                "recipient": recipient,
-                "firstname": firstname,
-                "gateway": gateway,
-                "subject": subject,
-                "instructions": instructions,
-                "chain": chain,
-                "has_attachments": has_attachments
-            }
+        # Get base template content if using a template
+        template_subject = ""
+        template_content = ""
         
-        # Create an email result card with edit option
-        email_card = {
-            "type": "AdaptiveCard",
-            "version": "1.0",
-            "body": [
-                {
-                    "type": "TextBlock",
-                    "text": "Generated Email",
-                    "size": "large",
-                    "weight": "bolder"
-                },
-                {
-                    "type": "TextBlock",
-                    "text": email_text,
-                    "wrap": True
-                }
-            ],
-            "actions": [
-                {
-                    "type": "Action.Submit",
-                    "title": "Edit This Email",
-                    "data": {
-                        "action": "edit_email"
-                    }
-                },
-                {
-                    "type": "Action.Submit",
-                    "title": "Create Another Email",
-                    "data": {
-                        "action": "create_email"
-                    }
-                }
-            ]
-        }
+        if template_id != "generic":
+            template_subject, template_content = get_template_content(
+                template_id, 
+                firstname=firstname or "{FIRSTNAME}",
+                gateway=gateway or "{GATEWAY}"
+            )
         
-        # Create attachment
-        attachment = Attachment(
-            content_type="application/vnd.microsoft.card.adaptive",
-            content=email_card
+        # Create a detailed request with the EMAIL_PROMPT as context and balanced instructions for creativity
+        creative_instruction = """
+GUIDANCE ON TEMPLATE USE VS. CREATIVITY:
+1. Use the specified template as a STARTING POINT only.
+2. PRIORITIZE any specific user instructions over rigid template adherence.
+3. Feel free to IMPROVE and PERSONALIZE the template language to sound more natural.
+4. BE CREATIVE while maintaining First Choice Debt Relief's professional brand voice.
+5. Focus on CLARITY, EMPATHY, and EFFECTIVENESS rather than strict format adherence.
+6. The email should be READY TO SEND without further editing.
+7. Include all standard parts (greeting, body, closing, signature) in a professional format.
+8. Focus on accomplishing the EMAIL'S PURPOSE rather than following exact template wording.
+"""
+        
+        # Create the specific email request
+        email_request = f"""
+I need to draft a {template_title} for First Choice Debt Relief.
+
+EMAIL SPECIFICATIONS:
+- TYPE: {template_title}
+- CHANNEL: {template_channel.replace('_', ' ').title() if template_channel else 'Generic'}
+"""
+
+        # Add recipient information
+        if recipient:
+            email_request += f"- RECIPIENT: {recipient}\n"
+        
+        # Add subject line information
+        if template_id == "generic" and subject:
+            email_request += f"- SUBJECT: {subject}\n"
+        elif template_subject:
+            email_request += f"- SUBJECT: {template_subject}\n"
+        
+        # Add specific parameters
+        if firstname:
+            email_request += f"- CLIENT NAME: {firstname}\n"
+        
+        if gateway and template_id == "lost_settlement":
+            email_request += f"- PAYMENT GATEWAY: {gateway}\n"
+        
+        # Add attachments note if needed
+        if has_attachments:
+            email_request += "- ATTACHMENTS: Yes (please mention files are attached)\n"
+        
+        # Add previous email thread if available
+        if chain:
+            email_request += f"\nPREVIOUS EMAIL THREAD:\n```\n{chain}\n```\n"
+        
+        # Add template content as reference
+        if template_content:
+            email_request += f"\nTEMPLATE REFERENCE (use as starting point only):\n```\n{template_content}\n```\n"
+        
+        # Add special instructions with absolute highest priority
+        if instructions:
+            email_request += f"\nUSER INSTRUCTIONS (HIGHEST PRIORITY - MUST FOLLOW):\n{instructions}\n"
+        
+        # Create a client and build the full prompt with the EMAIL_PROMPT
+        client = create_client()
+        
+        # Combine everything into a structured prompt
+        full_prompt = f"{EMAIL_PROMPT}\n\n{creative_instruction}\n\n{email_request}"
+        
+        # Add specific template-based guidance
+        if template_id == "welcome":
+            full_prompt += "\nThis is a WELCOME EMAIL: Focus on enthusiasm, clear next steps, and making the client feel supported as they begin their debt resolution journey."
+        elif template_id == "legal_update":
+            full_prompt += "\nThis is a LEGAL UPDATE EMAIL: Balance providing important information without causing unnecessary alarm. Emphasize partnership and support through the legal process."
+        elif template_id == "lost_settlement":
+            full_prompt += "\nThis is a LOST SETTLEMENT EMAIL: Clearly communicate urgency while maintaining empathy. Focus on immediate action steps and how we can help recover the situation."
+        elif template_id == "sales_quote" or template_id == "sales_quick_quote":
+            full_prompt += "\nThis is a SALES QUOTE EMAIL: Focus on the value proposition, potential savings, and creating gentle urgency to act. Be consultative rather than pushy."
+        elif template_id.startswith("sales_"):
+            full_prompt += "\nThis is a SALES EMAIL: Balance providing valuable information with a clear call to action. Focus on how our service addresses the client's financial pain points."
+        elif template_id == "introduction":
+            full_prompt += "\nThis is an INTRODUCTION EMAIL: Make a strong first impression with a clear, concise introduction and value proposition. Keep it professional and non-pushy."
+        elif template_id == "followup":
+            full_prompt += "\nThis is a FOLLOW-UP EMAIL: Gently remind the recipient of previous contact without being pushy. Show understanding of their decision-making process."
+        
+        # Make the final request
+        result = await process_conversation_internal(
+            client=client,
+            session=state["session_id"],
+            prompt=full_prompt,
+            assistant=state["assistant_id"],
+            stream_output=False
         )
         
-        reply = _create_reply(turn_context.activity)
-        reply.attachments = [attachment]
-        await turn_context.send_activity(reply)
-    else:
-        await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
+        # Log the template used for analytics
+        logging.info(f"Generated {template_title} email for user {state.get('user_id', 'unknown')}")
+        
+        # Extract and format the email
+        if isinstance(result, dict) and "response" in result:
+            email_text = result["response"]
+            
+            # Clean up the email text - remove any markdown formatting artifacts
+            email_text = email_text.replace("```", "").strip()
+            
+            # If the email starts with "Subject:", extract just the body
+            if email_text.lower().startswith("subject:"):
+                # Try to find the first line break after "Subject:"
+                subject_end_idx = email_text.find("\n")
+                if subject_end_idx > 0:
+                    email_text = email_text[subject_end_idx+1:].strip()
+            
+            # Save the generated email in the state for potential editing
+            with conversation_states_lock:
+                state["last_generated_email"] = email_text
+                state["last_email_template"] = template_id
+                state["last_email_data"] = {
+                    "recipient": recipient,
+                    "firstname": firstname,
+                    "gateway": gateway,
+                    "subject": subject,
+                    "instructions": instructions,
+                    "chain": chain,
+                    "has_attachments": has_attachments
+                }
+            
+            # Create an enhanced email result card with rich formatting
+            email_card = {
+                "type": "AdaptiveCard",
+                "version": "1.3",
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "body": [
+                    {
+                        "type": "TextBlock",
+                        "text": f"Generated {template_title}",
+                        "size": "large",
+                        "weight": "bolder",
+                        "horizontalAlignment": "center",
+                        "color": "accent"
+                    },
+                    {
+                        "type": "Container",
+                        "style": "emphasis",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": email_text,
+                                "wrap": True,
+                                "spacing": "medium"
+                            }
+                        ]
+                    }
+                ],
+                "actions": [
+                    {
+                        "type": "Action.Submit",
+                        "title": "Edit This Email",
+                        "style": "default",
+                        "data": {
+                            "action": "edit_email"
+                        }
+                    },
+                    {
+                        "type": "Action.Submit",
+                        "title": "Create Another Email",
+                        "style": "positive",
+                        "data": {
+                            "action": "create_email"
+                        }
+                    },
+                    {
+                        "type": "Action.Submit",
+                        "title": "Regenerate",
+                        "style": "default",
+                        "data": {
+                            "action": "regenerate_email",
+                            "template": template_id,
+                            "recipient": recipient,
+                            "firstname": firstname,
+                            "gateway": gateway,
+                            "subject": subject,
+                            "instructions": instructions,
+                            "chain": chain,
+                            "hasAttachments": "true" if has_attachments else "false"
+                        }
+                    }
+                ]
+            }
+            
+            # Add copy to clipboard action for easy copying
+            email_card["actions"].append({
+                "type": "Action.ShowCard",
+                "title": "Copy Text",
+                "card": {
+                    "type": "AdaptiveCard",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Email text ready to copy:",
+                            "wrap": True
+                        },
+                        {
+                            "type": "Input.Text",
+                            "id": "email_text_to_copy",
+                            "value": email_text,
+                            "isMultiline": True
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "Select the text above and use Ctrl+C to copy",
+                            "wrap": True,
+                            "size": "small",
+                            "isSubtle": True
+                        }
+                    ]
+                }
+            })
+            
+            # Create attachment
+            attachment = Attachment(
+                content_type="application/vnd.microsoft.card.adaptive",
+                content=email_card
+            )
+            
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [attachment]
+            await turn_context.send_activity(reply)
+        else:
+            await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
+    
+    except Exception as e:
+        # Handle and log any errors
+        logging.error(f"Error generating email: {str(e)}")
+        traceback.print_exc()
+        await turn_context.send_activity(f"I encountered an error while generating your email template. Please try again or select a different template.")
+        
+        # Try fallback direct completion
+        try:
+            await send_fallback_response(turn_context, f"Please generate a professional {get_template_title(template_id)} email for First Choice Debt Relief.")
+        except Exception as fallback_error:
+            logging.error(f"Fallback email generation also failed: {fallback_error}")
 async def send_periodic_typing(turn_context: TurnContext, interval_seconds: int):
     """Sends typing indicators periodically until the task is cancelled"""
     try:
