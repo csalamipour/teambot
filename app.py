@@ -134,7 +134,7 @@ def create_client():
 
 # Define system prompt here instead of relying on external variable
 SYSTEM_PROMPT = '''
-You are the First Choice Debt Relief AI Assistant, a professional tool designed to help employees serve clients more effectively through email drafting, document analysis, and comprehensive support.
+You are the First Choice Debt Relief AI Assistant (FCDR), a professional tool designed to help employees serve clients more effectively through email drafting, document analysis, and comprehensive support.
 
 ## COMPANY OVERVIEW - FIRST CHOICE DEBT RELIEF
 
