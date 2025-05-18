@@ -590,23 +590,24 @@ When directing employees to additional resources:
 
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
 PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant and applicable)'''
-async def retrieve_documents(query, top=3, filters=None):
-    """Retrieves relevant documents from Azure AI Search."""
+async def retrieve_documents(query, top=5, filters=None):
+    """Retrieves relevant text components from Azure AI Search."""
     try:
         search_client = create_search_client()
         if not search_client:
             logging.warning("Search client could not be created - check Azure AI Search credentials")
             return []
             
-        # Configure search options
+        # Configure search options - focus on text retrieval
         search_options = {
             "top": top,
             "count": True,
             "query_type": "semantic",
-            "semantic_configuration": "rag-1747554898629-semantic-configuration",  # Use your actual semantic config name
+            "semantic_configuration": "rag-1747554898629-semantic-configuration",
             "query_language": "en-us",
             "captions": "extractive",
             "answers": "extractive|count-3",
+            "select": "title,chunk,chunk_id",  # Only request text fields
             "highlight_fields": "chunk",
             "highlight_pre_tag": "<em>",
             "highlight_post_tag": "</em>"
@@ -621,39 +622,33 @@ async def retrieve_documents(query, top=3, filters=None):
         
         documents = []
         
-        # Process each search result
+        # Process each search result - only extract text components
         for result in results:
             doc = {
-                "id": result.get("chunk_id", ""),
                 "title": result.get("title", "Unknown Document"),
-                "score": result.get("@search.score", 0),
-                "content": result.get("chunk", ""),
-                "parent_id": result.get("parent_id", "")
+                "content": result.get("chunk", "")
             }
             
-            # Add captions if available (these are the highlighted snippets)
+            # Add captions if available (text only)
             if "@search.captions" in result:
-                doc["captions"] = []
+                doc["highlights"] = []
                 for caption in result["@search.captions"]:
-                    doc["captions"].append({
-                        "text": caption.get("text", ""),
-                        "highlights": caption.get("highlights", "")
-                    })
+                    # Get the highlighted text or fall back to plain text
+                    highlight_text = caption.get("highlights", caption.get("text", ""))
+                    if highlight_text:
+                        doc["highlights"].append(highlight_text)
             
             documents.append(doc)
         
-        # Also check if we have search.answers - these are often the most relevant content
+        # Extract text-only components from answers
         answers = []
         if hasattr(results, '@search.answers') and results['@search.answers']:
             for answer in results['@search.answers']:
-                answers.append({
-                    "text": answer.get("text", ""),
-                    "highlights": answer.get("highlights", ""),
-                    "score": answer.get("score", 0),
-                    "key": answer.get("key", "")
-                })
+                answer_text = answer.get("highlights", answer.get("text", ""))
+                if answer_text:
+                    answers.append(answer_text)
         
-        # Return both regular results and any answers
+        # Return text components only
         return {
             "documents": documents,
             "answers": answers,
@@ -5552,23 +5547,23 @@ async def initialize_chat_silent(turn_context: TurnContext, state):
         logging.error(f"Error in initialize_chat_silent: {e}")
         return False
 async def format_message_with_rag(user_message, search_results):
-    """Format a message combining user query with retrieved knowledge"""
+    """Format a message combining user query with retrieved text knowledge"""
     formatted_message = user_message
     
-    # Only add context if we have relevant documents
+    # Only add context if we have relevant results
     if search_results and (search_results.get("documents") or search_results.get("answers")):
         # Create the context section
         context = "\n\n--- RETRIEVED KNOWLEDGE ---\n\n"
         
-        # First add answers if available (usually most relevant)
+        # First add answers if available (most relevant snippets)
         answers = search_results.get("answers", [])
         if answers:
             context += "TOP ANSWERS:\n"
-            for i, answer in enumerate(answers, 1):
-                context += f"{i}. {answer.get('highlights', answer.get('text', ''))}\n"
+            for i, answer_text in enumerate(answers, 1):
+                context += f"{i}. {answer_text}\n"
             context += "\n"
         
-        # Then add document content with captions
+        # Then add document content
         documents = search_results.get("documents", [])
         if documents:
             context += "RELEVANT DOCUMENTS:\n"
@@ -5576,24 +5571,20 @@ async def format_message_with_rag(user_message, search_results):
                 # Add document title
                 context += f"DOCUMENT {i}: {doc.get('title', 'Unknown Document')}\n"
                 
-                # Add captions/highlights if available
-                if doc.get('captions'):
-                    for j, caption in enumerate(doc['captions'], 1):
-                        context += f"- {caption.get('highlights', caption.get('text', ''))}\n"
+                # Add highlights if available
+                if doc.get('highlights') and doc['highlights']:
+                    for highlight in doc['highlights']:
+                        context += f"- {highlight}\n"
                 else:
                     # Add a portion of content if no highlights
                     content = doc.get('content', '').strip()
                     if content:
                         # Truncate long content
-                        if len(content) > 500:
-                            content = content[:500] + "..."
+                        if len(content) > 300:
+                            content = content[:300] + "..."
                         context += f"- {content}\n"
                 
                 context += "\n"
-        
-        # If there are no results, let the AI know
-        if not answers and not documents:
-            context += "No relevant documents found in the knowledge base for this query.\n"
         
         # Add the combined message
         formatted_message = f"{formatted_message}\n\n{context}"
