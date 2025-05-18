@@ -91,6 +91,10 @@ logger = logging.getLogger("pmbot")
 AZURE_ENDPOINT = os.environ.get("OPENAI_ENDPOINT", "")
 AZURE_API_KEY = os.environ.get("OPENAI_KEY", "")
 AZURE_API_VERSION = os.environ.get("OPENAI_API_VERSION", "")
+# Azure AI Search configuration
+AZURE_SEARCH_ENDPOINT = os.environ.get("AZURE_SEARCH_ENDPOINT", "")
+AZURE_SEARCH_KEY = os.environ.get("AZURE_SEARCH_KEY", "")
+AZURE_SEARCH_INDEX_NAME = os.environ.get("AZURE_SEARCH_INDEX_NAME", "default-index")
 # App credentials from environment variables for Bot Framework
 APP_ID = os.environ.get("MicrosoftAppId", "")
 APP_PASSWORD = os.environ.get("MicrosoftAppPassword", "")
@@ -729,9 +733,9 @@ async def handle_new_chat_command(turn_context: TurnContext, state, conversation
 def create_typing_stop_activity():
     """Creates an activity to explicitly stop the typing indicator"""
     return Activity(
-        type=ActivityTypes.message,
-        text=" ",  # Empty text message to replace typing indicator
-        value={"action": "stop_typing"}  # Metadata for debugging
+        type=ActivityTypes.typing,  # Use typing type, not message
+        channel_id="msteams",
+        value={"isTyping": False}  # Signal to stop typing
     )
 # Custom TeamsStreamingResponse for better control when official library not available
 class TeamsStreamingResponse:
