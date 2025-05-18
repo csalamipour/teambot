@@ -816,7 +816,7 @@ async def retrieve_documents(query, top=5, mode="openai"):
         if mode == "azure_search":
             return await _retrieve_with_azure_search(query, top)
         # Default to OpenAI with fallback to Azure Search
-        return = await _retrieve_with_openai(query, top)
+        return await _retrieve_with_openai(query, top)
     except Exception as e:
         logging.error(f"Error retrieving documents: {e}")
         import traceback
