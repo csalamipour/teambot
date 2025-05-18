@@ -708,69 +708,233 @@ PS: Remember to embody First Choice Debt Relief's commitment to helping clients 
 PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant and applicable)
 PS: Only use "RETRIEVED KNOWLEDGE" when directly relevant to the query. For follow-up questions, clarifications, or general comments, rely on conversation history instead of retrieved documents.
 PS: Prioritize natural conversation flow over unnecessary document references. Use "RETRIEVED KNOWLEDGE" for specific FCDR policies and procedures, not for simple exchanges or personalized advice.'''
-async def retrieve_documents(query, top=3):
+# async def retrieve_documents(query, top=3):
+#     """
+#     Retrieves documents from Azure AI Search using basic parameters.
+#     Adapts to the index structure by looking for content in various fields.
+#     """
+#     try:
+#         search_client = create_search_client()
+#         if not search_client:
+#             return []
+            
+#         # Use only basic search parameters that work with any SDK version
+#         results = search_client.search(
+#             search_text=query,
+#             top=top
+#         )
+        
+#         documents = []
+        
+#         # Process search results
+#         for item in results:
+#             # Try to get content from various possible field names
+#             content = None
+#             for field_name in ["chunk", "content", "text"]:
+#                 if field_name in item:
+#                     content = item[field_name]
+#                     if content:
+#                         break
+            
+#             if not content:
+#                 # If we can't find a content field, look for any string field
+#                 for key, value in item.items():
+#                     if isinstance(value, str) and len(value) > 50:
+#                         content = value
+#                         break
+            
+#             if not content:
+#                 continue
+            
+#             # Try to get a title
+#             title = None
+#             for title_field in ["title", "name", "filename"]:
+#                 if title_field in item:
+#                     title = item[title_field]
+#                     if title:
+#                         break
+            
+#             if not title:
+#                 # Use a key as title if available
+#                 for key_field in ["id", "key", "chunk_id"]:
+#                     if key_field in item:
+#                         title = f"Document {item[key_field]}"
+#                         break
+                        
+#             if not title:
+#                 title = "Unknown Document"
+            
+#             documents.append({
+#                 "title": title,
+#                 "content": content
+#             })
+        
+#         return documents
+            
+#     except Exception as e:
+#         logging.error(f"Error retrieving documents: {e}")
+#         import traceback
+#         traceback.print_exc()
+#         return []
+async def retrieve_documents(query, top=5, mode="openai"):
     """
-    Retrieves documents from Azure AI Search using basic parameters.
-    Adapts to the index structure by looking for content in various fields.
+    Retrieves documents from either Azure AI Search or OpenAI API based on mode.
+    
+    Args:
+        query (str): The search query
+        top (int): Maximum number of results to return
+        mode (str): Search mode - "azure_search" (default) or "openai"
+    
+    Returns:
+        list: List of document dictionaries with title and content keys
+              Example: [{"title": "Document Name", "content": "Document content text..."}]
+              Returns empty list if query is unrelated or no documents found
     """
     try:
-        search_client = create_search_client()
-        if not search_client:
-            return []
+        if mode == "azure_search":
+            # Original Azure Search implementation
+            search_client = create_search_client()
+            if not search_client:
+                return []
+                
+            # Use only basic search parameters that work with any SDK version
+            results = search_client.search(
+                search_text=query,
+                top=top
+            )
             
-        # Use only basic search parameters that work with any SDK version
-        results = search_client.search(
-            search_text=query,
-            top=top
-        )
+            documents = []
+            
+            # Process search results
+            for item in results:
+                # Try to get content from various possible field names
+                content = None
+                for field_name in ["chunk", "content", "text"]:
+                    if field_name in item:
+                        content = item[field_name]
+                        if content:
+                            break
+                
+                if not content:
+                    # If we can't find a content field, look for any string field
+                    for key, value in item.items():
+                        if isinstance(value, str) and len(value) > 50:
+                            content = value
+                            break
+                
+                if not content:
+                    continue
+                
+                # Try to get a title
+                title = None
+                for title_field in ["title", "name", "filename"]:
+                    if title_field in item:
+                        title = item[title_field]
+                        if title:
+                            break
+                
+                if not title:
+                    # Use a key as title if available
+                    for key_field in ["id", "key", "chunk_id"]:
+                        if key_field in item:
+                            title = f"Document {item[key_field]}"
+                            break
+                            
+                if not title:
+                    title = "Unknown Document"
+                
+                documents.append({
+                    "title": title,
+                    "content": content
+                })
+            
+            return documents
         
-        documents = []
-        
-        # Process search results
-        for item in results:
-            # Try to get content from various possible field names
-            content = None
-            for field_name in ["chunk", "content", "text"]:
-                if field_name in item:
-                    content = item[field_name]
-                    if content:
-                        break
+        elif mode == "openai":
+            # Implementation using OpenAI completions API
+            client = create_client()
+            if not client:
+                return []
             
-            if not content:
-                # If we can't find a content field, look for any string field
-                for key, value in item.items():
-                    if isinstance(value, str) and len(value) > 50:
-                        content = value
-                        break
+            # Create a prompt for the OpenAI model to retrieve relevant information
+            system_prompt = """You are a retrieval system for First Choice Debt Relief documentation. 
+            Your task is to retrieve relevant information for the given query.
+            If the query is unrelated to debt relief or First Choice Debt Relief, return an empty array.
+            Always format your response in the specified JSON format with title and content fields.
+            The "title" field should contain the DOCUMENT NAME (like "Program Guide.pdf" or "Client Agreement") - NOT a description of the content.
+            Do not make up information - only return relevant knowledge that you're confident about."""
             
-            if not content:
-                continue
+            user_prompt = f"""Based on the following query, provide relevant information from First Choice Debt Relief knowledge base.
             
-            # Try to get a title
-            title = None
-            for title_field in ["title", "name", "filename"]:
-                if title_field in item:
-                    title = item[title_field]
-                    if title:
-                        break
+            Query: {query}
             
-            if not title:
-                # Use a key as title if available
-                for key_field in ["id", "key", "chunk_id"]:
-                    if key_field in item:
-                        title = f"Document {item[key_field]}"
-                        break
+            Return your response in this exact JSON format:
+            {{
+                "response_type": "json",
+                "documents": [
+                    {{
+                        "title": "Document Name (e.g., 'Client Onboarding Manual', 'Legal Disclosure Policy')",
+                        "content": "Relevant content that answers the query"
+                    }},
+                    {{
+                        "title": "Another Document Name (e.g., 'Settlement Guide', 'Compliance Manual')",
+                        "content": "More information related to the query"
+                    }}
+                ]
+            }}
+            
+            If the query is unrelated to First Choice Debt Relief or debt relief programs, or if you don't have relevant information, return:
+            {{
+                "response_type": "json",
+                "documents": []
+            }}
+            
+            Return no more than {top} document entries. Each document must have both a title (document name) and content fields."""
+            
+            # Call OpenAI API
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4.1-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0
+                )
+                
+                # Parse the response
+                try:
+                    response_text = response.choices[0].message.content
+                    response_json = json.loads(response_text)
+                    
+                    # Extract documents from the response
+                    if "documents" in response_json and isinstance(response_json["documents"], list):
+                        # Ensure each document has both title and content
+                        documents = []
+                        for doc in response_json["documents"]:
+                            if isinstance(doc, dict) and "title" in doc and "content" in doc:
+                                documents.append({
+                                    "title": doc["title"],
+                                    "content": doc["content"]
+                                })
+                        return documents
+                    else:
+                        logging.warning(f"Invalid response format from OpenAI: missing 'documents' field")
+                        return []
                         
-            if not title:
-                title = "Unknown Document"
-            
-            documents.append({
-                "title": title,
-                "content": content
-            })
+                except json.JSONDecodeError:
+                    logging.error(f"Failed to parse JSON from OpenAI response")
+                    return []
+                    
+            except Exception as openai_e:
+                logging.error(f"Error calling OpenAI API: {openai_e}")
+                return []
         
-        return documents
-            
+        else:
+            logging.warning(f"Unsupported retrieve_documents mode: {mode}")
+            return []
+                
     except Exception as e:
         logging.error(f"Error retrieving documents: {e}")
         import traceback
