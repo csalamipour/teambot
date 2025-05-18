@@ -65,6 +65,9 @@ except ImportError:
 
 import uuid
 from collections import deque
+from azure.search.documents import SearchClient
+from azure.core.credentials import AzureKeyCredential
+from azure.search.documents.models import Vector
 
 # Dictionary to store pending messages for each conversation
 pending_messages = {}
@@ -85,10 +88,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pmbot")
 
-# Azure OpenAI client configuration
-# AZURE_ENDPOINT = "https://kb-stellar.openai.azure.com/"  # Replace with your endpoint if different
-# AZURE_API_KEY = "bc0ba854d3644d7998a5034af62d03ce"  # Replace with your key if different
-# AZURE_API_VERSION = "2024-05-01-preview"
+
 AZURE_ENDPOINT = os.environ.get("OPENAI_ENDPOINT", "")
 AZURE_API_KEY = os.environ.get("OPENAI_KEY", "")
 AZURE_API_VERSION = os.environ.get("OPENAI_API_VERSION", "")
@@ -130,6 +130,17 @@ def create_client():
         azure_endpoint=AZURE_ENDPOINT,
         api_key=AZURE_API_KEY,
         api_version=AZURE_API_VERSION,
+    )
+def create_search_client():
+    """Creates an Azure AI Search client instance."""
+    if not AZURE_SEARCH_ENDPOINT or not AZURE_SEARCH_KEY:
+        logging.warning("Azure AI Search credentials not configured")
+        return None
+        
+    return SearchClient(
+        endpoint=AZURE_SEARCH_ENDPOINT,
+        index_name=AZURE_SEARCH_INDEX_NAME,
+        credential=AzureKeyCredential(AZURE_SEARCH_KEY)
     )
 
 # Define system prompt here instead of relying on external variable
@@ -559,6 +570,46 @@ When directing employees to additional resources:
 
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
 '''
+async def retrieve_documents(query, top=5, filters=None):
+    """Retrieves relevant documents from Azure AI Search."""
+    try:
+        search_client = create_search_client()
+        if not search_client:
+            return []
+            
+        # Configure search options
+        search_options = {
+            "top": top,
+            "query_type": "semantic",  # Use semantic search if available
+            "semantic_configuration_name": "default",  # Use default semantic config
+            "query_language": "en-us",
+            "highlight_fields": "content",
+            "highlight_pre_tag": "**",
+            "highlight_post_tag": "**"
+        }
+        
+        # Add filters if provided
+        if filters:
+            search_options["filter"] = filters
+            
+        results = search_client.search(query, **search_options)
+        
+        documents = []
+        for result in results:
+            doc = {
+                "id": result["id"],
+                "content": result.get("content", ""),
+                "filename": result.get("filename", "Unknown"),
+                "score": result["@search.score"],
+                "highlights": result.get("@search.highlights", {}).get("content", [])
+            }
+            documents.append(doc)
+        
+        return documents
+    except Exception as e:
+        logging.error(f"Error retrieving documents for query '{query}': {e}")
+        traceback.print_exc()
+        return []
 def create_new_chat_card():
     """Creates an adaptive card for starting a new chat"""
     card = {
