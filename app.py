@@ -5670,55 +5670,71 @@ async def initialize_chat_silent(turn_context: TurnContext, state):
         return False
 async def format_message_with_rag(user_message, documents):
     """
-    Format a message combining user query with retrieved text knowledge.
-    Returns original message if an error occurs.
+    Format a message combining user instructions with retrieved knowledge,
+    with clear priority indicators and structured formatting.
+    
+    Args:
+        user_message: The original user instructions
+        documents: List of retrieved documents
+        
+    Returns:
+        Formatted message with prioritized sections or original message if an error occurs
     """
     try:
-        formatted_message = user_message
+        # Only proceed with formatting if we have documents
+        if not documents or len(documents) == 0:
+            return user_message
+            
+        # Build a properly structured message with clear priorities
+        formatted_message = "ORIGINAL USER INSTRUCTIONS (HIGH PRIORITY):\n" + user_message
         
-        # Only add context if we have relevant documents
-        if documents and len(documents) > 0:
-            # Create the context section
-            context = "\n\n--- RETRIEVED KNOWLEDGE (LOW PRIORITY : USE IF STRICTLY RELEVANT) ---\n"
-            context += "The following information has been retrieved from First Choice Debt Relief's knowledge base. "
-            context += "This information may or may not be strictly relevant to the current request. "
-            context += "Please use this knowledge as a reference only if it is relevant to the user question and conversation context. "
-            context += "If the retrieved knowledge is not relevant, you may ignore the 'RETRIEVED KNOWLEDGE' and proceed with the original instructions.\n\n"
-            logging.info(f"RAG: Found {len(documents)} relevant documents")
-            # Add document content
-            for i, doc in enumerate(documents, 1):
-                # Handle both dictionary and non-dictionary items
-                if isinstance(doc, dict):
-                    title = doc.get("title", f"Document {i}")
-                    content = doc.get("content", "")
+        # Add retrieved knowledge section with priority indicator
+        formatted_message += "\n\n--- RETRIEVED KNOWLEDGE (LOW PRIORITY: USE ONLY IF STRICTLY RELEVANT) ---\n"
+        formatted_message += "The following information has been retrieved from First Choice Debt Relief's knowledge base. "
+        formatted_message += "This information may or may not be strictly relevant to the current request. "
+        formatted_message += "Please use this knowledge as a reference only if it is relevant to the conversation flow and ORIGINAL USER INSTRUCTIONS. "
+        formatted_message += "If the retrieved knowledge is not relevant, IGNORE this section entirely and focus on the user instructions above.\n\n"
+        
+        logging.info(f"RAG: Found {len(documents)} potentially relevant documents")
+        
+        # Add document content with clear formatting
+        for i, doc in enumerate(documents, 1):
+            # Handle both dictionary and non-dictionary items
+            if isinstance(doc, dict):
+                title = doc.get("title", f"Document {i}")
+                content = doc.get("content", "")
+            else:
+                # Fallback if doc is not a dictionary
+                title = f"Document {i}"
+                content = str(doc)
+            
+            formatted_message += f"DOCUMENT {i}: {title}\n"
+            
+            # Smart truncation - show up to 2000 chars but try to break at a sentence
+            if len(content) > 2000:
+                # Find the last period within the first 2000 chars
+                last_period = content[:2000].rfind('.')
+                if last_period > 0:
+                    content = content[:last_period+1] + " [content continues...]"
                 else:
-                    # Fallback if doc is not a dictionary
-                    title = f"Document {i}"
-                    content = str(doc)
-                
-                context += f"DOCUMENT {i}: {title}\n"
-                
-                # Smart truncation - show up to 2000 chars but try to break at a sentence
-                if len(content) > 2000:
-                    # Find the last period within the first 2000 chars
-                    last_period = content[:2000].rfind('.')
-                    if last_period > 0:
-                        content = content[:last_period+1] + " [content continues...]"
-                    else:
-                        content = content[:2000] + " [content continues...]"
-                
-                context += f"{content}\n\n"
-                logging.info(f"RAG Document {i}: {title} - {content[:100]}...")
-            # Add the combined message
-            context += "--- END OF RETRIEVED KNOWLEDGE ---\n\n"
-            context += "ORIGINAL USER INSTRUCTIONS (HIGH PRIORITY):\n" + user_message
-            formatted_message = f"{formatted_message}\n\n{context}"
-        logging.info(f"COMPLETE RAG MESSAGE: {formatted_message[:200]}... [message continues, total length: {len(formatted_message)}]")
+                    content = content[:2000] + " [content continues...]"
+            
+            formatted_message += f"{content}\n\n"
+            logging.info(f"RAG Document {i}: {title} - {content[:100]}...")
+        
+        # Add a clear end marker
+        formatted_message += "--- END OF RETRIEVED KNOWLEDGE ---"
+        
+        # Log a reasonable amount of the message for debugging
+        log_preview_length = min(300, len(formatted_message))
+        logging.info(f"COMPLETE RAG MESSAGE PREVIEW: {formatted_message[:log_preview_length]}... [total length: {len(formatted_message)}]")
+        
         return formatted_message
         
     except Exception as e:
         # Log the error but don't break the conversation flow
         logging.error(f"Error formatting RAG message: {e}")
+        traceback.print_exc()
         # Return original message without RAG context
         return user_message
 # Modified handle_text_message with thread summarization
