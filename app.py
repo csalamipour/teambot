@@ -707,7 +707,7 @@ Email: service@firstchoicedebtrelief.com"
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
 PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant and applicable)
 PS: Only use "RETRIEVED KNOWLEDGE" when directly relevant to the query. For follow-up questions, clarifications, or general comments, rely on conversation history instead of retrieved documents.
-PS: Prioritize natural conversation flow over unnecessary document references. Use "RETRIEVED KNOWLEDGE" for specific FCDR policies and procedures, not for simple exchanges or personalized advice.'''
+'''
 # async def retrieve_documents(query, top=3):
 #     """
 #     Retrieves documents from Azure AI Search using basic parameters.
@@ -778,12 +778,13 @@ PS: Prioritize natural conversation flow over unnecessary document references. U
 #         return []
 async def retrieve_documents(query, top=5, mode="openai"):
     """
-    Retrieves documents from either Azure AI Search or OpenAI API based on mode.
+    Retrieves documents from either OpenAI API (default) or Azure AI Search.
+    Falls back to Azure Search if OpenAI retrieval fails.
     
     Args:
         query (str): The search query
         top (int): Maximum number of results to return
-        mode (str): Search mode - "azure_search" (default) or "openai"
+        mode (str): Search mode - "openai" (default) or "azure_search"
     
     Returns:
         list: List of document dictionaries with title and content keys
@@ -791,94 +792,189 @@ async def retrieve_documents(query, top=5, mode="openai"):
               Returns empty list if query is unrelated or no documents found
     """
     try:
+        # If mode is explicitly set to azure_search, use that
         if mode == "azure_search":
-            # Original Azure Search implementation
-            search_client = create_search_client()
-            if not search_client:
-                return []
-                
-            # Use only basic search parameters that work with any SDK version
-            results = search_client.search(
-                search_text=query,
-                top=top
-            )
+            return await _retrieve_with_azure_search(query, top)
             
-            documents = []
+        # Default to OpenAI with fallback to Azure Search
+        try:
+            # First try with OpenAI
+            documents = await _retrieve_with_openai(query, top)
             
-            # Process search results
-            for item in results:
-                # Try to get content from various possible field names
-                content = None
-                for field_name in ["chunk", "content", "text"]:
-                    if field_name in item:
-                        content = item[field_name]
-                        if content:
-                            break
+            # If OpenAI returns empty results, try Azure Search as fallback
+            if not documents:
+                logging.info(f"OpenAI retrieval returned no results for query '{query}'. Falling back to Azure Search.")
+                documents = await _retrieve_with_azure_search(query, top)
                 
-                if not content:
-                    # If we can't find a content field, look for any string field
-                    for key, value in item.items():
-                        if isinstance(value, str) and len(value) > 50:
-                            content = value
-                            break
-                
-                if not content:
-                    continue
-                
-                # Try to get a title
-                title = None
-                for title_field in ["title", "name", "filename"]:
-                    if title_field in item:
-                        title = item[title_field]
-                        if title:
-                            break
-                
-                if not title:
-                    # Use a key as title if available
-                    for key_field in ["id", "key", "chunk_id"]:
-                        if key_field in item:
-                            title = f"Document {item[key_field]}"
-                            break
-                            
-                if not title:
-                    title = "Unknown Document"
-                
-                documents.append({
-                    "title": title,
-                    "content": content
-                })
-            
             return documents
+            
+        except Exception as openai_e:
+            # If OpenAI retrieval fails completely, fall back to Azure Search
+            logging.warning(f"OpenAI retrieval failed for query '{query}': {openai_e}. Falling back to Azure Search.")
+            return await _retrieve_with_azure_search(query, top)
+            
+    except Exception as e:
+        logging.error(f"Error retrieving documents: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+async def _retrieve_with_azure_search(query, top=5):
+    """Azure Search implementation for document retrieval"""
+    try:
+        search_client = create_search_client()
+        if not search_client:
+            return []
+            
+        # Use only basic search parameters that work with any SDK version
+        results = search_client.search(
+            search_text=query,
+            top=top
+        )
         
-        elif mode == "openai":
-            # Implementation using OpenAI completions API
+        documents = []
+        
+        # Process search results
+        for item in results:
+            # Try to get content from various possible field names
+            content = None
+            for field_name in ["chunk", "content", "text"]:
+                if field_name in item:
+                    content = item[field_name]
+                    if content:
+                        break
+            
+            if not content:
+                # If we can't find a content field, look for any string field
+                for key, value in item.items():
+                    if isinstance(value, str) and len(value) > 50:
+                        content = value
+                        break
+            
+            if not content:
+                continue
+            
+            # Try to get a title
+            title = None
+            for title_field in ["title", "name", "filename"]:
+                if title_field in item:
+                    title = item[title_field]
+                    if title:
+                        break
+            
+            if not title:
+                # Use a key as title if available
+                for key_field in ["id", "key", "chunk_id"]:
+                    if key_field in item:
+                        title = f"Document {item[key_field]}"
+                        break
+                        
+            if not title:
+                title = "Unknown Document"
+            
+            documents.append({
+                "title": title,
+                "content": content
+            })
+        
+        return documents
+        
+    except Exception as e:
+        logging.error(f"Azure Search retrieval error: {e}")
+        return []
+
+async def _retrieve_with_openai(query, top=5, max_retries=1):
+    """OpenAI implementation for document retrieval with retry logic for JSON format issues"""
+    original_error = None
+    
+    for retry_count in range(max_retries + 1):  # +1 for initial attempt
+        try:
             client = create_client()
             if not client:
                 return []
             
             # Create a prompt for the OpenAI model to retrieve relevant information
-            system_prompt = """You are a retrieval system for First Choice Debt Relief documentation. 
-            Your task is to retrieve relevant information for the given query.
-            If the query is unrelated to debt relief or First Choice Debt Relief, return an empty array.
-            Always format your response in the specified JSON format with title and content fields.
-            The "title" field should contain the DOCUMENT NAME (like "Program Guide.pdf" or "Client Agreement") - NOT a description of the content.
-            Do not make up information - only return relevant knowledge that you're confident about."""
+            system_prompt = """You are a high-precision retrieval system for First Choice Debt Relief (FCDR) documentation.
+
+            ## YOUR ROLE
+            Your task is to accurately retrieve relevant information from First Choice Debt Relief's knowledge base in response to queries.
+            You will extract knowledge from your training on debt relief concepts, policies, procedures, and FCDR-specific information.
+            You must maintain the exact format requested and never invent or hallucinate document names or content.
+            
+            ## DOMAIN KNOWLEDGE
+            First Choice Debt Relief specializes in:
+            - Debt resolution programs
+            - Settlement negotiation with creditors
+            - Client enrollment and onboarding
+            - Compliance and legal protection
+            - Payment processing and management
+            - Financial counseling and education
+            - Creditor relationships and communication
+            - Program management and client services
+            
+            ## DOCUMENT FORMAT REQUIREMENTS
+            1. The "title" field MUST contain an EXACT document name with proper extension, such as:
+               - "Client Enrollment Guide.pdf"
+               - "Settlement Procedures Manual.docx"
+               - "Compliance Handbook v3.2.pdf"
+               - "Legal Protection Plan Overview.ppt"
+               - "Client Services Training Manual.pdf"
+               - "Creditor Communication Protocols.doc"
+               - "Payment Gateway Management Guide.pdf"
+               - "First Choice Debt Relief Program Overview.docx"
+            
+            2. The "content" field MUST contain specific, relevant information that directly addresses the query.
+               - Content should be substantive and detailed
+               - Information should be coherent and complete
+               - Content should be clearly related to the document title
+               - Do not include placeholder or generic content
+            
+            ## RELEVANCE DETERMINATION
+            - ONLY return documents that contain information DIRECTLY relevant to the query
+            - Return an empty array if the query is unrelated to debt relief or FCDR
+            - Return an empty array if you are uncertain about the information
+            - Do not stretch relevance - be conservative in your selections
+            - Prioritize content that specifically answers the query vs. general information
+            
+            ## RESPONSE FORMAT
+            You MUST structure your response as valid JSON with a documents array.
+            Each document needs both a "title" (document name) and "content" (relevant text) field.
+            """
+            
+            # Add feedback about previous error if this is a retry
+            format_reminder = ""
+            if retry_count > 0 and original_error:
+                format_reminder = f"""
+                IMPORTANT FORMAT CORRECTION NEEDED: Previous attempt failed with error: {original_error}
+                You MUST return a valid JSON object with the exact format specified below.
+                DO NOT add any text before or after the JSON object.
+                The response MUST contain a 'documents' array (even if empty).
+                Each document MUST have both 'title' and 'content' fields.
+                """
             
             user_prompt = f"""Based on the following query, provide relevant information from First Choice Debt Relief knowledge base.
             
             Query: {query}
+            INSTRUCTIONS:
+            1. Search for information specifically related to this query
+            2. Only return information if it's directly relevant to First Choice Debt Relief operations or debt relief concepts
+            3. Return an empty array if no relevant information exists or if you're uncertain
+            4. Include real document names with extensions (e.g., .pdf, .docx, .ppt) in the title field
+            5. Provide substantial, relevant content in the content field
+            6. Return no more than {top} of the most relevant documents
+            {format_reminder}
             
-            Return your response in this exact JSON format:
+            REQUIRED FORMAT:
             {{
                 "response_type": "json",
                 "documents": [
                     {{
-                        "title": "Document Name (e.g., 'Client Onboarding Manual', 'Legal Disclosure Policy')",
-                        "content": "Relevant content that answers the query"
+                        "title": "Exact Name of the Source Document (e.g., 'ClientOnboardingManual.pdf', 'LegalDisclosurePolicy.ppt')",
+                        "content": "Relevant content from source document"
                     }},
                     {{
-                        "title": "Another Document Name (e.g., 'Settlement Guide', 'Compliance Manual')",
-                        "content": "More information related to the query"
+                        "title": "Exact Name of the Source Document (e.g., 'SettlementGuide.docx', 'ComplianceManual.pdf')",
+                        "content": "Relevant content from source document"
                     }}
                 ]
             }}
@@ -892,54 +988,62 @@ async def retrieve_documents(query, top=5, mode="openai"):
             Return no more than {top} document entries. Each document must have both a title (document name) and content fields."""
             
             # Call OpenAI API
-            try:
-                response = client.chat.completions.create(
-                    model="gpt-4.1-mini",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    response_format={"type": "json_object"},
-                    temperature=0
-                )
+            response = client.chat.completions.create(
+                model="gpt-4.1-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0
+            )
+            
+            # Parse the response
+            response_text = response.choices[0].message.content
+            response_json = json.loads(response_text)
+            
+            # Extract documents from the response
+            if "documents" in response_json and isinstance(response_json["documents"], list):
+                # Ensure each document has both title and content
+                documents = []
+                for doc in response_json["documents"]:
+                    if isinstance(doc, dict) and "title" in doc and "content" in doc:
+                        documents.append({
+                            "title": doc["title"],
+                            "content": doc["content"]
+                        })
+                return documents
+            else:
+                # Format problem with the JSON structure - missing documents field
+                error_msg = "JSON response missing 'documents' field or not in expected format"
+                logging.warning(f"Invalid response format from OpenAI: {error_msg}")
                 
-                # Parse the response
-                try:
-                    response_text = response.choices[0].message.content
-                    response_json = json.loads(response_text)
-                    
-                    # Extract documents from the response
-                    if "documents" in response_json and isinstance(response_json["documents"], list):
-                        # Ensure each document has both title and content
-                        documents = []
-                        for doc in response_json["documents"]:
-                            if isinstance(doc, dict) and "title" in doc and "content" in doc:
-                                documents.append({
-                                    "title": doc["title"],
-                                    "content": doc["content"]
-                                })
-                        return documents
-                    else:
-                        logging.warning(f"Invalid response format from OpenAI: missing 'documents' field")
-                        return []
-                        
-                except json.JSONDecodeError:
-                    logging.error(f"Failed to parse JSON from OpenAI response")
-                    return []
-                    
-            except Exception as openai_e:
-                logging.error(f"Error calling OpenAI API: {openai_e}")
+                # Store error for retry and continue to next attempt if retries remaining
+                if retry_count < max_retries:
+                    original_error = error_msg
+                    logging.info(f"Retrying OpenAI retrieval (attempt {retry_count + 1}/{max_retries + 1})")
+                    continue
                 return []
-        
-        else:
-            logging.warning(f"Unsupported retrieve_documents mode: {mode}")
-            return []
                 
-    except Exception as e:
-        logging.error(f"Error retrieving documents: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
+        except json.JSONDecodeError as json_error:
+            # JSON parsing error - the model didn't return valid JSON
+            error_msg = f"Failed to parse JSON: {str(json_error)}"
+            logging.error(error_msg)
+            
+            # Store error for retry and continue to next attempt if retries remaining
+            if retry_count < max_retries:
+                original_error = error_msg
+                logging.info(f"Retrying OpenAI retrieval (attempt {retry_count + 1}/{max_retries + 1})")
+                continue
+            return []
+            
+        except Exception as e:
+            logging.error(f"OpenAI retrieval error: {e}")
+            raise  # Re-raise other types of errors to trigger fallback
+    
+    # If we get here, all retries have failed
+    logging.error("All retrieval attempts failed")
+    return []
 def create_new_chat_card():
     """Creates an adaptive card for starting a new chat"""
     card = {
@@ -5867,14 +5971,11 @@ async def format_message_with_rag(user_message, documents):
             return user_message
             
         # Build a properly structured message with clear priorities
-        formatted_message = "ORIGINAL USER INSTRUCTIONS (HIGH PRIORITY):\n" + user_message
+        formatted_message = "ORIGINAL USER QUESTION :\n" + user_message
         
         # Add retrieved knowledge section with priority indicator
-        formatted_message += "\n\n--- RETRIEVED KNOWLEDGE (LOW PRIORITY: USE ONLY IF STRICTLY RELEVANT) ---\n"
-        formatted_message += "The following information has been retrieved from First Choice Debt Relief's knowledge base. "
-        formatted_message += "This information may or may not be strictly relevant to the current request. "
-        formatted_message += "Please use this knowledge as a reference only if it is relevant to the conversation flow and ORIGINAL USER INSTRUCTIONS. "
-        formatted_message += "If the retrieved knowledge is not relevant, IGNORE this section entirely and focus on the user instructions above.\n\n"
+        formatted_message += "\n\n--- RETRIEVED KNOWLEDGE ---\n"
+        formatted_message += "The following information has been retrieved from First Choice Debt Relief's knowledge base. Closely follow the knowledge while answering user question."
         
         logging.info(f"RAG: Found {len(documents)} potentially relevant documents")
         
