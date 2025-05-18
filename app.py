@@ -705,8 +705,10 @@ Email: service@firstchoicedebtrelief.com"
 - Provide appropriate contact methods for interdepartmental requests
 
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
-PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant and applicable)'''
-async def retrieve_documents(query, top=5):
+PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant and applicable)
+PS: Only use "RETRIEVED KNOWLEDGE" when directly relevant to the query. For follow-up questions, clarifications, or general comments, rely on conversation history instead of retrieved documents.
+PS: Prioritize natural conversation flow over unnecessary document references. Use "RETRIEVED KNOWLEDGE" for specific FCDR policies and procedures, not for simple exchanges or personalized advice.'''
+async def retrieve_documents(query, top=3):
     """
     Retrieves documents from Azure AI Search using basic parameters.
     Adapts to the index structure by looking for content in various fields.
@@ -1180,15 +1182,6 @@ def create_channel_selection_card():
                 "spacing": "medium"
             }
         ],
-        "actions": [
-            {
-                "type": "Action.Submit",
-                "title": "Return to Home",
-                "data": {
-                    "action": "new_chat"
-                }
-            }
-        ]
     }
     
     attachment = Attachment(
@@ -1499,7 +1492,7 @@ def create_edit_email_card(original_email):
                     },
                     {
                         "type": "TextBlock",
-                        "text": "• Avoid making guarantees about specific outcomes\n• Never promise credit improvement or specific timelines\n• Maintain professional, supportive tone",
+                        "text": "• Avoid making guarantees\n• Dont commit to timelines\n• Maintain professional tone",
                         "wrap": True,
                         "size": "small"
                     }
@@ -4403,6 +4396,7 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
 async def generate_email(turn_context: TurnContext, state, template_id, recipient=None, firstname=None, gateway=None, subject=None, instructions=None, chain=None, has_attachments=False):
     """
     Generates an email using AI based on template or provided parameters with enhanced compliance and quality controls.
+    Uses RAG to retrieve relevant documents when instructions are provided.
     
     Args:
         turn_context: The turn context
@@ -4453,7 +4447,16 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
         # For generic emails, use the provided subject and instructions
         if subject:
             prompt += f"Subject: {subject}\n"
-        prompt += f"Instructions: {instructions or 'Please write a professional email for First Choice Debt Relief.'}\n"
+        
+        # Use the provided instructions, or a default if none
+        instruction_text = instructions or "Please write a professional email for First Choice Debt Relief."
+        
+        # If instructions are provided, use RAG to enhance them
+        if instructions:
+            relevant_docs = await retrieve_documents(instructions, top=2)
+            instruction_text = await format_message_with_rag(instructions, relevant_docs)
+            
+        prompt += f"Instructions: {instruction_text}\n"
         
         # Add category guidance based on subject matter
         if subject and any(keyword in subject.lower() for keyword in ["legal", "lawsuit", "attorney", "court", "summons"]):
@@ -4523,7 +4526,11 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
     
     # Add special instruction to prioritize user instructions
     if instructions:
-        prompt += f"\nIMPORTANT - PRIORITIZE THESE USER INSTRUCTIONS ABOVE TEMPLATE GUIDELINES: {instructions}\n"
+        # Use RAG to enhance instructions with relevant knowledge
+        relevant_docs = await retrieve_documents(instructions, top=2)
+        enhanced_instructions = await format_message_with_rag(instructions, relevant_docs)
+        
+        prompt += f"\nIMPORTANT - PRIORITIZE THESE USER INSTRUCTIONS ABOVE TEMPLATE GUIDELINES: {enhanced_instructions}\n"
         prompt += "Feel free to significantly modify the template based on these instructions while maintaining the general purpose, professional tone, and compliance requirements.\n"
     else:
         prompt += "\nImprove upon the template while maintaining compliance. Make it sound natural and conversational while maintaining professionalism and adhering to compliance guidelines.\n"
@@ -5672,7 +5679,11 @@ async def format_message_with_rag(user_message, documents):
         # Only add context if we have relevant documents
         if documents and len(documents) > 0:
             # Create the context section
-            context = "\n\n--- RETRIEVED KNOWLEDGE ---\n\n"
+            context = "\n\n--- RETRIEVED KNOWLEDGE (LOW PRIORITY : USE IF STRICTLY RELEVANT) ---\n"
+            context += "The following information has been retrieved from First Choice Debt Relief's knowledge base. "
+            context += "This information may or may not be strictly relevant to the current request. "
+            context += "Please use this knowledge as a reference only if it is relevant to the user question and conversation context. "
+            context += "If the retrieved knowledge is not relevant, you may ignore the 'RETRIEVED KNOWLEDGE' and proceed with the original instructions.\n\n"
             logging.info(f"RAG: Found {len(documents)} relevant documents")
             # Add document content
             for i, doc in enumerate(documents, 1):
@@ -5688,19 +5699,21 @@ async def format_message_with_rag(user_message, documents):
                 context += f"DOCUMENT {i}: {title}\n"
                 
                 # Smart truncation - show up to 2000 chars but try to break at a sentence
-                if len(content) > 5000:
+                if len(content) > 2000:
                     # Find the last period within the first 2000 chars
-                    last_period = content[:5000].rfind('.')
+                    last_period = content[:2000].rfind('.')
                     if last_period > 0:
                         content = content[:last_period+1] + " [content continues...]"
                     else:
-                        content = content[:5000] + " [content continues...]"
+                        content = content[:2000] + " [content continues...]"
                 
                 context += f"{content}\n\n"
                 logging.info(f"RAG Document {i}: {title} - {content[:100]}...")
             # Add the combined message
+            context += "--- END OF RETRIEVED KNOWLEDGE ---\n\n"
+            context += "ORIGINAL USER INSTRUCTIONS (HIGH PRIORITY):\n" + user_message
             formatted_message = f"{formatted_message}\n\n{context}"
-        logging.info(f"COMPLETE RAG MESSAGE: {formatted_message[:500]}... [message continues, total length: {len(formatted_message)}]")
+        logging.info(f"COMPLETE RAG MESSAGE: {formatted_message[:200]}... [message continues, total length: {len(formatted_message)}]")
         return formatted_message
         
     except Exception as e:
