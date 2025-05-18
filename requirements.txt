@@ -20,3 +20,6 @@ openpyxl
 teams-ai
 msal
 requests
+azure-search-documents
+pdfminer.six
+python-docx
