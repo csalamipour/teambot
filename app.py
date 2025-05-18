@@ -231,8 +231,10 @@ You are the First Choice Debt Relief AI Assistant (FCDR), a professional tool de
 - Explain to users that files can be uploaded via the paperclip icon in Teams
 - Clarify that only files uploaded directly from the device are supported (not OneDrive/SharePoint links)
 - After upload, acknowledge receipt and explain what you can do with the file
+- Important: Emphasize that retrieval is not needed for file uploads - files are automatically processed upon upload
 - For document uploads, offer to analyze the content or answer specific questions about it
 - For image uploads, provide a visual description and extract any visible text
+- IGNORE 'RETRIEVED KNOWLEDGE' section for questions related to user files.
 
 ## COMPLIANCE REQUIREMENTS
 
@@ -813,24 +815,8 @@ async def retrieve_documents(query, top=5, mode="openai"):
         # If mode is explicitly set to azure_search, use that
         if mode == "azure_search":
             return await _retrieve_with_azure_search(query, top)
-            
         # Default to OpenAI with fallback to Azure Search
-        try:
-            # First try with OpenAI
-            documents = await _retrieve_with_openai(query, top)
-            
-            # If OpenAI returns empty results, try Azure Search as fallback
-            if not documents:
-                logging.info(f"OpenAI retrieval returned no results for query '{query}'. Falling back to Azure Search.")
-                documents = await _retrieve_with_azure_search(query, top)
-                
-            return documents
-            
-        except Exception as openai_e:
-            # If OpenAI retrieval fails completely, fall back to Azure Search
-            logging.warning(f"OpenAI retrieval failed for query '{query}': {openai_e}. Falling back to Azure Search.")
-            return await _retrieve_with_azure_search(query, top)
-            
+        return = await _retrieve_with_openai(query, top)
     except Exception as e:
         logging.error(f"Error retrieving documents: {e}")
         import traceback
@@ -5475,7 +5461,7 @@ async def handle_file_upload(turn_context: TurnContext, state, message_text=None
                     await turn_context.send_activity("I'm sorry, but I can only process files uploaded directly from your device. Files shared from OneDrive, SharePoint, or other internal sources are not currently supported. Please download the file to your device first, then upload it directly.")
                 else:
                     # For other attachment types, provide general guidance
-                    await turn_context.send_activity("To upload a file, please use the file upload feature in Teams to send files directly from your device. Click the paperclip icon in the chat input area to upload a file.")
+                    await turn_context.send_activity("Please ask questions regarding the file now")
                 
         except Exception as e:
             logger.error(f"Error processing file: {str(e)}")
