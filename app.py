@@ -524,17 +524,18 @@ When engaging in casual conversation or non-work related chitchat:
 - Acknowledge special occasions (holidays, company milestones) with brief, appropriate messages
 - Participate in light team-building conversations while maintaining a service-oriented focus
 
-### USING RETRIEVED KNOWLEDGE
-When you receive a message with "USER QUERY" followed by "RETRIEVED KNOWLEDGE":
+## USING RETRIEVED KNOWLEDGE
+When I provide information labeled "RETRIEVED KNOWLEDGE" with a user message:
 
-1. ALWAYS treat the USER QUERY as the actual question being asked
-2. Use the RETRIEVED KNOWLEDGE as your primary source for answering the query
-3. Cite specific documents when referencing information from them
-4. When RETRIEVED KNOWLEDGE contains highlighted sections, prioritize these as most relevant
-5. If "No relevant documents found" appears, answer based on your general knowledge
-6. Never mention the format of the query in your response - respond directly to the user question
+1. This section contains information that MAY be relevant to answering the query
+2. IMPORTANT: The retrieved content may or may not be helpful - use your judgment
+3. If the retrieved content seems relevant and helpful, use it to inform your response
+4. If the retrieved content seems irrelevant or unhelpful, rely on your general knowledge instead
+5. When using information from retrieved knowledge, cite the document (e.g., "According to Document 1...")
+6. DO NOT apologize for irrelevant retrieval results - simply answer with your best knowledge
+7. Balance between retrieved knowledge and your general knowledge to provide the most accurate answer
 
-Your response should appear as if you're responding directly to the USER QUERY, not to the entire combined message.
+Remember that retrieved information might be incomplete or only partially relevant. Use your judgment to determine how much weight to give it in your response.
 
 ## ERROR HANDLING & LIMITATIONS
 
@@ -580,20 +581,16 @@ When directing employees to additional resources:
 - Provide appropriate contact methods for interdepartmental requests
 
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
-'''
+PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant and applicable)'''
 async def retrieve_documents(query, top=3, filters=None):
-    """
-    Retrieves relevant documents from Azure AI Search with fallbacks.
-    Works with any search configuration (semantic, vector, or standard).
-    """
+    """Retrieves relevant documents from Azure AI Search using vector search with fallback to standard search."""
     try:
-        # Create search client
         search_client = create_search_client()
         if not search_client:
-            logging.error("Search client could not be created - check credentials")
+            logging.error("Search client not configured")
             return []
         
-        # Initialize search options with basics
+        # Configure search options (basic options for all search types)
         search_options = {
             "top": top,
             "include_total_count": True
@@ -603,96 +600,75 @@ async def retrieve_documents(query, top=3, filters=None):
         if filters:
             search_options["filter"] = filters
         
-        # Try semantic search first (most advanced)
+        # Try vector search first (since you have vector profiles)
+        vector_results = []
         try:
-            logging.info(f"Attempting semantic search for query: {query}")
-            semantic_options = search_options.copy()
-            semantic_options.update({
-                "query_type": "semantic",
-                "semantic_configuration_name": "default",
-                "query_language": "en-us",
-                "query_answer": "extractive",
-                "query_caption": "extractive"
-            })
-            
-            results = list(search_client.search(query, **semantic_options))
-            if results:
-                logging.info(f"Semantic search successful: {len(results)} results")
-                return process_search_results(results)
-        except Exception as semantic_error:
-            logging.warning(f"Semantic search failed: {semantic_error}. Falling back to vector search.")
-        
-        # Try vector search second
-        try:
-            logging.info(f"Attempting vector search for query: {query}")
-            # Check if your vector configuration exists
+            # Vector search query
             vector_options = search_options.copy()
-            vector_options.update({
-                "vector_queries": [{
-                    "fields": ["vectorField"],  # Update with your actual vector field
-                    "k": top,
-                    "vector": None,  # We'd need embedding here, but fall back to text
-                    "text": query,
-                    "profile": "vector-profile-1747549264289"  # Use your profile name
-                }]
-            })
+            vector_options["vector_queries"] = [{
+                "kind": "text",
+                "text": query,
+                "k": top,
+                "fields": "content",  # Adjust this to match your vector field
+                "profile_name": "vector-profile-1747549264289"
+            }]
             
-            results = list(search_client.search("", **vector_options))
-            if results:
-                logging.info(f"Vector search successful: {len(results)} results")
-                return process_search_results(results)
+            vector_results = list(search_client.search(
+                search_text=None,  # No text search when doing vector search
+                **vector_options
+            ))
+            
+            logging.info(f"Vector search returned {len(vector_results)} results")
+            
+            # If we got results, format them
+            if vector_results:
+                return format_search_results(vector_results)
+                
         except Exception as vector_error:
-            logging.warning(f"Vector search failed: {vector_error}. Falling back to standard search.")
+            logging.warning(f"Vector search failed, falling back to keyword search: {vector_error}")
         
-        # Fall back to standard search as last resort
-        logging.info(f"Attempting standard search for query: {query}")
-        results = list(search_client.search(query, **search_options))
-        logging.info(f"Standard search returned {len(results)} results")
-        return process_search_results(results)
-    
+        # Fall back to standard keyword search if vector search fails or returns no results
+        if not vector_results:
+            logging.info("Using standard keyword search as fallback")
+            standard_results = list(search_client.search(query, **search_options))
+            return format_search_results(standard_results)
+            
+        # If we got here with no results, return empty list
+        return []
+            
     except Exception as e:
-        logging.error(f"Error in retrieve_documents for query '{query}': {e}")
+        logging.error(f"Error retrieving documents for query '{query}': {e}")
         traceback.print_exc()
         return []
 
-def process_search_results(results):
-    """Processes search results into a consistent format regardless of search method."""
+def format_search_results(results):
+    """Format search results into a standard structure."""
     documents = []
     for result in results:
-        # Extract basic document properties
+        # Extract the filename from the base64-encoded metadata_storage_path
+        filename = "Unknown Document"
+        if "metadata_storage_path" in result:
+            try:
+                import base64
+                path = base64.b64decode(result["metadata_storage_path"]).decode('utf-8')
+                # Extract just the filename from the path
+                filename = path.split('/')[-1]
+                # URL decode the filename if needed
+                import urllib.parse
+                filename = urllib.parse.unquote(filename)
+            except:
+                pass
+                
+        # Create the document object
         doc = {
-            "id": result.get("id", "unknown_id"),
             "score": result.get("@search.score", 0),
+            "content": result.get("content", ""),
+            "filename": filename,
         }
         
-        # Add content/text field (could be in different field names depending on index)
-        # Try common field names for content
-        for field_name in ["content", "text", "body", "description"]:
-            if field_name in result:
-                doc["content"] = result[field_name]
-                break
-        
-        # If no content found in common fields, add all other fields as content
-        if "content" not in doc:
-            content_fields = {}
-            for key, value in result.items():
-                if key not in ["id", "@search.score"] and not key.startswith("@"):
-                    content_fields[key] = value
-            doc["content"] = str(content_fields)
-        
-        # Add filename if available, or use the ID if not
-        doc["filename"] = result.get("filename", result.get("title", f"Document {doc['id']}"))
-        
         # Add highlights if available
-        if "@search.highlights" in result:
-            highlights = []
-            for field, snippets in result["@search.highlights"].items():
-                highlights.extend(snippets)
-            doc["highlights"] = highlights
-        
-        # Add captions if available (from semantic search)
-        if "@search.captions" in result:
-            doc["captions"] = [caption.text for caption in result["@search.captions"]]
+        if "@search.highlights" in result and "content" in result["@search.highlights"]:
+            doc["highlights"] = result["@search.highlights"]["content"]
         
         documents.append(doc)
     
@@ -5613,6 +5589,15 @@ async def format_message_with_rag(user_message, relevant_docs):
         
         # Add the combined message
         formatted_message = f"{formatted_message}\n\n{context}"
+        
+        # Log the RAG content for debugging
+        logging.info(f"RAG Context added to message:\n{context}")
+        
+        # OPTIONAL: If you want to see this in the Teams UI for debugging,
+        # You can temporarily add this:
+        await turn_context.send_activity("DEBUG - RAG Content:\n" + context)
+    else:
+        logging.info("No relevant documents found for RAG context")
     
     return formatted_message
 # Modified handle_text_message with thread summarization
