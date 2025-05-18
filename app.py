@@ -590,75 +590,53 @@ When directing employees to additional resources:
 
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
 PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant and applicable)'''
-async def retrieve_documents(query, top=5, filters=None):
-    """Retrieves relevant text components from Azure AI Search."""
+async def retrieve_documents(query, top=3):
+    """Simplified document retrieval from Azure AI Search."""
     try:
         search_client = create_search_client()
         if not search_client:
-            logging.warning("Search client could not be created - check Azure AI Search credentials")
             return []
             
-        # Configure search options - focus on text retrieval
+        # Configure search options
         search_options = {
             "top": top,
-            "count": True,
-            "query_type": "semantic",
-            "semantic_configuration": "rag-1747554898629-semantic-configuration",
-            "query_language": "en-us",
-            "captions": "extractive",
-            "answers": "extractive|count-3",
-            "select": "title,chunk,chunk_id",  # Only request text fields
-            "highlight_fields": "chunk",
-            "highlight_pre_tag": "<em>",
-            "highlight_post_tag": "</em>"
+            "query_type": "semantic",  # Using semantic search
+            "semantic_configuration_name": "default"
         }
-        
-        # Add filters if provided
-        if filters:
-            search_options["filter"] = filters
             
-        # Execute the search
-        results = search_client.search(query, **search_options)
+        results = search_client.search(
+            search_text=query,
+            **search_options
+        )
         
         documents = []
         
-        # Process each search result - only extract text components
-        for result in results:
-            doc = {
-                "title": result.get("title", "Unknown Document"),
-                "content": result.get("chunk", "")
-            }
-            
-            # Add captions if available (text only)
-            if "@search.captions" in result:
-                doc["highlights"] = []
-                for caption in result["@search.captions"]:
-                    # Get the highlighted text or fall back to plain text
-                    highlight_text = caption.get("highlights", caption.get("text", ""))
-                    if highlight_text:
-                        doc["highlights"].append(highlight_text)
-            
-            documents.append(doc)
-        
-        # Extract text-only components from answers
-        answers = []
+        # Process @search.answers if available
         if hasattr(results, '@search.answers') and results['@search.answers']:
             for answer in results['@search.answers']:
-                answer_text = answer.get("highlights", answer.get("text", ""))
-                if answer_text:
-                    answers.append(answer_text)
+                documents.append({
+                    "title": "Document " + answer.get("key", "").split("_")[0],
+                    "content": answer.get("text", "")
+                })
+        else:
+            # Fallback to regular results
+            for result in results:
+                # Get text content field (adapt to your index schema)
+                content = result.get("text", "") or result.get("chunk", "")
+                
+                if content:
+                    documents.append({
+                        "title": "Document " + result.get("id", "").split("_")[0],
+                        "content": content
+                    })
         
-        # Return text components only
-        return {
-            "documents": documents,
-            "answers": answers,
-            "total_count": results.get("@odata.count", 0)
-        }
+        return documents
             
     except Exception as e:
-        logging.error(f"Error retrieving documents for query '{query}': {e}")
+        logging.error(f"Error retrieving documents: {e}")
+        import traceback
         traceback.print_exc()
-        return {"documents": [], "answers": [], "total_count": 0}
+        return []
 def create_new_chat_card():
     """Creates an adaptive card for starting a new chat"""
     card = {
