@@ -67,7 +67,6 @@ import uuid
 from collections import deque
 from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
-from azure.search.documents.models import Vector
 
 # Dictionary to store pending messages for each conversation
 pending_messages = {}
@@ -582,46 +581,122 @@ When directing employees to additional resources:
 
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
 '''
-async def retrieve_documents(query, top=5, filters=None):
-    """Retrieves relevant documents from Azure AI Search."""
+async def retrieve_documents(query, top=3, filters=None):
+    """
+    Retrieves relevant documents from Azure AI Search with fallbacks.
+    Works with any search configuration (semantic, vector, or standard).
+    """
     try:
+        # Create search client
         search_client = create_search_client()
         if not search_client:
+            logging.error("Search client could not be created - check credentials")
             return []
-            
-        # Configure search options
+        
+        # Initialize search options with basics
         search_options = {
             "top": top,
-            "query_type": "semantic",  # Use semantic search if available
-            "semantic_configuration_name": "default",  # Use default semantic config
-            "query_language": "en-us",
-            "highlight_fields": "content",
-            "highlight_pre_tag": "**",
-            "highlight_post_tag": "**"
+            "include_total_count": True
         }
         
         # Add filters if provided
         if filters:
             search_options["filter"] = filters
+        
+        # Try semantic search first (most advanced)
+        try:
+            logging.info(f"Attempting semantic search for query: {query}")
+            semantic_options = search_options.copy()
+            semantic_options.update({
+                "query_type": "semantic",
+                "semantic_configuration_name": "default",
+                "query_language": "en-us",
+                "query_answer": "extractive",
+                "query_caption": "extractive"
+            })
             
-        results = search_client.search(query, **search_options)
+            results = list(search_client.search(query, **semantic_options))
+            if results:
+                logging.info(f"Semantic search successful: {len(results)} results")
+                return process_search_results(results)
+        except Exception as semantic_error:
+            logging.warning(f"Semantic search failed: {semantic_error}. Falling back to vector search.")
         
-        documents = []
-        for result in results:
-            doc = {
-                "id": result["id"],
-                "content": result.get("content", ""),
-                "filename": result.get("filename", "Unknown"),
-                "score": result["@search.score"],
-                "highlights": result.get("@search.highlights", {}).get("content", [])
-            }
-            documents.append(doc)
+        # Try vector search second
+        try:
+            logging.info(f"Attempting vector search for query: {query}")
+            # Check if your vector configuration exists
+            vector_options = search_options.copy()
+            vector_options.update({
+                "vector_queries": [{
+                    "fields": ["vectorField"],  # Update with your actual vector field
+                    "k": top,
+                    "vector": None,  # We'd need embedding here, but fall back to text
+                    "text": query,
+                    "profile": "vector-profile-1747549264289"  # Use your profile name
+                }]
+            })
+            
+            results = list(search_client.search("", **vector_options))
+            if results:
+                logging.info(f"Vector search successful: {len(results)} results")
+                return process_search_results(results)
+        except Exception as vector_error:
+            logging.warning(f"Vector search failed: {vector_error}. Falling back to standard search.")
         
-        return documents
+        # Fall back to standard search as last resort
+        logging.info(f"Attempting standard search for query: {query}")
+        results = list(search_client.search(query, **search_options))
+        logging.info(f"Standard search returned {len(results)} results")
+        return process_search_results(results)
+    
     except Exception as e:
-        logging.error(f"Error retrieving documents for query '{query}': {e}")
+        logging.error(f"Error in retrieve_documents for query '{query}': {e}")
         traceback.print_exc()
         return []
+
+def process_search_results(results):
+    """Processes search results into a consistent format regardless of search method."""
+    documents = []
+    for result in results:
+        # Extract basic document properties
+        doc = {
+            "id": result.get("id", "unknown_id"),
+            "score": result.get("@search.score", 0),
+        }
+        
+        # Add content/text field (could be in different field names depending on index)
+        # Try common field names for content
+        for field_name in ["content", "text", "body", "description"]:
+            if field_name in result:
+                doc["content"] = result[field_name]
+                break
+        
+        # If no content found in common fields, add all other fields as content
+        if "content" not in doc:
+            content_fields = {}
+            for key, value in result.items():
+                if key not in ["id", "@search.score"] and not key.startswith("@"):
+                    content_fields[key] = value
+            doc["content"] = str(content_fields)
+        
+        # Add filename if available, or use the ID if not
+        doc["filename"] = result.get("filename", result.get("title", f"Document {doc['id']}"))
+        
+        # Add highlights if available
+        if "@search.highlights" in result:
+            highlights = []
+            for field, snippets in result["@search.highlights"].items():
+                highlights.extend(snippets)
+            doc["highlights"] = highlights
+        
+        # Add captions if available (from semantic search)
+        if "@search.captions" in result:
+            doc["captions"] = [caption.text for caption in result["@search.captions"]]
+        
+        documents.append(doc)
+    
+    return documents
 def create_new_chat_card():
     """Creates an adaptive card for starting a new chat"""
     card = {
