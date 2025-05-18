@@ -5542,50 +5542,53 @@ async def initialize_chat_silent(turn_context: TurnContext, state):
     except Exception as e:
         logging.error(f"Error in initialize_chat_silent: {e}")
         return False
-async def format_message_with_rag(user_message, search_results):
-    """Format a message combining user query with retrieved text knowledge"""
-    formatted_message = user_message
-    
-    # Only add context if we have relevant results
-    if search_results and (search_results.get("documents") or search_results.get("answers")):
-        # Create the context section
-        context = "\n\n--- RETRIEVED KNOWLEDGE ---\n\n"
+async def format_message_with_rag(user_message, documents):
+    """
+    Format a message combining user query with retrieved text knowledge.
+    Returns original message if an error occurs.
+    """
+    try:
+        formatted_message = user_message
         
-        # First add answers if available (most relevant snippets)
-        answers = search_results.get("answers", [])
-        if answers:
-            context += "TOP ANSWERS:\n"
-            for i, answer_text in enumerate(answers, 1):
-                context += f"{i}. {answer_text}\n"
-            context += "\n"
-        
-        # Then add document content
-        documents = search_results.get("documents", [])
-        if documents:
-            context += "RELEVANT DOCUMENTS:\n"
+        # Only add context if we have relevant documents
+        if documents and len(documents) > 0:
+            # Create the context section
+            context = "\n\n--- RETRIEVED KNOWLEDGE ---\n\n"
+            
+            # Add document content
             for i, doc in enumerate(documents, 1):
-                # Add document title
-                context += f"DOCUMENT {i}: {doc.get('title', 'Unknown Document')}\n"
-                
-                # Add highlights if available
-                if doc.get('highlights') and doc['highlights']:
-                    for highlight in doc['highlights']:
-                        context += f"- {highlight}\n"
+                # Handle both dictionary and non-dictionary items
+                if isinstance(doc, dict):
+                    title = doc.get("title", f"Document {i}")
+                    content = doc.get("content", "")
                 else:
-                    # Add a portion of content if no highlights
-                    content = doc.get('content', '').strip()
-                    if content:
-                        # Truncate long content
-                        if len(content) > 300:
-                            content = content[:300] + "..."
-                        context += f"- {content}\n"
+                    # Fallback if doc is not a dictionary
+                    title = f"Document {i}"
+                    content = str(doc)
                 
-                context += "\n"
+                context += f"DOCUMENT {i}: {title}\n"
+                
+                # Smart truncation - show up to 2000 chars but try to break at a sentence
+                if len(content) > 2000:
+                    # Find the last period within the first 2000 chars
+                    last_period = content[:2000].rfind('.')
+                    if last_period > 0:
+                        content = content[:last_period+1] + " [content continues...]"
+                    else:
+                        content = content[:2000] + " [content continues...]"
+                
+                context += f"{content}\n\n"
+            
+            # Add the combined message
+            formatted_message = f"{formatted_message}\n\n{context}"
         
-        # Add the combined message
-        formatted_message = f"{formatted_message}\n\n{context}"
-    
-    return formatted_message
+        return formatted_message
+        
+    except Exception as e:
+        # Log the error but don't break the conversation flow
+        logging.error(f"Error formatting RAG message: {e}")
+        # Return original message without RAG context
+        return user_message
 # Modified handle_text_message with thread summarization
 async def handle_text_message(turn_context: TurnContext, state):
     """Handle text messages from users with RAG integration"""
