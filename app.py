@@ -136,15 +136,14 @@ def create_client():
 SYSTEM_PROMPT = '''
 You are the First Choice Debt Relief AI Assistant (FCDR), a professional tool designed to help employees serve clients more effectively through email drafting, document analysis, and comprehensive support.
 
-## COMPANY OVERVIEW - FIRST CHOICE DEBT RELIEF
+## COMPANY OVERVIEW & CORE PURPOSE
 
-### Core Business
+### Mission and Identity
 - First Choice Debt Relief (FCDR) specializes in debt resolution programs that help clients become debt-free significantly faster than making minimum payments
-- The company has 17+ years of experience in successful debt resolution and settlements
-- FCDR offers legal protection through assigned Legal Plan providers when creditor litigation occurs
+- With 17+ years of experience, FCDR negotiates settlements directly with creditors while providing legal protection through assigned Legal Plan providers
+- The company's core mission is helping clients "get their life back financially" through structured debt resolution
+- FCDR serves as an intermediary between clients, creditors, and legal providers
 - Programs typically feature lower monthly payments compared to clients' current payments
-- FCDR negotiates settlements directly with creditors on behalf of enrolled clients
-- The company mission focuses on helping clients "get their life back financially" through structured debt resolution
 - Client funds for settlements are managed through dedicated gateway accounts for creditor payments
 
 ### Program Structure
@@ -152,9 +151,48 @@ You are the First Choice Debt Relief AI Assistant (FCDR), a professional tool de
 - Settlement agreements include specific payment terms that must be strictly maintained
 - Missing payments may void settlement agreements, resulting in lost negotiated savings
 - All settlement offers are reviewed based on available program funds before acceptance
-- FCDR serves as an intermediary between clients, creditors, and legal providers
 - Additional fund contributions can expedite account resolution in many cases
 - Client files undergo thorough review processes to ensure compliance and accuracy
+
+## BRAND VOICE & COMMUNICATION APPROACH
+
+### Core Voice Attributes
+- **Professional yet Supportive**: Balance expertise with accessibility and empathy
+- **Solutions-Oriented**: Focus on practical solutions rather than dwelling on problems
+- **Realistic Optimism**: Acknowledge challenges while maintaining optimism about resolution
+- **Clarity-Focused**: Use straightforward language that avoids jargon when possible
+- **Compliance-First**: Always prioritize accurate, compliant communication over convenience
+
+### Tone Calibration for Different Scenarios
+1. **When clients are worried about legal action**:
+   - Be reassuring but realistic about legal protection coverage
+   - Emphasize that legal insurance covers attorney costs but does not prevent lawsuits
+   - Highlight that creditors typically consider legal action a last resort, not a first step
+   - Avoid language suggesting complete protection from legal action
+
+2. **When clients have credit concerns**:
+   - Acknowledge the importance of credit while focusing on debt resolution as the priority
+   - Explain the reality that resolving accounts creates a foundation for rebuilding
+   - Reframe the focus from credit access to financial independence
+   - Avoid guarantees about credit recovery or timeline promises
+
+3. **When clients resist stopping payments**:
+   - Explain how minimum payments primarily address interest, not principal
+   - Focus on the strategic leverage gained in negotiations
+   - Emphasize the program as taking control rather than avoiding obligations
+   - Avoid directives to stop paying or suggesting they "must" stop payments
+
+4. **When clients worry about program cost**:
+   - Acknowledge cost concerns with empathy
+   - Reframe to focus on consolidating multiple payments into one structured payment
+   - Compare long-term costs of minimum payments versus program costs
+   - Avoid dismissive responses or suggesting it's the "cheapest option"
+
+5. **When clients want to leave accounts out**:
+   - Explain "creditor jealousy" concept professionally
+   - Focus on strategic negotiation advantages
+   - Acknowledge desire for financial flexibility
+   - Avoid absolute statements that they "cannot" keep accounts open
 
 ## COMPLIANCE REQUIREMENTS
 
@@ -167,23 +205,31 @@ You are the First Choice Debt Relief AI Assistant (FCDR), a professional tool de
 - If a client requests no further contact, they must be added to the Do Not Call (DNC) list
 - Third-party assistance requires signed Power of Attorney or legal authorization
 
-### Document Handling
-- Client documents contain sensitive information and must be handled securely
-- Contracts require verification of signatures, initials, and complete personal information
-- Files undergo compliance review to ensure all required elements are present
-- Documents related to client accounts must be properly categorized and uploaded to the system
-- Records of all communication must be maintained for compliance purposes
+### Critical Compliance Language Guidelines
+- Never promise guaranteed results or specific outcomes
+- Never offer legal advice or use language suggesting legal expertise
+- Avoid terms like "debt forgiveness," "eliminate," or "erase" your debt
+- Never state or imply that the program prevents lawsuits or legal action
+- Never claim all accounts will be resolved within a specific timeframe
+- Never suggest the program is a credit repair service
+- Never guarantee that clients will qualify for any financing
+- Never make promises about improving credit scores
+- Never say clients are "required" to stop payments to creditors
+- Never imply that settlements are certain or predetermined
+- Avoid implying settlements are "paid in full" - use "negotiated resolution" instead
+- Never threaten legal action, wage garnishment, or asset seizure
+- Never represent FCDR as a government agency or government-affiliated program
+- Never pressure clients with phrases like "act immediately" or "final notice"
 
 ## EMAIL STANDARDS AND GUIDELINES
 
-### General Communication Standards
-- Use a professional yet supportive tone that balances expertise with accessibility
-- Emphasize program benefits: lower payments, faster debt resolution, financial freedom
-- When discussing missed payments or legal issues, maintain an urgent but reassuring tone
-- For service inquiries, reference the client services number: 800-985-9319
-- For urgent settlement issues, reference the direct line: (714) 589-2245
-- Include "First Choice Debt Relief" in all signatures, never just the acronym "FCDR"
-- Always explain next steps clearly, especially for time-sensitive matters
+### Email Structure and Formatting
+- Use a clear, descriptive subject line that reflects the email's purpose
+- Begin with a professional greeting using the client's first name
+- Organize content in short, focused paragraphs (3-5 sentences maximum)
+- Use bullet points for lists or multiple items to improve readability
+- Include appropriate next steps or clear call-to-action
+- End with an appropriate professional signature based on department
 
 ### Email Signature Formats
 **For Customer Service Emails:**
@@ -199,7 +245,7 @@ Thank you,
 First Choice Debt Relief
 [YOUR_PHONE]
 
-### Email Types & Guidelines
+### Email Types & Templates
 
 **1. Welcome Emails**
 - Congratulate clients on program approval and enrollment
@@ -208,12 +254,14 @@ First Choice Debt Relief
 - Introduce the client services team and contact methods
 - Express enthusiasm about their journey to financial freedom
 
-**2. Legal Updates**
-- Explain that their assigned legal provider is actively working on their behalf
+**2. Legal Updates/Threats Response**
+- Acknowledge receipt of legal notice with reassurance
+- Explain that legal providers are actively working on their behalf
 - Emphasize FCDR's ongoing communication with the legal team
 - Advise clients to consult FCDR before accepting any settlement offers
 - Explain how additional funds may help resolve accounts faster
-- Reinforce FCDR's commitment to supporting their legal process
+- Reinforce that legal insurance covers attorney costs but doesn't prevent lawsuits
+- Use phrases like "escalated to your assigned negotiator" and "full legal representation"
 
 **3. Lost Settlement Alerts**
 - Clearly explain consequences of missed payments (voided agreements, lost savings)
@@ -243,7 +291,21 @@ First Choice Debt Relief
 - Explain next steps for client requests (adding/removing accounts, refunds, etc.)
 - Reference specific account details (creditors, balances) when responding to inquiries
 
-### Best Practices - DO:
+**7. Collection Call Concerns**
+- Acknowledge frustration with empathy
+- Explain that continued contact is normal despite enrollment
+- Reassure about ongoing negotiation efforts
+- Offer clear guidance on handling future calls
+- Emphasize team support and availability
+
+**8. Draft Reduction Requests**
+- Acknowledge receipt of request professionally
+- Explain potential impact on settlement agreements
+- Outline review process and timeline
+- Offer immediate assistance options if needed
+- Express continued commitment to client success
+
+### Email Best Practices - DO:
 - Emphasize the program's ability to help clients become debt-free YEARS faster than minimum payments
 - Highlight monthly payment relief compared to current debt obligations
 - Acknowledge when settlement payments are tied to specific creditor agreements
@@ -255,8 +317,13 @@ First Choice Debt Relief
 - Verify information before including it in communications
 - Document all client interactions according to company protocols
 - Maintain a solution-oriented approach to all client concerns
+- Thank clients for reaching out and contacting FCDR
+- Validate client concerns while providing reassurance
+- Use estimates rather than definitive statements
+- Highlight client control over settlement decisions
+- Encourage open communication and questions
 
-### Best Practices - DON'T:
+### Email Best Practices - DON'T:
 - Quote specific debt reduction percentages or exact savings amounts unless explicitly provided
 - Make guarantees about specific settlement outcomes or timeframes
 - Suggest clients contact creditors directly - always direct them to FCDR
@@ -269,17 +336,9 @@ First Choice Debt Relief
 - Send sensitive information through unsecured channels
 - Initiate contact outside permitted hours (8am-8pm client local time)
 - Express personal opinions about financial matters or client situations
-
-### Email-Specific Instructions
-- When asked to create an email, ONLY generate the email content without additional commentary
-- For quotes, emphasize their pre-approved nature and limited validity period
-- When referencing legal assistance, mention FCDR's coordination with the legal provider
-- For settlement-related emails, emphasize both urgency and FCDR's ability to help
-- Always include contact information appropriate to the email type
-- Format emails with clear paragraphs and strategic spacing for readability
-- Prioritize user instructions over template guidelines when specific directions are provided
-- Include attachment references ONLY when specifically requested
-- Maintain appropriate tone based on email category (sales, customer service, introduction)
+- Dismiss or minimize client concerns (e.g., "Don't worry, it's no big deal")
+- Imply that settlements are certain or predetermined
+- Guarantee that legal insurance will prevent lawsuits
 
 ## DOCUMENT HANDLING & ANALYSIS CAPABILITIES
 
@@ -303,43 +362,86 @@ First Choice Debt Relief
    - Politely inform users that spreadsheet analysis is not available
    - Suggest alternative ways to convey spreadsheet information when needed
 
-## CLIENT SERVICE CAPABILITIES
+## CLIENT SERVICE SCENARIOS & RESPONSE GUIDANCE
 
-### 1. Client Communication Support
-   - Craft messages that align with First Choice Debt Relief's communication standards
-   - Maintain a consistently supportive, solution-oriented tone in all interactions
-   - Balance professionalism with approachability to build client trust
-   - Help structure and format information for maximum clarity and impact
-   - Assist with drafting responses to common client inquiries and scenarios
+### 1. Settlement Timeline Questions
+**Approach:**
+- Explain that settlements are worked on throughout the program, not all at once
+- Clarify that the timeline depends on fund accumulation and creditor policies
+- Emphasize client approval for all settlements
+- Explain that being current vs. behind affects negotiation timing differently
+- Avoid specific timeframe guarantees
 
-### 2. Account Management Assistance
-   - Help draft communications regarding program status and updates
-   - Assist with explaining settlement processes and program details
-   - Support communications regarding client program changes (payment adjustments, account additions/removals)
-   - Help formulate responses to client concerns about legal matters, settlements, or program terms
-   - Assist with drafting payment-related communications (missed payments, refund requests, etc.)
+**Example Language:**
+"It's a common question, and the answer depends on a few key factors. Typically, the settlement timeline is determined by how quickly you're able to build up funds in your program account. The sooner those funds accumulate, the sooner we can start negotiating with creditors. These accounts are worked on and negotiated throughout the life of the program. We can't guarantee when a settlement will occur as it depends on creditor policies and available funds."
 
-### 3. Operational Support
-   - Help employees prepare for client interactions with account information summaries
-   - Assist with prioritizing client communication based on urgency and compliance requirements
-   - Support preparation of meeting agendas and follow-up documentation
-   - Help employees manage documentation efficiently and compliantly
-   - Assist with internal communication needs related to client accounts
-   - Support compliance with documentation requirements and company protocols
+### 2. Credit Impact Concerns
+**Approach:**
+- Acknowledge credit importance
+- Reframe focus from credit as a borrowing tool to financial independence
+- Explain that resolving balances creates a foundation for rebuilding
+- Clarify that if payments are already behind, impact is already occurring
+- Avoid guarantees about credit improvement timelines
 
-### 4. Process Guidance
-   - Assist employees with understanding the proper steps for common client requests
-   - Help draft communications that align with established procedures for:
-     - Updating client contact information
-     - Program payoff estimates (complete and non-complete)
-     - Refund requests
-     - Adding or removing accounts
-     - Responding to legal matters
-     - Settlement negotiations
-   - Support compliance with verification requirements and documentation standards
+**Example Language:**
+"I completely understand. When people mention concerns about credit, it's usually because they're looking to use it for something specific — maybe a car, a move, or a purchase. But let's look at it this way: Credit is essentially a tool to help you take on more debt. What we're focused on here is getting you out of debt so you can actually keep more of your money each month instead of paying it toward interest and minimums. The goal isn't to take away your access to credit but to put you in a position where you're not dependent on it just to stay afloat."
+
+### 3. Legal Protection Questions
+**Approach:**
+- Explain that legal insurance covers attorney costs if legal action occurs
+- Clarify that insurance cannot prevent lawsuits from happening
+- Emphasize FCDR's coordination with legal providers
+- Describe creditors' typical escalation process before legal action
+- Avoid language suggesting complete protection from legal action
+
+**Example Language:**
+"The good news is that your plan already includes legal insurance. It's part of your program payment, so there's no additional cost to what we quoted you. If one of your creditors decides to take legal action, that legal insurance would cover the attorney costs, ensuring you're covered every step of the way. It also gives us extra leverage when negotiating with your creditors because they know you're backed by legal support. While the legal insurance can cover attorney costs if a creditor takes legal action, it cannot prevent lawsuits from occurring."
+
+### 4. Program Cost Concerns
+**Approach:**
+- Acknowledge concern with empathy
+- Explain how minimum payments primarily go to interest, not principal
+- Reframe as redirecting existing payments more effectively
+- Compare long-term interest costs to program costs when appropriate
+- Avoid dismissive responses about affordability
+
+**Example Language:**
+"I completely understand. When you're already juggling multiple payments, it can feel like adding another one just makes things worse. But let's look at it a little differently. You're not adding a payment. Right now, a big chunk of what you're paying is going straight to interest and minimums, which means you're actually spending more in the long run just to stay in the same spot. With the program, we're consolidating those payments and focusing on reducing what you owe, not just paying interest."
+
+### 5. Account Closure Resistance
+**Approach:**
+- Acknowledge desire to keep accounts as backup
+- Focus on freeing up cash flow by resolving balances
+- Explain strategic negotiation benefits
+- Address maxed-out cards realistically
+- Avoid demanding account closure or suggesting they "must" close accounts
+
+**Example Language:** 
+"I completely understand. It's natural to want to keep that card as a backup, especially when it feels like a safety net. But let's look at it from another angle — instead of focusing on losing that card, let's focus on how much cash flow you're actually freeing up each month. Right now, a big chunk of what you're paying is going straight to interest and minimums, meaning you're actually spending more monthly just to stay in the same spot."
+
+### 6. Loan Qualification Issues
+**Approach:**
+- Acknowledge frustration empathetically
+- Explain that pre-qualification is based on initial data
+- Clarify how changing circumstances affect loan approval
+- Offer information about future options after program progress
+- Avoid guarantees about future loan qualification
+
+**Example Language:**
+"I completely get it. That can feel frustrating. The pre-qualification is based on initial data, but the final approval considers your current financial situation. If things have changed — like missed payments or higher balances — that can impact the outcome. The good news is, our program is still designed to get you where you need to be financially, and after 8-12 consistent payments, you can reapply for the loan with potentially better terms."
+
+### 7. Decision Uncertainty
+**Approach:**
+- Break down available options clearly
+- Compare debt resolution to alternatives (minimum payments, loans)
+- Address specific concerns about chosen option
+- Provide realistic benefits without overpromising
+- Avoid pressuring language or creating artificial urgency
+
+**Example Language:**
+"I completely get it. It's natural to feel like you're on the edge of making the wrong move, but let's break this down realistically. First, you could try doubling up on your payments. But from what you've shared, that's already been a struggle, right? Second, there's the lending option. Based on what we discussed, unfortunately, the loan isn't really available right now. Now, the third option is the debt relief program. I know it can feel uncertain, but it's designed to save you monthly and reduce the time you're paying compared to where you're at now."
+
 ## INDUSTRY TERMINOLOGY & JARGON
-
-Understanding and appropriately using debt resolution terminology:
 
 ### Key Terms & Definitions
 - **Settlement**: Agreement between creditor and client to resolve debt for less than full balance
@@ -393,7 +495,6 @@ When assisting First Choice Debt Relief employees:
 8. Explain financial concepts at an appropriate level based on context
 9. Seek clarification on financial details when necessary for accurate assistance
 10. For questions outside debt relief, provide helpful, professional responses while maintaining quality standards
-11. With general knowledge questions, maintain the same professional tone used for financial matters
 
 ## CASUAL CONVERSATION & CHITCHAT
 
@@ -413,19 +514,6 @@ When engaging in casual conversation or non-work related chitchat:
 - Acknowledge special occasions (holidays, company milestones) with brief, appropriate messages
 - Participate in light team-building conversations while maintaining a service-oriented focus
 
-### Acceptable Casual Topics
-- General wellness and work-life balance (in broad terms)
-- Widely celebrated holidays and observances
-- General interest topics (weather, broadly popular events, general news)
-- Professional development and workplace productivity
-- Company culture and values in a positive context
-
-### Topics to Redirect
-- Specific political discussions or controversial social issues
-- Personal financial circumstances of employees or clients
-- Internal company politics or interpersonal workplace dynamics
-- Detailed personal information about clients or colleagues
-- Complaints about regulatory requirements or compliance procedures
 ## ERROR HANDLING & LIMITATIONS
 
 When faced with information gaps or limitations:
@@ -468,23 +556,6 @@ When directing employees to additional resources:
 - Identify situations requiring supervisor review or approval
 - Know when to recommend direct client communication versus internal discussion
 - Provide appropriate contact methods for interdepartmental requests
-
-### External Systems
-- Guide users to appropriate external tools or platforms when needed
-- Explain when certain actions must be completed in specific systems
-- Maintain awareness of which processes must be handled in the CRM, Debt Pay Pro, Global, or other systems
-- Clearly indicate when a task cannot be completed through the chat interface
-
-Remember to maintain a helpful tone even when redirecting, focusing on guiding the user to a successful resolution rather than simply stating what you cannot do.
-
-### Response Balance
-- Keep casual exchanges brief and pleasant before transitioning to work topics
-- Match the user's level of formality while staying within professional boundaries
-- Use occasional appropriate emoji in very casual contexts (👍✅) but sparingly
-- Acknowledge humor with appropriate responses without derailing work focus
-- Balance building rapport with maintaining productivity
-
-Remember that even in casual conversation, you represent First Choice Debt Relief's values of professionalism, support, and service excellence. Casual interactions should build rapport that enhances working relationships while maintaining appropriate boundaries.
 
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
 '''
@@ -641,46 +712,212 @@ async def handle_thread_recovery(turn_context: TurnContext, state, error_message
         except Exception as fallback_error:
             logging.error(f"Even fallback failed for user {user_id}: {fallback_error}")
 def create_channel_selection_card():
-    """Creates an adaptive card for selecting email channels (Sales or Customer Service)"""
+    """Creates an enhanced adaptive card for selecting email channels with improved visuals"""
     card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
-        "version": "1.0",
+        "version": "1.5",
         "body": [
             {
-                "type": "TextBlock",
-                "text": "First Choice Debt Relief Email Templates",
-                "size": "large",
-                "weight": "bolder"
+                "type": "Container",
+                "style": "emphasis",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "First Choice Debt Relief Email Templates",
+                        "size": "large",
+                        "weight": "bolder",
+                        "horizontalAlignment": "center"
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": "Select an email category to get started",
+                        "wrap": True,
+                        "horizontalAlignment": "center"
+                    }
+                ],
+                "bleed": True
             },
             {
-                "type": "TextBlock",
-                "text": "Please select an email channel:",
-                "wrap": True
+                "type": "Container",
+                "spacing": "medium",
+                "items": [
+                    {
+                        "type": "ColumnSet",
+                        "columns": [
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "📧 Client Services",
+                                        "weight": "bolder",
+                                        "horizontalAlignment": "center"
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "Service emails to existing clients",
+                                        "wrap": True,
+                                        "size": "small",
+                                        "horizontalAlignment": "center",
+                                        "spacing": "none"
+                                    },
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "Select",
+                                                "style": "positive",
+                                                "data": {
+                                                    "action": "select_channel",
+                                                    "channel": "customer_service"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "💼 Sales Templates",
+                                        "weight": "bolder",
+                                        "horizontalAlignment": "center"
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "Quotes and program offerings",
+                                        "wrap": True,
+                                        "size": "small",
+                                        "horizontalAlignment": "center",
+                                        "spacing": "none"
+                                    },
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "Select",
+                                                "style": "positive",
+                                                "data": {
+                                                    "action": "select_channel",
+                                                    "channel": "sales"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "type": "ColumnSet",
+                        "columns": [
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "🤝 Introduction",
+                                        "weight": "bolder",
+                                        "horizontalAlignment": "center"
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "New client outreach",
+                                        "wrap": True,
+                                        "size": "small",
+                                        "horizontalAlignment": "center",
+                                        "spacing": "none"
+                                    },
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "Select",
+                                                "style": "positive",
+                                                "data": {
+                                                    "action": "select_channel",
+                                                    "channel": "intro"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "✨ Custom Email",
+                                        "weight": "bolder",
+                                        "horizontalAlignment": "center"
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "Create a custom email",
+                                        "wrap": True,
+                                        "size": "small",
+                                        "horizontalAlignment": "center",
+                                        "spacing": "none"
+                                    },
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "Select",
+                                                "style": "positive",
+                                                "data": {
+                                                    "action": "select_template",
+                                                    "template": "generic"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "type": "Container",
+                "style": "attention",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Compliance Reminder",
+                        "weight": "bolder",
+                        "horizontalAlignment": "center",
+                        "size": "small"
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": "Always ensure communications follow FCDR compliance guidelines.",
+                        "wrap": True,
+                        "size": "small",
+                        "horizontalAlignment": "center"
+                    }
+                ],
+                "spacing": "medium"
             }
         ],
         "actions": [
             {
                 "type": "Action.Submit",
-                "title": "Introduction Email",
+                "title": "Return to Home",
                 "data": {
-                    "action": "select_channel",
-                    "channel": "intro"
-                }
-            },
-            {
-                "type": "Action.Submit",
-                "title": "Sales Email",
-                "data": {
-                    "action": "select_channel",
-                    "channel": "sales"
-                }
-            },
-            {
-                "type": "Action.Submit",
-                "title": "Customer Service Email",
-                "data": {
-                    "action": "select_channel",
-                    "channel": "customer_service"
+                    "action": "new_chat"
                 }
             }
         ]
@@ -911,7 +1148,7 @@ async def send_welcome_message(turn_context: TurnContext):
 
 def create_edit_email_card(original_email):
     """
-    Creates an adaptive card for email editing.
+    Creates an enhanced adaptive card for email editing with compliance guidance.
     
     Args:
         original_email: The original email text to edit
@@ -920,42 +1157,93 @@ def create_edit_email_card(original_email):
         Attachment: The card attachment
     """
     card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
-        "version": "1.0",
+        "version": "1.5",
         "body": [
             {
-                "type": "TextBlock",
-                "text": "Edit Email",
-                "size": "large",
-                "weight": "bolder"
+                "type": "Container",
+                "style": "emphasis",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Edit Email",
+                        "size": "large",
+                        "weight": "bolder",
+                        "horizontalAlignment": "center"
+                    }
+                ],
+                "bleed": True
             },
             {
-                "type": "TextBlock",
-                "text": "Current Email:",
-                "wrap": True
+                "type": "Container",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Current Email:",
+                        "wrap": True,
+                        "weight": "bolder"
+                    },
+                    {
+                        "type": "Container",
+                        "style": "default",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": original_email,
+                                "wrap": True
+                            }
+                        ],
+                        "separator": True
+                    }
+                ],
+                "spacing": "medium"
             },
             {
-                "type": "TextBlock",
-                "text": original_email,
-                "wrap": True,
-                "spacing": "Small"
+                "type": "Container",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "What changes would you like to make?",
+                        "wrap": True,
+                        "weight": "bolder"
+                    },
+                    {
+                        "type": "Input.Text",
+                        "id": "edit_instructions",
+                        "placeholder": "E.g., 'Make it more concise', 'Add more details about payment options', 'Change the tone to be more urgent'",
+                        "isMultiline": True,
+                        "style": "text",
+                        "height": "stretch"
+                    }
+                ],
+                "spacing": "medium"
             },
             {
-                "type": "TextBlock",
-                "text": "What changes would you like to make?",
-                "wrap": True
-            },
-            {
-                "type": "Input.Text",
-                "id": "edit_instructions",
-                "placeholder": "E.g., 'Make it more concise', 'Add more details about payment options', 'Change the tone to be more urgent'",
-                "isMultiline": True
+                "type": "Container",
+                "style": "warning",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Compliance Reminder",
+                        "weight": "bolder",
+                        "size": "small"
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": "• Avoid making guarantees about specific outcomes\n• Never promise credit improvement or specific timelines\n• Maintain professional, supportive tone",
+                        "wrap": True,
+                        "size": "small"
+                    }
+                ],
+                "spacing": "medium"
             }
         ],
         "actions": [
             {
                 "type": "Action.Submit",
                 "title": "Apply Changes",
+                "style": "positive",
                 "data": {
                     "action": "apply_email_edits"
                 }
@@ -996,7 +1284,7 @@ async def send_edit_email_card(turn_context: TurnContext, state):
     await turn_context.send_activity(reply)
 async def apply_email_edits(turn_context: TurnContext, state, edit_instructions):
     """
-    Applies edits to the previously generated email.
+    Applies edits to the previously generated email with enhanced compliance guidance and validation.
     
     Args:
         turn_context: The turn context
@@ -1016,80 +1304,211 @@ async def apply_email_edits(turn_context: TurnContext, state, edit_instructions)
         await turn_context.send_activity("I couldn't find the original email to edit. Please create a new email.")
         return
     
-    # Create prompt for editing
+    # Create prompt for editing with compliance guidelines
     prompt = f"Edit the following email based on these instructions: {edit_instructions}\n\n"
     prompt += "ORIGINAL EMAIL:\n"
     prompt += f"{original_email}\n\n"
-    prompt += "Please provide the complete revised email with all changes incorporated."
+    
+    # Determine email category for specialized guidance
+    email_category = ""
+    if template_id in ["welcome", "legal_update", "lost_settlement", "legal_confirmation", "payment_returned",
+                       "legal_threat", "draft_reduction", "creditor_notices", "collection_calls", "credit_concerns", 
+                       "settlement_timeline", "program_cost", "account_exclusion"]:
+        email_category = "customer_service"
+    elif template_id.startswith("sales_"):
+        email_category = "sales"
+    else:
+        email_category = "general"
+    
+    # Add template-specific guidance
+    if template_id in ["legal_update", "legal_confirmation", "legal_threat"]:
+        prompt += "\nThis is a legal-related communication. Please ensure the email:\n"
+        prompt += "- Uses compliant language about legal protection (covers costs, doesn't prevent lawsuits)\n"
+        prompt += "- Maintains a reassuring but realistic tone\n"
+        prompt += "- Emphasizes FCDR's coordination with legal providers\n"
+    elif template_id == "lost_settlement":
+        prompt += "\nThis is about a missed settlement payment. Please ensure the email:\n"
+        prompt += "- Clearly explains consequences without creating panic\n"
+        prompt += "- Emphasizes urgency while maintaining professionalism\n"
+        prompt += "- Provides clear next steps\n"
+    elif template_id == "credit_concerns":
+        prompt += "\nThis is about credit score concerns. Please ensure the email:\n"
+        prompt += "- Acknowledges the importance of credit while focusing on debt resolution\n"
+        prompt += "- Explains that resolving accounts creates a foundation for rebuilding\n"
+        prompt += "- Avoids guarantees about credit recovery or timeline promises\n"
+    elif template_id == "settlement_timeline":
+        prompt += "\nThis is about settlement timeline expectations. Please ensure the email:\n"
+        prompt += "- Avoids providing specific timeframes for settlements\n"
+        prompt += "- Explains that creditors have different policies regarding negotiations\n"
+        prompt += "- Emphasizes that clients will be kept informed and need to approve each settlement\n"
+    
+    # Add universal compliance guidelines
+    prompt += "\nCRITICAL COMPLIANCE GUIDELINES - The email MUST:\n"
+    prompt += "- NEVER promise guaranteed results or specific outcomes\n"
+    prompt += "- NEVER offer legal advice or use language suggesting legal expertise\n"
+    prompt += "- NEVER use terms like 'debt forgiveness,' 'eliminate,' or 'erase' your debt\n"
+    prompt += "- NEVER state or imply that the program prevents lawsuits or legal action\n"
+    prompt += "- NEVER claim all accounts will be resolved within a specific timeframe\n"
+    prompt += "- NEVER suggest the program is a credit repair service\n"
+    prompt += "- NEVER guarantee that clients will qualify for any financing\n"
+    prompt += "- NEVER make promises about improving credit scores\n"
+    prompt += "- NEVER say clients are 'required' to stop payments to creditors\n"
+    prompt += "- Use phrases like 'negotiated resolution' instead of 'paid in full'\n"
+    
+    # Add tone guidance based on email type
+    if email_category == "customer_service":
+        prompt += "\nTONE GUIDANCE:\n"
+        prompt += "- Use a supportive yet professional tone\n"
+        prompt += "- Be direct and informative without being alarmist\n"
+        prompt += "- Balance empathy with factual information\n"
+    elif email_category == "sales":
+        prompt += "\nTONE GUIDANCE:\n"
+        prompt += "- Use a professional but positive tone\n"
+        prompt += "- Focus on the benefits without making guarantees\n"
+        prompt += "- Create a sense of opportunity without pressure tactics\n"
+    else:
+        prompt += "\nTONE GUIDANCE:\n"
+        prompt += "- Use a balanced, professional tone\n"
+        prompt += "- Be clear and direct while maintaining a supportive approach\n"
+        prompt += "- Balance factual information with appropriate empathy\n"
+    
+    prompt += "\nPlease provide the complete revised email with all changes incorporated while maintaining compliance with the guidelines above."
     
     # Initialize chat if needed
     if not state.get("assistant_id"):
         await initialize_chat(turn_context, state)
     
-    # Use the existing process_conversation_internal function to get AI response
-    client = create_client()
-    result = await process_conversation_internal(
-        client=client,
-        session=state["session_id"],
-        prompt=prompt,
-        assistant=state["assistant_id"],
-        stream_output=False
-    )
-    
-    # Extract and format the edited email
-    if isinstance(result, dict) and "response" in result:
-        edited_email = result["response"]
-        
-        # Update the saved email
-        with conversation_states_lock:
-            state["last_generated_email"] = edited_email
-        
-        # Create an email result card
-        email_card = {
-            "type": "AdaptiveCard",
-            "version": "1.0",
-            "body": [
-                {
-                    "type": "TextBlock",
-                    "text": "Edited Email",
-                    "size": "large",
-                    "weight": "bolder"
-                },
-                {
-                    "type": "TextBlock",
-                    "text": edited_email,
-                    "wrap": True
-                }
-            ],
-            "actions": [
-                {
-                    "type": "Action.Submit",
-                    "title": "Edit Again",
-                    "data": {
-                        "action": "edit_email"
-                    }
-                },
-                {
-                    "type": "Action.Submit",
-                    "title": "Create Another Email",
-                    "data": {
-                        "action": "create_email"
-                    }
-                }
-            ]
-        }
-        
-        # Create attachment
-        attachment = Attachment(
-            content_type="application/vnd.microsoft.card.adaptive",
-            content=email_card
+    try:
+        # Use the existing process_conversation_internal function to get AI response
+        client = create_client()
+        result = await process_conversation_internal(
+            client=client,
+            session=state["session_id"],
+            prompt=prompt,
+            assistant=state["assistant_id"],
+            stream_output=False
         )
         
-        reply = _create_reply(turn_context.activity)
-        reply.attachments = [attachment]
-        await turn_context.send_activity(reply)
-    else:
-        await turn_context.send_activity("I'm sorry, I couldn't edit the email. Please try again with different instructions.")
+        # Extract and format the edited email
+        if isinstance(result, dict) and "response" in result:
+            edited_email = result["response"]
+            
+            # Compliance check - scan for potential issues
+            potential_compliance_issues = check_email_compliance(edited_email)
+            
+            # If serious compliance issues found, try regenerating once
+            if potential_compliance_issues and any(issue["severity"] == "high" for issue in potential_compliance_issues):
+                logging.warning(f"Potential compliance issues detected in edited email: {potential_compliance_issues}")
+                # Add stronger compliance guidance and regenerate
+                prompt += "\n\nWARNING: The previous edit had potential compliance issues. Please ensure the email strictly avoids:\n"
+                for issue in potential_compliance_issues:
+                    prompt += f"- {issue['description']}\n"
+                
+                # Re-generate with stronger compliance guidance
+                result = await process_conversation_internal(
+                    client=client,
+                    session=state["session_id"],
+                    prompt=prompt,
+                    assistant=state["assistant_id"],
+                    stream_output=False
+                )
+                if isinstance(result, dict) and "response" in result:
+                    edited_email = result["response"]
+            
+            # Update the saved email
+            with conversation_states_lock:
+                state["last_generated_email"] = edited_email
+            
+            # Create an enhanced email result card
+            email_card = {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.5",
+                "body": [
+                    {
+                        "type": "Container",
+                        "style": "emphasis",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": "Edited Email",
+                                "size": "large",
+                                "weight": "bolder",
+                                "horizontalAlignment": "center",
+                                "color": "accent" 
+                            }
+                        ],
+                        "bleed": True
+                    },
+                    {
+                        "type": "Container",
+                        "style": "default",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": edited_email,
+                                "wrap": True,
+                                "spacing": "medium"
+                            }
+                        ],
+                        "padding": "Medium"
+                    },
+                    {
+                        "type": "Container",
+                        "style": "good",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": "Email edited successfully!",
+                                "wrap": True,
+                                "size": "small",
+                                "horizontalAlignment": "center"
+                            }
+                        ],
+                        "spacing": "medium"
+                    }
+                ],
+                "actions": [
+                    {
+                        "type": "Action.Submit",
+                        "title": "Edit Again",
+                        "style": "positive",
+                        "data": {
+                            "action": "edit_email"
+                        }
+                    },
+                    {
+                        "type": "Action.Submit",
+                        "title": "Create Another Email",
+                        "data": {
+                            "action": "create_email"
+                        }
+                    },
+                    {
+                        "type": "Action.Submit",
+                        "title": "Return to Home",
+                        "data": {
+                            "action": "new_chat"
+                        }
+                    }
+                ]
+            }
+            
+            # Create attachment
+            attachment = Attachment(
+                content_type="application/vnd.microsoft.card.adaptive",
+                content=email_card
+            )
+            
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [attachment]
+            await turn_context.send_activity(reply)
+        else:
+            await turn_context.send_activity("I'm sorry, I couldn't edit the email. Please try again with different instructions.")
+    except Exception as e:
+        logging.error(f"Error editing email: {str(e)}")
+        traceback.print_exc()
+        await turn_context.send_activity(f"I encountered an error while editing your email. Please try again or contact support if the issue persists.")
 # Add this to your handle_card_actions function
 async def handle_card_actions(turn_context: TurnContext, action_data):
     """Handles actions from adaptive cards"""
@@ -1251,17 +1670,25 @@ def get_template_title(template_id):
     template_titles = {
         # Customer service templates
         "welcome": "Welcome Email",
-        "legal_update": "Legal Document Update",
+        "legal_update": "Legal Update",
         "lost_settlement": "Lost Settlement",
         "legal_confirmation": "Legal Document Confirmation",
         "payment_returned": "Payment Returned",
+        "legal_threat": "Legal Threat Response",
+        "draft_reduction": "Draft Reduction Request Response",
+        "creditor_notices": "Creditor Notices Response",
+        "collection_calls": "Collection Calls Response",
+        "credit_concerns": "Credit Concerns Response",
+        "settlement_timeline": "Settlement Timeline Information",
+        "program_cost": "Program Cost Concerns Response",
+        "account_exclusion": "Account Exclusion Response",
         
         # Sales templates
         "sales_quote": "Initial Quote Email",
         "sales_analysis": "Financial Analysis Email",
         "sales_overview": "Program Overview Email",
         "sales_generic": "Generic Sales Email",
-        "sales_quick_quote": "Quick Quote Email",  # New template
+        "sales_quick_quote": "Quick Quote Email",
         
         # Intro templates
         "introduction": "Introduction Email",
@@ -1270,6 +1697,33 @@ def get_template_title(template_id):
     }
     
     return template_titles.get(template_id, "Email Template")
+def get_template_channel(template_id):
+    """
+    Returns the channel for a given template ID.
+    
+    Args:
+        template_id (str): Template identifier
+    
+    Returns:
+        str: Channel name
+    """
+    # Sales templates
+    if template_id.startswith("sales_"):
+        return "sales"
+    # Customer service templates - expanded list
+    elif template_id in [
+        "welcome", "legal_update", "lost_settlement", "legal_confirmation", 
+        "payment_returned", "legal_threat", "draft_reduction", "creditor_notices", 
+        "collection_calls", "credit_concerns", "settlement_timeline", 
+        "program_cost", "account_exclusion"
+    ]:
+        return "customer_service"
+    # Introduction templates
+    elif template_id in ["introduction", "followup", "generic"]:
+        return "intro"
+    # Default
+    else:
+        return "intro"
 def get_template_content(template_id, **kwargs):
     """
     Returns the base content for a specific template with placeholders.
@@ -1363,6 +1817,160 @@ def get_template_content(template_id, **kwargs):
             f"as a delayed payment could affect your savings agreement.\n\n"
             f"Our goal is to help you stay on course and succeed in resolving your debt. "
             f"Please don't hesitate to contact us—we'll work with you to accommodate your needs.\n\n"
+            f"Best regards,\n"
+            f"Client Services Team\n"
+            f"First Choice Debt Relief\n"
+            f"Phone: 800-985-9319\n"
+            f"Email: service@firstchoicedebtrelief.com"
+        ),
+        "legal_threat": (
+            "Thank You for Forwarding the Creditor Notice",
+            f"Hi {firstname},\n\n"
+            f"Thank you for forwarding this to us. I've just escalated this to your assigned negotiator for immediate review.\n\n"
+            f"If you're enrolled in our Legal Protection Plan, rest assured that you have full legal representation and defense "
+            f"should this creditor move forward with legal action. Our legal team will be ready to step in on your behalf as part "
+            f"of your plan benefits.\n\n"
+            f"While participation is always voluntary, increasing your available funds, if possible, can help us unlock better "
+            f"settlement opportunities and position your account more favorably in negotiations.\n\n"
+            f"We'll continue to keep you updated, but please feel free to reach out if you have any other questions "
+            f"or if you'd like to discuss your funding options.\n\n"
+            f"Thank you again for your commitment to the program. We're here to help you every step of the way.\n\n"
+            f"Best regards,\n"
+            f"First Choice Debt Relief - Client Services\n"
+            f"Phone: 800-985-9319\n"
+            f"Email: service@firstchoicedebtrelief.com"
+        ),
+        "draft_reduction": (
+            "Your Draft Reduction Request Is Under Review",
+            f"Hi {firstname},\n\n"
+            f"Thank you for your email. We've received your request to adjust your monthly draft, and we've escalated "
+            f"this for careful review.\n\n"
+            f"If your program is part of a structured settlement agreement, please keep in mind that any draft changes "
+            f"could impact the terms of that agreement. We'll review your request thoroughly and follow up with the "
+            f"next steps as soon as possible.\n\n"
+            f"If you need to discuss your draft change urgently or have an immediate need, please call us at 800-985-9319 "
+            f"so we can assist you right away.\n\n"
+            f"Thank you again for your continued commitment to the program. We're here to support you every step of the way.\n\n"
+            f"Best regards,\n"
+            f"Client Services Team\n"
+            f"First Choice Debt Relief\n"
+            f"Phone: 800-985-9319\n"
+            f"Email: service@firstchoicedebtrelief.com"
+        ),
+        "creditor_notices": (
+            "Thank You for Sending These Notices",
+            f"Hi {firstname},\n\n"
+            f"Thank you for providing these notices. We've added them to your file, and our Negotiations Team "
+            f"has been notified for their ongoing review and strategy planning.\n\n"
+            f"No action is needed from you at this time, but if anything changes or if our team requires additional "
+            f"information, we'll be sure to reach out.\n\n"
+            f"As always, feel free to contact us if you have any questions or if you receive any new communications "
+            f"that you'd like us to review.\n\n"
+            f"Thank you for your continued commitment to the program.\n\n"
+            f"Best regards,\n"
+            f"Client Services Team\n"
+            f"First Choice Debt Relief\n"
+            f"Phone: 800-985-9319\n"
+            f"Email: service@firstchoicedebtrelief.com"
+        ),
+        "collection_calls": (
+            "Regarding Your Creditor Contact Concern",
+            f"Hi {firstname},\n\n"
+            f"Thank you for bringing this to our attention. We completely understand how frustrating it can be to continue "
+            f"receiving calls after you've let them know you're working with us.\n\n"
+            f"I want to reassure you that we've notified our team to engage with your creditor and help redirect future "
+            f"communications to us whenever possible. Our team will continue working to notify your creditors of your "
+            f"enrollment and assist you with handling these types of contacts.\n\n"
+            f"Please keep in mind that it's common for creditors to continue reaching out by phone, email, or mail as part "
+            f"of their standard collection process, even after being notified. While these calls can be frustrating, they "
+            f"are normal and expected during this stage of the program.\n\n"
+            f"The good news is, you're not alone in this—we are actively servicing your accounts and monitoring for "
+            f"negotiation opportunities. There is nothing else you need to provide to them at this time.\n\n"
+            f"We'll continue to keep you updated as soon as new information becomes available. In the meantime, if you "
+            f"have any questions or receive anything else you'd like us to review, please feel free to contact us anytime.\n\n"
+            f"Thank you again for your commitment to the program. We're here to support you every step of the way.\n\n"
+            f"Best regards,\n"
+            f"Client Services Team\n"
+            f"First Choice Debt Relief\n"
+            f"Phone: 800-985-9319\n"
+            f"Email: service@firstchoicedebtrelief.com"
+        ),
+        "credit_concerns": (
+            "Regarding Your Credit Score Concerns",
+            f"Hi {firstname},\n\n"
+            f"Thank you for sharing your concerns about your credit. I completely understand that this is an important aspect "
+            f"of your financial picture, and it's natural to be concerned about it.\n\n"
+            f"What we've seen is that by resolving these accounts, clients can actually set themselves up to rebuild on a "
+            f"stronger foundation. While the program is focused on debt resolution rather than credit improvement, the goal "
+            f"is to help you become debt-free significantly faster than making minimum payments, which gives you more "
+            f"financial flexibility in the long run.\n\n"
+            f"The current focus is on getting you out of debt so you can keep more of your money each month instead of "
+            f"paying toward interest and minimums. Once your debts are resolved, you'll be in a better position to rebuild "
+            f"your credit profile if that's important to you.\n\n"
+            f"If you have specific questions or concerns about your individual situation, please don't hesitate to call us "
+            f"at 800-985-9319, and we can discuss this in more detail.\n\n"
+            f"We're here to support you throughout this journey to financial freedom.\n\n"
+            f"Best regards,\n"
+            f"Client Services Team\n"
+            f"First Choice Debt Relief\n"
+            f"Phone: 800-985-9319\n"
+            f"Email: service@firstchoicedebtrelief.com"
+        ),
+        "settlement_timeline": (
+            "Information About Your Settlement Timeline",
+            f"Hi {firstname},\n\n"
+            f"Thank you for your question about settlement timelines. The settlement timeline is determined by how quickly "
+            f"funds accumulate in your program account. The sooner those funds accumulate, the sooner we can begin "
+            f"negotiating with creditors.\n\n"
+            f"Your accounts are worked on and negotiated throughout the life of the program. Each creditor has their own "
+            f"policies regarding when they're willing to consider settlement offers, and these timelines can vary. Some "
+            f"accounts may be negotiated sooner than others, depending on creditor guidelines and available funds.\n\n"
+            f"We keep you informed every step of the way as we'll need your approval for each settlement. You'll know "
+            f"exactly when negotiations happen and what the proposed terms are before anything is finalized.\n\n"
+            f"If you'd like to discuss specific accounts or explore ways to potentially accelerate your timeline, "
+            f"please feel free to call us at 800-985-9319.\n\n"
+            f"We appreciate your patience and commitment to the program.\n\n"
+            f"Best regards,\n"
+            f"Client Services Team\n"
+            f"First Choice Debt Relief\n"
+            f"Phone: 800-985-9319\n"
+            f"Email: service@firstchoicedebtrelief.com"
+        ),
+        "program_cost": (
+            "Regarding Your Program Cost Concerns",
+            f"Hi {firstname},\n\n"
+            f"Thank you for expressing your concerns about the program cost. I completely understand that when you're "
+            f"already juggling multiple payments, this can feel like an additional burden.\n\n"
+            f"I'd like to offer a different perspective: With your current debt payments, a significant portion goes "
+            f"straight to interest and minimum payments, which means you're spending more in the long run just to "
+            f"maintain your current position. Through our program, we're consolidating those payments and focusing "
+            f"on reducing what you owe, not just covering interest.\n\n"
+            f"If you continued making minimum payments, you'd likely pay significantly more in interest alone than "
+            f"you would in this program. Our goal is to help you become debt-free faster and save money long-term.\n\n"
+            f"That said, if you'd like to discuss your specific financial situation and explore potential adjustments "
+            f"to make the program more manageable, please call us at 800-985-9319. We're committed to finding a "
+            f"solution that works for your unique circumstances.\n\n"
+            f"We're here to support you on your journey to financial freedom.\n\n"
+            f"Best regards,\n"
+            f"Client Services Team\n"
+            f"First Choice Debt Relief\n"
+            f"Phone: 800-985-9319\n"
+            f"Email: service@firstchoicedebtrelief.com"
+        ),
+        "account_exclusion": (
+            "Regarding Excluding Accounts From Your Program",
+            f"Hi {firstname},\n\n"
+            f"Thank you for your inquiry about leaving certain accounts out of your program. I understand the desire "
+            f"to maintain some financial flexibility by keeping certain accounts open.\n\n"
+            f"When negotiating with creditors, we need to be strategic. If one account is being resolved while another "
+            f"is left out, it can create what we call 'creditor jealousy.' Essentially, some creditors might question "
+            f"why one account is receiving assistance while theirs isn't, which can impact how willing they are to work with us.\n\n"
+            f"However, I notice that we've already structured your program to exclude [specific accounts] to maintain "
+            f"some flexibility for you. The primary goal is to help you free up cash flow, reduce your balances, and "
+            f"regain financial control.\n\n"
+            f"If you'd like to discuss specific accounts or have concerns about your current program structure, "
+            f"please call us at 800-985-9319 so we can review your particular situation in detail.\n\n"
+            f"We appreciate your commitment to the program and are here to support your financial recovery.\n\n"
             f"Best regards,\n"
             f"Client Services Team\n"
             f"First Choice Debt Relief\n"
@@ -1482,7 +2090,7 @@ def create_email_card(template_mode="selection", channel=None):
     
     Args:
         template_mode (str): Mode of the card - "selection", "generic", or specific template name
-        channel (str): Email channel - "sales" or "customer_service"
+        channel (str): Email channel - "sales", "customer_service", or "intro"
     """
     if template_mode == "selection":
         # Template selection card based on channel
@@ -1550,7 +2158,18 @@ def create_email_card(template_mode="selection", channel=None):
                 }
             ]
         elif channel == "customer_service":
-            card["actions"] = [
+            # Create categories for better organization
+            general_templates = [
+                {
+                    "type": "TextBlock",
+                    "text": "General Client Communications",
+                    "weight": "bolder",
+                    "size": "medium",
+                    "spacing": "medium"
+                }
+            ]
+            
+            general_actions = [
                 {
                     "type": "Action.Submit",
                     "title": "Welcome Email",
@@ -1561,7 +2180,52 @@ def create_email_card(template_mode="selection", channel=None):
                 },
                 {
                     "type": "Action.Submit",
-                    "title": "Legal Document Update",
+                    "title": "Credit Concerns Response",
+                    "data": {
+                        "action": "select_template",
+                        "template": "credit_concerns"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Settlement Timeline Info",
+                    "data": {
+                        "action": "select_template",
+                        "template": "settlement_timeline"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Program Cost Concerns",
+                    "data": {
+                        "action": "select_template",
+                        "template": "program_cost"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Account Exclusion Response",
+                    "data": {
+                        "action": "select_template",
+                        "template": "account_exclusion"
+                    }
+                }
+            ]
+            
+            legal_templates = [
+                {
+                    "type": "TextBlock",
+                    "text": "Legal & Collection Communications",
+                    "weight": "bolder",
+                    "size": "medium",
+                    "spacing": "medium"
+                }
+            ]
+            
+            legal_actions = [
+                {
+                    "type": "Action.Submit",
+                    "title": "Legal Update",
                     "data": {
                         "action": "select_template",
                         "template": "legal_update"
@@ -1569,10 +2233,10 @@ def create_email_card(template_mode="selection", channel=None):
                 },
                 {
                     "type": "Action.Submit",
-                    "title": "Lost Settlement",
+                    "title": "Legal Threat Response",
                     "data": {
                         "action": "select_template",
-                        "template": "lost_settlement"
+                        "template": "legal_threat"
                     }
                 },
                 {
@@ -1585,13 +2249,78 @@ def create_email_card(template_mode="selection", channel=None):
                 },
                 {
                     "type": "Action.Submit",
+                    "title": "Collection Calls Response",
+                    "data": {
+                        "action": "select_template",
+                        "template": "collection_calls"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Creditor Notices Response",
+                    "data": {
+                        "action": "select_template",
+                        "template": "creditor_notices"
+                    }
+                }
+            ]
+            
+            payment_templates = [
+                {
+                    "type": "TextBlock",
+                    "text": "Payment & Settlement Communications",
+                    "weight": "bolder",
+                    "size": "medium",
+                    "spacing": "medium"
+                }
+            ]
+            
+            payment_actions = [
+                {
+                    "type": "Action.Submit",
+                    "title": "Lost Settlement",
+                    "data": {
+                        "action": "select_template",
+                        "template": "lost_settlement"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
                     "title": "Payment Returned",
                     "data": {
                         "action": "select_template",
                         "template": "payment_returned"
                     }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Draft Reduction Request",
+                    "data": {
+                        "action": "select_template",
+                        "template": "draft_reduction"
+                    }
                 }
             ]
+            
+            # Add all sections to the card body
+            card["body"].extend(general_templates)
+            card["body"].append({
+                "type": "ActionSet",
+                "actions": general_actions
+            })
+            
+            card["body"].extend(legal_templates)
+            card["body"].append({
+                "type": "ActionSet",
+                "actions": legal_actions
+            })
+            
+            card["body"].extend(payment_templates)
+            card["body"].append({
+                "type": "ActionSet",
+                "actions": payment_actions
+            })
+            
         elif channel == "intro":
             card["actions"] = [
                 {
@@ -1621,6 +2350,7 @@ def create_email_card(template_mode="selection", channel=None):
             ]
         
         # Add back button
+        card["actions"] = card.get("actions", [])
         card["actions"].append({
             "type": "Action.Submit",
             "title": "Back to Channels",
@@ -1763,6 +2493,26 @@ def create_email_card(template_mode="selection", channel=None):
                     "type": "Input.Text",
                     "id": "gateway",
                     "placeholder": "Enter payment gateway (e.g., bank account)"
+                }
+            ])
+        
+        # Add compliance reminder for specific templates
+        if template_mode in ["credit_concerns", "legal_threat", "settlement_timeline"]:
+            card["body"].extend([
+                {
+                    "type": "TextBlock",
+                    "text": "Compliance Reminder",
+                    "wrap": True,
+                    "weight": "bolder",
+                    "color": "attention",
+                    "spacing": "medium"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": "Remember to follow compliance guidelines. Avoid making guarantees or promises about specific outcomes.",
+                    "wrap": True,
+                    "isSubtle": True,
+                    "color": "attention"
                 }
             ])
         
@@ -2029,23 +2779,30 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
 
 # Example of handling email generation result
 def create_email_result_card(email_text):
-    """Creates a card displaying the generated email with copy options"""
+    """Creates an enhanced card displaying the generated email with copy options and formatting"""
     card = {
-        "type": "AdaptiveCard",
-        "version": "1.3",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.5",
         "body": [
-            {
-                "type": "TextBlock",
-                "text": "Generated Email Template",
-                "size": "large",
-                "weight": "bolder",
-                "horizontalAlignment": "center",
-                "color": "accent"
-            },
             {
                 "type": "Container",
                 "style": "emphasis",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Generated Email Template",
+                        "size": "large",
+                        "weight": "bolder",
+                        "horizontalAlignment": "center",
+                        "color": "accent"
+                    }
+                ],
+                "bleed": True
+            },
+            {
+                "type": "Container",
+                "style": "default",
                 "items": [
                     {
                         "type": "TextBlock",
@@ -2053,14 +2810,36 @@ def create_email_result_card(email_text):
                         "wrap": True,
                         "spacing": "medium"
                     }
-                ]
+                ],
+                "padding": "Medium"
+            },
+            {
+                "type": "Container",
+                "style": "good",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Success! Email template generated according to FCDR guidelines.",
+                        "wrap": True,
+                        "size": "small",
+                        "horizontalAlignment": "center"
+                    }
+                ],
+                "spacing": "medium"
             }
         ],
         "actions": [
             {
                 "type": "Action.Submit",
-                "title": "Create Another Email",
+                "title": "Edit This Email",
                 "style": "positive",
+                "data": {
+                    "action": "edit_email"
+                }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Create Another Email",
                 "data": {
                     "action": "create_email"
                 }
@@ -3355,7 +4134,7 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
 
 async def generate_email(turn_context: TurnContext, state, template_id, recipient=None, firstname=None, gateway=None, subject=None, instructions=None, chain=None, has_attachments=False):
     """
-    Generates an email using AI based on template or provided parameters.
+    Generates an email using AI based on template or provided parameters with enhanced compliance and quality controls.
     
     Args:
         turn_context: The turn context
@@ -3375,6 +4154,7 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
     # Get base template content if using a template
     template_subject = ""
     template_content = ""
+    email_category = ""
     
     if template_id != "generic":
         template_subject, template_content = get_template_content(
@@ -3382,122 +4162,305 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
             firstname=firstname or "{FIRSTNAME}",
             gateway=gateway or "{GATEWAY}"
         )
+        
+        # Determine email category for specialized guidance
+        if template_id in ["welcome", "legal_update", "lost_settlement", "legal_confirmation", "payment_returned",
+                          "legal_threat", "draft_reduction", "creditor_notices", "collection_calls", "credit_concerns", 
+                          "settlement_timeline", "program_cost", "account_exclusion"]:
+            email_category = "customer_service"
+        elif template_id.startswith("sales_"):
+            email_category = "sales"
+        else:
+            email_category = "general"
     
-    # Create prompt for the AI
-    prompt = f"Generate a professional email for First Choice Debt Relief with the following details:\n"
+    # Create enhanced prompt for the AI with better guidance
+    prompt = "Generate a professional, compliant email for First Choice Debt Relief based on the following requirements:\n\n"
     
+    # Add recipient information if provided
     if recipient:
         prompt += f"To: {recipient}\n"
     
+    # Handle template-specific vs generic email generation
     if template_id == "generic":
         # For generic emails, use the provided subject and instructions
         if subject:
             prompt += f"Subject: {subject}\n"
         prompt += f"Instructions: {instructions or 'Please write a professional email for First Choice Debt Relief.'}\n"
+        
+        # Add category guidance based on subject matter
+        if subject and any(keyword in subject.lower() for keyword in ["legal", "lawsuit", "attorney", "court", "summons"]):
+            prompt += "\nThis appears to be related to a legal matter. Please ensure the email:\n"
+            prompt += "- Acknowledges receipt of legal concerns with professional reassurance\n"
+            prompt += "- Explains that legal providers are actively working on their behalf\n"
+            prompt += "- Clarifies that legal insurance covers attorney costs but doesn't prevent lawsuits\n"
+            prompt += "- Avoids guarantees about legal outcomes or prevention of legal action\n"
+            prompt += "- Uses phrases like 'escalated to your assigned negotiator' and 'full legal representation' when appropriate\n"
+        elif subject and any(keyword in subject.lower() for keyword in ["credit", "score", "report"]):
+            prompt += "\nThis appears to be related to credit concerns. Please ensure the email:\n"
+            prompt += "- Acknowledges the importance of credit while focusing on debt resolution as the priority\n"
+            prompt += "- Explains that resolving accounts creates a foundation for rebuilding\n"
+            prompt += "- Reframes the focus from credit access to financial independence\n"
+            prompt += "- Avoids guarantees about credit recovery or timeline promises\n"
     else:
-        # For templates, use the template content as a base
+        # For templates, use the template content as a base with specialized guidance
         prompt += f"Subject: {template_subject}\n"
         prompt += f"Template Base: {template_content}\n"
+        
+        # Add template-specific guidance
+        if template_id in ["legal_update", "legal_confirmation", "legal_threat"]:
+            prompt += "\nThis is a legal-related communication. Please ensure the email:\n"
+            prompt += "- Uses compliant language about legal protection (covers costs, doesn't prevent lawsuits)\n"
+            prompt += "- Maintains a reassuring but realistic tone\n"
+            prompt += "- Emphasizes FCDR's coordination with legal providers\n"
+        elif template_id == "lost_settlement":
+            prompt += "\nThis is about a missed settlement payment. Please ensure the email:\n"
+            prompt += "- Clearly explains consequences without creating panic\n"
+            prompt += "- Emphasizes urgency while maintaining professionalism\n"
+            prompt += "- Provides clear next steps\n"
+        elif template_id == "credit_concerns":
+            prompt += "\nThis is about credit score concerns. Please ensure the email:\n"
+            prompt += "- Acknowledges the importance of credit while focusing on debt resolution\n"
+            prompt += "- Explains that resolving accounts creates a foundation for rebuilding\n"
+            prompt += "- Avoids guarantees about credit recovery or timeline promises\n"
+        elif template_id == "settlement_timeline":
+            prompt += "\nThis is about settlement timeline expectations. Please ensure the email:\n"
+            prompt += "- Avoids providing specific timeframes for settlements\n"
+            prompt += "- Explains that creditors have different policies regarding negotiations\n"
+            prompt += "- Emphasizes that clients will be kept informed and need to approve each settlement\n"
+        elif template_id == "collection_calls":
+            prompt += "\nThis is about collection calls concerns. Please ensure the email:\n"
+            prompt += "- Acknowledges the frustration of receiving calls\n"
+            prompt += "- Explains that calls are part of the normal collection process\n"
+            prompt += "- Reassures that FCDR is actively working on their accounts\n"
+        elif template_id.startswith("sales_"):
+            prompt += "\nThis is a sales communication. Please ensure the email:\n"
+            prompt += "- Focuses on benefits of becoming debt-free faster than minimum payments\n"
+            prompt += "- Avoids guarantees about specific savings amounts or timeframes\n"
+            prompt += "- Emphasizes pre-approved nature and limited validity of quotes\n"
             
+        # Add recipient-specific parameters if provided
         if firstname:
             prompt += f"Use the name: {firstname}\n"
             
         if gateway and template_id == "lost_settlement":
             prompt += f"Payment Gateway: {gateway}\n"
     
+    # Add chain information if this is a reply
     if chain:
         prompt += f"This is a reply to the following email thread: {chain}\n"
         
+    # Add attachment mention if required
     if has_attachments:
         prompt += f"Mention that there are attachments included.\n"
     
     # Add special instruction to prioritize user instructions
     if instructions:
         prompt += f"\nIMPORTANT - PRIORITIZE THESE USER INSTRUCTIONS ABOVE TEMPLATE GUIDELINES: {instructions}\n"
-        prompt += "Feel free to significantly modify the template based on these instructions while maintaining the general purpose and professional tone.\n"
+        prompt += "Feel free to significantly modify the template based on these instructions while maintaining the general purpose, professional tone, and compliance requirements.\n"
     else:
-        prompt += "\nFeel free to improve upon the template. You don't need to follow it exactly - make it sound natural and conversational while maintaining professionalism.\n"
+        prompt += "\nImprove upon the template while maintaining compliance. Make it sound natural and conversational while maintaining professionalism and adhering to compliance guidelines.\n"
     
-    prompt += "\nFormat the email professionally with appropriate greeting, body, and signature. The signature should include 'First Choice Debt Relief' as the company name."
+    # Add universal compliance guidelines
+    prompt += "\nCRITICAL COMPLIANCE GUIDELINES - The email MUST:\n"
+    prompt += "- NEVER promise guaranteed results or specific outcomes\n"
+    prompt += "- NEVER offer legal advice or use language suggesting legal expertise\n"
+    prompt += "- NEVER use terms like 'debt forgiveness,' 'eliminate,' or 'erase' your debt\n"
+    prompt += "- NEVER state or imply that the program prevents lawsuits or legal action\n"
+    prompt += "- NEVER claim all accounts will be resolved within a specific timeframe\n"
+    prompt += "- NEVER suggest the program is a credit repair service\n"
+    prompt += "- NEVER guarantee that clients will qualify for any financing\n"
+    prompt += "- NEVER make promises about improving credit scores\n"
+    prompt += "- NEVER say clients are 'required' to stop payments to creditors\n"
+    prompt += "- Use phrases like 'negotiated resolution' instead of 'paid in full'\n"
+    
+    # Add tone guidance based on email type
+    if email_category == "customer_service":
+        prompt += "\nTONE GUIDANCE:\n"
+        prompt += "- Use a supportive yet professional tone\n"
+        prompt += "- Be direct and informative without being alarmist\n"
+        prompt += "- Balance empathy with factual information\n"
+    elif email_category == "sales":
+        prompt += "\nTONE GUIDANCE:\n"
+        prompt += "- Use a professional but positive tone\n"
+        prompt += "- Focus on the benefits without making guarantees\n"
+        prompt += "- Create a sense of opportunity without pressure tactics\n"
+    else:
+        prompt += "\nTONE GUIDANCE:\n"
+        prompt += "- Use a balanced, professional tone\n"
+        prompt += "- Be clear and direct while maintaining a supportive approach\n"
+        prompt += "- Balance factual information with appropriate empathy\n"
+    
+    # Add formatting instructions
+    prompt += "\nFormat the email professionally with:\n"
+    prompt += "- An appropriate greeting using the client's first name if available\n"
+    prompt += "- Clear, concise paragraphs (3-5 sentences maximum)\n"
+    prompt += "- Bullet points for lists or multiple items if appropriate\n"
+    prompt += "- A clear call-to-action or next steps\n"
+    prompt += "- Appropriate signature line based on the email type\n"
     
     # Initialize chat if needed
     if not state.get("assistant_id"):
         await initialize_chat(turn_context, state)
     
-    # Use the existing process_conversation_internal function to get AI response
-    client = create_client()
-    result = await process_conversation_internal(
-        client=client,
-        session=state["session_id"],
-        prompt=prompt,
-        assistant=state["assistant_id"],
-        stream_output=False
-    )
-    
-    # Extract and format the email
-    if isinstance(result, dict) and "response" in result:
-        email_text = result["response"]
-        
-        # Save the generated email in the state for potential editing
-        with conversation_states_lock:
-            state["last_generated_email"] = email_text
-            state["last_email_template"] = template_id
-            state["last_email_data"] = {
-                "recipient": recipient,
-                "firstname": firstname,
-                "gateway": gateway,
-                "subject": subject,
-                "instructions": instructions,
-                "chain": chain,
-                "has_attachments": has_attachments
-            }
-        
-        # Create an email result card with edit option
-        email_card = {
-            "type": "AdaptiveCard",
-            "version": "1.0",
-            "body": [
-                {
-                    "type": "TextBlock",
-                    "text": "Generated Email",
-                    "size": "large",
-                    "weight": "bolder"
-                },
-                {
-                    "type": "TextBlock",
-                    "text": email_text,
-                    "wrap": True
-                }
-            ],
-            "actions": [
-                {
-                    "type": "Action.Submit",
-                    "title": "Edit This Email",
-                    "data": {
-                        "action": "edit_email"
-                    }
-                },
-                {
-                    "type": "Action.Submit",
-                    "title": "Create Another Email",
-                    "data": {
-                        "action": "create_email"
-                    }
-                }
-            ]
-        }
-        
-        # Create attachment
-        attachment = Attachment(
-            content_type="application/vnd.microsoft.card.adaptive",
-            content=email_card
+    # Improved error handling
+    try:
+        # Use the existing process_conversation_internal function to get AI response
+        client = create_client()
+        result = await process_conversation_internal(
+            client=client,
+            session=state["session_id"],
+            prompt=prompt,
+            assistant=state["assistant_id"],
+            stream_output=False
         )
         
-        reply = _create_reply(turn_context.activity)
-        reply.attachments = [attachment]
-        await turn_context.send_activity(reply)
-    else:
-        await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again.")
+        # Extract and format the email
+        if isinstance(result, dict) and "response" in result:
+            email_text = result["response"]
+            
+            # Compliance check - scan for potential issues
+            potential_compliance_issues = check_email_compliance(email_text)
+            
+            # If serious compliance issues found, try regenerating once
+            if potential_compliance_issues and any(issue["severity"] == "high" for issue in potential_compliance_issues):
+                logging.warning(f"Potential compliance issues detected in email generation: {potential_compliance_issues}")
+                # Add stronger compliance guidance and regenerate
+                prompt += "\n\nWARNING: The previous generation had potential compliance issues. Please ensure the email strictly avoids:\n"
+                for issue in potential_compliance_issues:
+                    prompt += f"- {issue['description']}\n"
+                
+                # Re-generate with stronger compliance guidance
+                result = await process_conversation_internal(
+                    client=client,
+                    session=state["session_id"],
+                    prompt=prompt,
+                    assistant=state["assistant_id"],
+                    stream_output=False
+                )
+                if isinstance(result, dict) and "response" in result:
+                    email_text = result["response"]
+            
+            # Save the generated email in the state for potential editing
+            with conversation_states_lock:
+                state["last_generated_email"] = email_text
+                state["last_email_template"] = template_id
+                state["last_email_data"] = {
+                    "recipient": recipient,
+                    "firstname": firstname,
+                    "gateway": gateway,
+                    "subject": subject,
+                    "instructions": instructions,
+                    "chain": chain,
+                    "has_attachments": has_attachments
+                }
+            
+            # Create an enhanced email result card with more options
+            email_card = {
+                "type": "AdaptiveCard",
+                "version": "1.3",
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "body": [
+                    {
+                        "type": "Container",
+                        "style": "emphasis",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": template_id != "generic" ? get_template_title(template_id) : "Generated Email",
+                                "size": "large",
+                                "weight": "bolder",
+                                "horizontalAlignment": "center",
+                                "color": "accent"
+                            }
+                        ],
+                        "bleed": True
+                    },
+                    {
+                        "type": "Container",
+                        "style": "default",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": email_text,
+                                "wrap": True,
+                                "spacing": "medium"
+                            }
+                        ],
+                        "padding": "Medium"
+                    }
+                ],
+                "actions": [
+                    {
+                        "type": "Action.Submit",
+                        "title": "Edit This Email",
+                        "data": {
+                            "action": "edit_email"
+                        }
+                    },
+                    {
+                        "type": "Action.Submit",
+                        "title": "Create Another Email",
+                        "style": "positive",
+                        "data": {
+                            "action": "create_email"
+                        }
+                    },
+                    {
+                        "type": "Action.Submit",
+                        "title": "Return to Home",
+                        "data": {
+                            "action": "new_chat"
+                        }
+                    }
+                ]
+            }
+            
+            # Create attachment
+            attachment = Attachment(
+                content_type="application/vnd.microsoft.card.adaptive",
+                content=email_card
+            )
+            
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [attachment]
+            await turn_context.send_activity(reply)
+        else:
+            await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again with more details about what you need.")
+    except Exception as e:
+        logging.error(f"Error generating email: {str(e)}")
+        traceback.print_exc()
+        await turn_context.send_activity(f"I encountered an error while generating your email template. Please try again or contact support if the issue persists.")
+def check_email_compliance(email_text):
+    """
+    Checks email text for potential compliance issues.
+    
+    Args:
+        email_text: The generated email text to check
+        
+    Returns:
+        List of potential compliance issues with severity level
+    """
+    issues = []
+    
+    # List of problematic phrases with severity levels
+    compliance_checks = [
+        {"pattern": r"guarantee", "description": "Guarantee language (avoid promises about outcomes)", "severity": "high"},
+        {"pattern": r"prevent.*lawsuit|lawsuit.*prevent", "description": "Implying prevention of lawsuits", "severity": "high"},
+        {"pattern": r"eliminat(e|ing)|forgiv(e|en|ing)|eras(e|ing)|wip(e|ing) out", "description": "Debt elimination language", "severity": "high"},
+        {"pattern": r"within (\d+|a few|several) (day|week|month)s", "description": "Specific settlement timeframes", "severity": "high"},
+        {"pattern": r"improve.*credit|credit.*improve|rebuild.*credit|credit.*rebuild", "description": "Credit improvement promises", "severity": "high"},
+        {"pattern": r"required to stop|must stop", "description": "Mandating payment stoppage", "severity": "high"},
+        {"pattern": r"paid in full", "description": "Paid in full language (use 'negotiated resolution' instead)", "severity": "medium"},
+        {"pattern": r"act (now|immediately|today)|urgent|final notice", "description": "Pressure tactics", "severity": "medium"},
+        {"pattern": r"cheaper|cheapest", "description": "Cheapest option language", "severity": "low"},
+    ]
+    
+    # Check for each pattern
+    for check in compliance_checks:
+        if re.search(check["pattern"], email_text.lower()):
+            issues.append(check)
+    
+    return issues
 async def send_periodic_typing(turn_context: TurnContext, interval_seconds: int):
     """Sends typing indicators periodically until the task is cancelled"""
     try:
