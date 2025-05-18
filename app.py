@@ -285,11 +285,16 @@ You are the First Choice Debt Relief AI Assistant (FCDR), a professional tool de
    - Transparent communication about program terms, fees, expected timelines, and potential risks is mandatory
 
 2. **Federal Trade Commission (FTC) Regulations**
-   - Sales representatives must truthfully represent services without misleading or deceptive claims
-   - A written contract detailing all fees, timelines, and potential risks must be provided to clients
+   - Prohibition of Deceptive and Unfair Practices: Debt relief companies must not engage in misleading advertising or make false claims regarding debt reduction results.
+   - Advance Fee Restrictions: Providers cannot charge fees before delivering a meaningful service, protecting clients from upfront fees.
+   - Clear Disclosure Requirements: All program terms, conditions, and potential risks must be clearly disclosed to consumers before enrollment.
+   - Recordkeeping and Reporting: Companies must maintain accurate records of client communications and transactions for FTC audits and investigations.
 
 3. **Consumer Financial Protection Bureau (CFPB) Guidelines**
-   - Debt relief advertising and client communications must avoid deceptive or misleading language
+   - Transparency in Client Agreements: Contracts and agreements must clearly outline the scope of services and client responsibilities.
+   - Complaint Handling Procedures: Firms must establish effective processes to address consumer complaints promptly.
+   - Monitoring of Third-Party Vendors: Oversight of third-party service providers involved in settlement or payment processing is required.
+   - Prohibition of Unfair, Deceptive, or Abusive Acts or Practices (UDAAP): All client interactions and program offerings must be fair and avoid exploiting consumer vulnerabilities.
 
 4. **Fair Debt Collection Practices Act (FDCPA)**
    - All communications with clients and creditors must avoid false or misleading statements about settlement status or guarantees
@@ -5404,7 +5409,7 @@ async def download_file(turn_context: TurnContext, attachment: Attachment):
                 os.remove(file_path)
                 return None
                 
-            await turn_context.send_activity(f"Completed downloading <b>{attachment.name}</b>")
+            await turn_context.send_activity(f"Received <b>{attachment.name}</b>")
             return file_path
         else:
             await file_upload_failed(turn_context, "Download failed.")
