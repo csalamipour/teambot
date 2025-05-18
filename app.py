@@ -525,6 +525,18 @@ When engaging in casual conversation or non-work related chitchat:
 - Acknowledge special occasions (holidays, company milestones) with brief, appropriate messages
 - Participate in light team-building conversations while maintaining a service-oriented focus
 
+### USING RETRIEVED KNOWLEDGE
+When you receive a message with "USER QUERY" followed by "RETRIEVED KNOWLEDGE":
+
+1. ALWAYS treat the USER QUERY as the actual question being asked
+2. Use the RETRIEVED KNOWLEDGE as your primary source for answering the query
+3. Cite specific documents when referencing information from them
+4. When RETRIEVED KNOWLEDGE contains highlighted sections, prioritize these as most relevant
+5. If "No relevant documents found" appears, answer based on your general knowledge
+6. Never mention the format of the query in your response - respond directly to the user question
+
+Your response should appear as if you're responding directly to the USER QUERY, not to the entire combined message.
+
 ## ERROR HANDLING & LIMITATIONS
 
 When faced with information gaps or limitations:
@@ -4470,7 +4482,7 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
                         "items": [
                             {
                                 "type": "TextBlock",
-                                "text": template_id != "generic" ? get_template_title(template_id) : "Generated Email",
+                                "text": get_template_title(template_id) if template_id != "generic" else "Generated Email",
                                 "size": "large",
                                 "weight": "bolder",
                                 "horizontalAlignment": "center",
@@ -5497,11 +5509,45 @@ async def initialize_chat_silent(turn_context: TurnContext, state):
     except Exception as e:
         logging.error(f"Error in initialize_chat_silent: {e}")
         return False
+async def format_message_with_rag(user_message, relevant_docs):
+    """Format a message combining user query with retrieved knowledge"""
+    formatted_message = user_message
+    
+    # Only add context if we have relevant documents
+    if relevant_docs and len(relevant_docs) > 0:
+        # Create the context section
+        context = "\n\n--- RETRIEVED KNOWLEDGE ---\n\n"
+        
+        # Add each relevant document
+        for i, doc in enumerate(relevant_docs, 1):
+            # Add document identification
+            context += f"DOCUMENT {i}: {doc.get('filename', 'Unknown Document')}\n"
+            
+            # Add highlighted content if available
+            if doc.get('highlights') and len(doc['highlights']) > 0:
+                context += "RELEVANT SECTIONS:\n"
+                for highlight in doc['highlights']:
+                    context += f"- {highlight}\n"
+            else:
+                # Add excerpt of content if no highlights
+                excerpt = doc.get('content', '')[:500]
+                if excerpt:
+                    context += f"CONTENT: {excerpt}...\n"
+            
+            context += "\n"
+        
+        # Add the combined message
+        formatted_message = f"{formatted_message}\n\n{context}"
+    
+    return formatted_message
 # Modified handle_text_message with thread summarization
 async def handle_text_message(turn_context: TurnContext, state):
+    """Handle text messages from users with RAG integration"""
     user_message = turn_context.activity.text.strip()
     conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
     conversation_id = conversation_reference.conversation.id
+    
+    # Handle special commands
     if user_message.lower() in ["/email", "create email", "write email", "email template", "email"]:
         await send_email_card(turn_context)
         return
@@ -5530,9 +5576,6 @@ async def handle_text_message(turn_context: TurnContext, state):
     logging.info(f"Processing message from user {user_id} in conversation {conversation_id}: {user_message[:50]}...")
     
     # If no assistant yet, initialize chat with the message as context
-    # if not stored_assistant_id:
-    #     await initialize_chat(turn_context, state, context=user_message)
-    #     return
     if not stored_assistant_id:
         # Initialize chat silently first
         success = await initialize_chat_silent(turn_context, state)
@@ -5545,10 +5588,18 @@ async def handle_text_message(turn_context: TurnContext, state):
             
             # Process the message without sending welcome messages
             client = create_client()
+            
+            # RAG INTEGRATION - RETRIEVE RELEVANT DOCUMENTS
+            relevant_docs = await retrieve_documents(user_message, top=3)
+            
+            # Format the message with RAG context and user query
+            enhanced_message = await format_message_with_rag(user_message, relevant_docs)
+            
+            # Send the enhanced message
             client.beta.threads.messages.create(
                 thread_id=stored_session_id,
                 role="user",
-                content=user_message
+                content=enhanced_message
             )
             
             # Process the message with streaming
@@ -5597,14 +5648,31 @@ async def handle_text_message(turn_context: TurnContext, state):
         if not validation["thread_valid"] or not validation["assistant_valid"]:
             logging.warning(f"Resource validation failed for user {user_id}: thread_valid={validation['thread_valid']}, assistant_valid={validation['assistant_valid']}")
             raise Exception("Invalid conversation resources detected - forcing recovery")
+        
+        # RAG INTEGRATION - RETRIEVE RELEVANT DOCUMENTS
+        relevant_docs = await retrieve_documents(user_message, top=3)
+        
+        # Format the message with RAG context and user query
+        enhanced_message = await format_message_with_rag(user_message, relevant_docs)
+        
+        # Send the enhanced message
+        try:
+            client.beta.threads.messages.create(
+                thread_id=current_session_id,
+                role="user",
+                content=enhanced_message
+            )
+        except Exception as msg_error:
+            logging.error(f"Error adding message to thread: {msg_error}")
+            raise
             
         # Use the optimal streaming approach based on available libraries and preferences
         if TEAMS_AI_AVAILABLE:
             # Use enhanced streaming with Teams AI library
-            await stream_with_teams_ai(turn_context, state, user_message)
+            await stream_with_teams_ai(turn_context, state, None)
         else:
             # Use custom TeamsStreamingResponse if Teams AI library is not available
-            await stream_with_custom_implementation(turn_context, state, user_message)
+            await stream_with_custom_implementation(turn_context, state, None)
         
         # Mark thread as no longer busy (thread-safe)
         with conversation_states_lock:
@@ -5638,6 +5706,8 @@ async def handle_text_message(turn_context: TurnContext, state):
             await send_fallback_response(turn_context, user_message)
         except Exception as fallback_error:
             logging.error(f"Fallback response also failed: {fallback_error}")
+
+
 
 # Modified process_pending_messages function to fix the run conflict
 async def process_pending_messages(turn_context: TurnContext, state, conversation_id):
