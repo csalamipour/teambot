@@ -140,11 +140,15 @@ def create_search_client():
         logging.warning("Azure AI Search credentials not configured")
         return None
         
-    return SearchClient(
-        endpoint=AZURE_SEARCH_ENDPOINT,
-        index_name=AZURE_SEARCH_INDEX_NAME,
-        credential=AzureKeyCredential(AZURE_SEARCH_KEY)
-    )
+    try:
+        return SearchClient(
+            endpoint=AZURE_SEARCH_ENDPOINT,
+            index_name=AZURE_SEARCH_INDEX_NAME,
+            credential=AzureKeyCredential(AZURE_SEARCH_KEY)
+        )
+    except Exception as e:
+        logging.error(f"Error creating search client: {e}")
+        return None
 
 # Define system prompt here instead of relying on external variable
 SYSTEM_PROMPT = '''
@@ -587,96 +591,69 @@ When directing employees to additional resources:
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
 PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant and applicable)'''
 async def retrieve_documents(query, top=3, filters=None):
-    """Retrieves relevant documents from Azure AI Search using vector search with fallback to standard search."""
+    """Retrieves relevant documents from Azure AI Search using standard keyword search."""
     try:
         search_client = create_search_client()
         if not search_client:
             logging.error("Search client not configured")
             return []
         
-        # Configure search options (basic options for all search types)
+        # Configure search options (basic options for standard search)
         search_options = {
             "top": top,
-            "include_total_count": True
+            "include_total_count": True,
+            "highlight_fields": "content",
+            "highlight_pre_tag": "**",
+            "highlight_post_tag": "**"
         }
         
         # Add filters if provided
         if filters:
             search_options["filter"] = filters
         
-        # Try vector search first (since you have vector profiles)
-        vector_results = []
-        try:
-            # Vector search query
-            vector_options = search_options.copy()
-            vector_options["vector_queries"] = [{
-                "kind": "text",
-                "text": query,
-                "k": top,
-                "fields": "content",  # Adjust this to match your vector field
-                "profile_name": "vector-profile-1747549264289"
-            }]
-            
-            vector_results = list(search_client.search(
-                search_text=None,  # No text search when doing vector search
-                **vector_options
-            ))
-            
-            logging.info(f"Vector search returned {len(vector_results)} results")
-            
-            # If we got results, format them
-            if vector_results:
-                return format_search_results(vector_results)
-                
-        except Exception as vector_error:
-            logging.warning(f"Vector search failed, falling back to keyword search: {vector_error}")
+        # Perform standard keyword search
+        results = list(search_client.search(query, **search_options))
+        logging.info(f"Search returned {len(results)} results")
         
-        # Fall back to standard keyword search if vector search fails or returns no results
-        if not vector_results:
-            logging.info("Using standard keyword search as fallback")
-            standard_results = list(search_client.search(query, **search_options))
-            return format_search_results(standard_results)
+        documents = []
+        for result in results:
+            # Extract filename from the base64-encoded path
+            filename = "Unknown Document"
+            if "metadata_storage_path" in result:
+                try:
+                    import base64
+                    path = base64.b64decode(result["metadata_storage_path"]).decode('utf-8')
+                    # Extract just the filename from the path
+                    filename = path.split('/')[-1]
+                    # URL decode the filename if needed
+                    import urllib.parse
+                    filename = urllib.parse.unquote(filename)
+                except Exception as e:
+                    logging.warning(f"Error extracting filename: {e}")
+                    
+            # Create standard document object
+            doc = {
+                "score": result.get("@search.score", 0),
+                "content": result.get("content", ""),
+                "filename": filename
+            }
             
-        # If we got here with no results, return empty list
-        return []
+            # Add highlights if available
+            if "@search.highlights" in result and "content" in result["@search.highlights"]:
+                doc["highlights"] = result["@search.highlights"]["content"]
             
+            documents.append(doc)
+        
+        if not documents:
+            logging.info("No relevant documents found for RAG context")
+            
+        return documents
+        
     except Exception as e:
         logging.error(f"Error retrieving documents for query '{query}': {e}")
         traceback.print_exc()
         return []
 
-def format_search_results(results):
-    """Format search results into a standard structure."""
-    documents = []
-    for result in results:
-        # Extract the filename from the base64-encoded metadata_storage_path
-        filename = "Unknown Document"
-        if "metadata_storage_path" in result:
-            try:
-                import base64
-                path = base64.b64decode(result["metadata_storage_path"]).decode('utf-8')
-                # Extract just the filename from the path
-                filename = path.split('/')[-1]
-                # URL decode the filename if needed
-                import urllib.parse
-                filename = urllib.parse.unquote(filename)
-            except:
-                pass
-                
-        # Create the document object
-        doc = {
-            "score": result.get("@search.score", 0),
-            "content": result.get("content", ""),
-            "filename": filename,
-        }
-        
-        # Add highlights if available
-        if "@search.highlights" in result and "content" in result["@search.highlights"]:
-            doc["highlights"] = result["@search.highlights"]["content"]
-        
-        documents.append(doc)
-    
-    return documents
 def create_new_chat_card():
     """Creates an adaptive card for starting a new chat"""
     card = {
@@ -5585,23 +5562,16 @@ async def format_message_with_rag(user_message, relevant_docs):
                     context += f"- {highlight}\n"
             else:
                 # Add excerpt of content if no highlights
-                excerpt = doc.get('content', '')[:500]
-                if excerpt:
-                    context += f"CONTENT: {excerpt}...\n"
+                content = doc.get('content', '')
+                if content:
+                    # Limit to a reasonable excerpt length
+                    excerpt = content[:500] + ("..." if len(content) > 500 else "")
+                    context += f"CONTENT: {excerpt}\n"
             
             context += "\n"
         
         # Add the combined message
         formatted_message = f"{formatted_message}\n\n{context}"
-        
-        # Log the RAG content for debugging
-        logging.info(f"RAG Context added to message:\n{context}")
-        
-        # OPTIONAL: If you want to see this in the Teams UI for debugging,
-        # You can temporarily add this:
-        await turn_context.send_activity("DEBUG - RAG Content:\n" + context)
-    else:
-        logging.info("No relevant documents found for RAG context")
     
     return formatted_message
 # Modified handle_text_message with thread summarization
