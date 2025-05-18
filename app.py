@@ -591,69 +591,79 @@ When directing employees to additional resources:
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
 PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant and applicable)'''
 async def retrieve_documents(query, top=3, filters=None):
-    """Retrieves relevant documents from Azure AI Search using standard keyword search."""
+    """Retrieves relevant documents from Azure AI Search."""
     try:
         search_client = create_search_client()
         if not search_client:
-            logging.error("Search client not configured")
+            logging.warning("Search client could not be created - check Azure AI Search credentials")
             return []
-        
-        # Configure search options (basic options for standard search)
+            
+        # Configure search options
         search_options = {
             "top": top,
-            "include_total_count": True,
-            "highlight_fields": "content",
-            "highlight_pre_tag": "**",
-            "highlight_post_tag": "**"
+            "count": True,
+            "query_type": "semantic",
+            "semantic_configuration": "rag-1747554898629-semantic-configuration",  # Use your actual semantic config name
+            "query_language": "en-us",
+            "captions": "extractive",
+            "answers": "extractive|count-3",
+            "highlight_fields": "chunk",
+            "highlight_pre_tag": "<em>",
+            "highlight_post_tag": "</em>"
         }
         
         # Add filters if provided
         if filters:
             search_options["filter"] = filters
-        
-        # Perform standard keyword search
-        results = list(search_client.search(query, **search_options))
-        logging.info(f"Search returned {len(results)} results")
+            
+        # Execute the search
+        results = search_client.search(query, **search_options)
         
         documents = []
+        
+        # Process each search result
         for result in results:
-            # Extract filename from the base64-encoded path
-            filename = "Unknown Document"
-            if "metadata_storage_path" in result:
-                try:
-                    import base64
-                    path = base64.b64decode(result["metadata_storage_path"]).decode('utf-8')
-                    # Extract just the filename from the path
-                    filename = path.split('/')[-1]
-                    # URL decode the filename if needed
-                    import urllib.parse
-                    filename = urllib.parse.unquote(filename)
-                except Exception as e:
-                    logging.warning(f"Error extracting filename: {e}")
-                    
-            # Create standard document object
             doc = {
+                "id": result.get("chunk_id", ""),
+                "title": result.get("title", "Unknown Document"),
                 "score": result.get("@search.score", 0),
-                "content": result.get("content", ""),
-                "filename": filename
+                "content": result.get("chunk", ""),
+                "parent_id": result.get("parent_id", "")
             }
             
-            # Add highlights if available
-            if "@search.highlights" in result and "content" in result["@search.highlights"]:
-                doc["highlights"] = result["@search.highlights"]["content"]
+            # Add captions if available (these are the highlighted snippets)
+            if "@search.captions" in result:
+                doc["captions"] = []
+                for caption in result["@search.captions"]:
+                    doc["captions"].append({
+                        "text": caption.get("text", ""),
+                        "highlights": caption.get("highlights", "")
+                    })
             
             documents.append(doc)
         
-        if not documents:
-            logging.info("No relevant documents found for RAG context")
-            
-        return documents
+        # Also check if we have search.answers - these are often the most relevant content
+        answers = []
+        if hasattr(results, '@search.answers') and results['@search.answers']:
+            for answer in results['@search.answers']:
+                answers.append({
+                    "text": answer.get("text", ""),
+                    "highlights": answer.get("highlights", ""),
+                    "score": answer.get("score", 0),
+                    "key": answer.get("key", "")
+                })
         
+        # Return both regular results and any answers
+        return {
+            "documents": documents,
+            "answers": answers,
+            "total_count": results.get("@odata.count", 0)
+        }
+            
     except Exception as e:
         logging.error(f"Error retrieving documents for query '{query}': {e}")
         traceback.print_exc()
-        return []
-
+        return {"documents": [], "answers": [], "total_count": 0}
 def create_new_chat_card():
     """Creates an adaptive card for starting a new chat"""
     card = {
@@ -5541,34 +5551,49 @@ async def initialize_chat_silent(turn_context: TurnContext, state):
     except Exception as e:
         logging.error(f"Error in initialize_chat_silent: {e}")
         return False
-async def format_message_with_rag(user_message, relevant_docs):
+async def format_message_with_rag(user_message, search_results):
     """Format a message combining user query with retrieved knowledge"""
     formatted_message = user_message
     
     # Only add context if we have relevant documents
-    if relevant_docs and len(relevant_docs) > 0:
+    if search_results and (search_results.get("documents") or search_results.get("answers")):
         # Create the context section
         context = "\n\n--- RETRIEVED KNOWLEDGE ---\n\n"
         
-        # Add each relevant document
-        for i, doc in enumerate(relevant_docs, 1):
-            # Add document identification
-            context += f"DOCUMENT {i}: {doc.get('filename', 'Unknown Document')}\n"
-            
-            # Add highlighted content if available
-            if doc.get('highlights') and len(doc['highlights']) > 0:
-                context += "RELEVANT SECTIONS:\n"
-                for highlight in doc['highlights']:
-                    context += f"- {highlight}\n"
-            else:
-                # Add excerpt of content if no highlights
-                content = doc.get('content', '')
-                if content:
-                    # Limit to a reasonable excerpt length
-                    excerpt = content[:500] + ("..." if len(content) > 500 else "")
-                    context += f"CONTENT: {excerpt}\n"
-            
+        # First add answers if available (usually most relevant)
+        answers = search_results.get("answers", [])
+        if answers:
+            context += "TOP ANSWERS:\n"
+            for i, answer in enumerate(answers, 1):
+                context += f"{i}. {answer.get('highlights', answer.get('text', ''))}\n"
             context += "\n"
+        
+        # Then add document content with captions
+        documents = search_results.get("documents", [])
+        if documents:
+            context += "RELEVANT DOCUMENTS:\n"
+            for i, doc in enumerate(documents, 1):
+                # Add document title
+                context += f"DOCUMENT {i}: {doc.get('title', 'Unknown Document')}\n"
+                
+                # Add captions/highlights if available
+                if doc.get('captions'):
+                    for j, caption in enumerate(doc['captions'], 1):
+                        context += f"- {caption.get('highlights', caption.get('text', ''))}\n"
+                else:
+                    # Add a portion of content if no highlights
+                    content = doc.get('content', '').strip()
+                    if content:
+                        # Truncate long content
+                        if len(content) > 500:
+                            content = content[:500] + "..."
+                        context += f"- {content}\n"
+                
+                context += "\n"
+        
+        # If there are no results, let the AI know
+        if not answers and not documents:
+            context += "No relevant documents found in the knowledge base for this query.\n"
         
         # Add the combined message
         formatted_message = f"{formatted_message}\n\n{context}"
