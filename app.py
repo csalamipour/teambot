@@ -140,15 +140,11 @@ def create_search_client():
         logging.warning("Azure AI Search credentials not configured")
         return None
         
-    try:
-        return SearchClient(
-            endpoint=AZURE_SEARCH_ENDPOINT,
-            index_name=AZURE_SEARCH_INDEX_NAME,
-            credential=AzureKeyCredential(AZURE_SEARCH_KEY)
-        )
-    except Exception as e:
-        logging.error(f"Error creating search client: {e}")
-        return None
+    return SearchClient(
+        endpoint=AZURE_SEARCH_ENDPOINT,
+        index_name=AZURE_SEARCH_INDEX_NAME,
+        credential=AzureKeyCredential(AZURE_SEARCH_KEY)
+    )
 
 # Define system prompt here instead of relying on external variable
 SYSTEM_PROMPT = '''
@@ -533,15 +529,16 @@ When engaging in casual conversation or non-work related chitchat:
 - Participate in light team-building conversations while maintaining a service-oriented focus
 
 ## USING RETRIEVED KNOWLEDGE
-When I provide information labeled "RETRIEVED KNOWLEDGE" with a user message:
+You may receive messages containing a section labeled "--- RETRIEVED KNOWLEDGE ---" followed by document excerpts. When this happens:
 
-1. This section contains information that MAY be relevant to answering the query
-2. IMPORTANT: The retrieved content may or may not be helpful - use your judgment
-3. If the retrieved content seems relevant and helpful, use it to inform your response
-4. If the retrieved content seems irrelevant or unhelpful, rely on your general knowledge instead
-5. When using information from retrieved knowledge, cite the document (e.g., "According to Document 1...")
-6. DO NOT apologize for irrelevant retrieval results - simply answer with your best knowledge
-7. Balance between retrieved knowledge and your general knowledge to provide the most accurate answer
+1. This section contains relevant information from First Choice Debt Relief's internal documents that will help you answer the query more accurately.
+2. Treat this retrieved knowledge as authoritative and use it as your primary source when responding to the user's question. This information should take precedence over your general knowledge when there are differences.
+3. When referencing information from the retrieved documents, cite the source by referring to "Based on FCDR internal documentation...".
+4. If the retrieved knowledge doesn't fully answer all aspects of the question, combine it with your general knowledge about debt relief and financial services, while ensuring there are no contradictions.
+5. If specific policy, procedure, or template details are in the retrieved knowledge, always follow those exactly, especially for email templates, legal requirements, and compliance policies.
+6. If the retrieved knowledge seems completely irrelevant to the question, acknowledge this briefly and still try to provide a helpful answer based on your general understanding of First Choice Debt Relief's services and practices.
+7. When specific document names or file paths are mentioned in the retrieved knowledge (like SOPs or templates), refer to them by name in your response to help the user locate these resources if needed.
+8. The retrieved knowledge may include procedural steps, compliance requirements, or email templates - follow these precisely when providing guidance to the user.
 
 Remember that retrieved information might be incomplete or only partially relevant. Use your judgment to determine how much weight to give it in your response.
 
@@ -590,45 +587,66 @@ When directing employees to additional resources:
 
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
 PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant and applicable)'''
-async def retrieve_documents(query, top=3):
-    """Simplified document retrieval from Azure AI Search."""
+async def retrieve_documents(query, top=5):
+    """
+    Retrieves documents from Azure AI Search using basic parameters.
+    Adapts to the index structure by looking for content in various fields.
+    """
     try:
         search_client = create_search_client()
         if not search_client:
             return []
             
-        # Configure search options
-        search_options = {
-            "top": top,
-            "query_type": "semantic",  # Using semantic search
-            "semantic_configuration_name": "default"
-        }
-            
+        # Use only basic search parameters that work with any SDK version
         results = search_client.search(
             search_text=query,
-            **search_options
+            top=top
         )
         
         documents = []
         
-        # Process @search.answers if available
-        if hasattr(results, '@search.answers') and results['@search.answers']:
-            for answer in results['@search.answers']:
-                documents.append({
-                    "title": "Document " + answer.get("key", "").split("_")[0],
-                    "content": answer.get("text", "")
-                })
-        else:
-            # Fallback to regular results
-            for result in results:
-                # Get text content field (adapt to your index schema)
-                content = result.get("text", "") or result.get("chunk", "")
-                
-                if content:
-                    documents.append({
-                        "title": "Document " + result.get("id", "").split("_")[0],
-                        "content": content
-                    })
+        # Process search results
+        for item in results:
+            # Try to get content from various possible field names
+            content = None
+            for field_name in ["chunk", "content", "text"]:
+                if field_name in item:
+                    content = item[field_name]
+                    if content:
+                        break
+            
+            if not content:
+                # If we can't find a content field, look for any string field
+                for key, value in item.items():
+                    if isinstance(value, str) and len(value) > 50:
+                        content = value
+                        break
+            
+            if not content:
+                continue
+            
+            # Try to get a title
+            title = None
+            for title_field in ["title", "name", "filename"]:
+                if title_field in item:
+                    title = item[title_field]
+                    if title:
+                        break
+            
+            if not title:
+                # Use a key as title if available
+                for key_field in ["id", "key", "chunk_id"]:
+                    if key_field in item:
+                        title = f"Document {item[key_field]}"
+                        break
+                        
+            if not title:
+                title = "Unknown Document"
+            
+            documents.append({
+                "title": title,
+                "content": content
+            })
         
         return documents
             
