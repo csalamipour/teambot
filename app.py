@@ -559,6 +559,59 @@ When directing employees to additional resources:
 
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
 '''
+def create_new_chat_card():
+    """Creates an adaptive card for starting a new chat"""
+    card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.5",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "Start a New Conversation",
+                "size": "medium",
+                "weight": "bolder",
+                "horizontalAlignment": "center"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Your previous conversation has ended. Would you like to start a new one?",
+                "wrap": True,
+                "horizontalAlignment": "center"
+            }
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": "Start New Chat",
+                "data": {
+                    "action": "new_chat"
+                },
+                "style": "positive"
+            }
+        ]
+    }
+    
+    return Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card
+    )
+
+async def handle_new_chat_command(turn_context: TurnContext, state, conversation_id):
+    """Handles commands to start a new chat or reset the current chat"""
+    # Send typing indicator
+    await turn_context.send_activity(create_typing_activity())
+    
+    # Clear any pending messages for this conversation
+    with pending_messages_lock:
+        if conversation_id in pending_messages:
+            pending_messages[conversation_id].clear()
+    
+    # Send a message informing the user
+    await turn_context.send_activity("Starting a new conversation...")
+    
+    # Initialize a new chat
+    await initialize_chat(turn_context, None)  # Pass None to force new state creation
 def create_typing_stop_activity():
     """Creates an activity to explicitly stop the typing indicator"""
     return Activity(
