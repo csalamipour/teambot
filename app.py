@@ -1744,13 +1744,6 @@ async def apply_email_edits(turn_context: TurnContext, state, edit_instructions)
                         "data": {
                             "action": "create_email"
                         }
-                    },
-                    {
-                        "type": "Action.Submit",
-                        "title": "Return to Home",
-                        "data": {
-                            "action": "new_chat"
-                        }
                     }
                 ]
             }
