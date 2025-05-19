@@ -5964,70 +5964,64 @@ async def initialize_chat_silent(turn_context: TurnContext, state):
         return False
 async def format_message_with_rag(user_message, documents):
     """
-    Format a message combining user instructions with retrieved knowledge,
-    with clear priority indicators and structured formatting.
-    
-    Args:
-        user_message: The original user instructions
-        documents: List of retrieved documents
-        
-    Returns:
-        Formatted message with prioritized sections or original message if an error occurs
+    Format a message combining user query with retrieved text knowledge.
+    Returns original message if an error occurs.
     """
     try:
-        # Only proceed with formatting if we have documents
-        if not documents or len(documents) == 0:
-            return user_message
-            
-        # Build a properly structured message with clear priorities
-        formatted_message = "ORIGINAL USER QUESTION :\n" + user_message
+        formatted_message = user_message
         
-        # Add retrieved knowledge section with priority indicator
-        formatted_message += "\n\n--- RETRIEVED KNOWLEDGE ---\n"
-        formatted_message += "The following information has been retrieved from First Choice Debt Relief's knowledge base. Closely follow the knowledge while answering user question."
-        
-        logging.info(f"RAG: Found {len(documents)} potentially relevant documents")
-        
-        # Add document content with clear formatting
-        for i, doc in enumerate(documents, 1):
-            # Handle both dictionary and non-dictionary items
-            if isinstance(doc, dict):
-                title = doc.get("title", f"Document {i}")
-                content = doc.get("content", "")
-            else:
-                # Fallback if doc is not a dictionary
-                title = f"Document {i}"
-                content = str(doc)
+        # Only add context if we have relevant documents
+        if documents and len(documents) > 0:
+            # Create the context section
+            context = "\n\n--- RETRIEVED KNOWLEDGE ---\n\n"
+            logging.info(f"RAG: Found {len(documents)} relevant documents")
             
-            formatted_message += f"DOCUMENT {i}: {title}\n"
-            
-            # Smart truncation - show up to 2000 chars but try to break at a sentence
-            if len(content) > 2000:
-                # Find the last period within the first 2000 chars
-                last_period = content[:2000].rfind('.')
-                if last_period > 0:
-                    content = content[:last_period+1] + " [content continues...]"
+            # Add document content
+            for i, doc in enumerate(documents, 1):
+                # Handle both dictionary and non-dictionary items
+                if isinstance(doc, dict):
+                    title = doc.get("title", "")
+                    content = doc.get("content", "")
                 else:
-                    content = content[:2000] + " [content continues...]"
+                    # Fallback if doc is not a dictionary
+                    title = ""
+                    content = str(doc)
+                
+                # Add the title (source filename) without "DOCUMENT X:" prefix
+                if title:
+                    context += f"{title}\n"
+                
+                # Smart truncation - show up to 5000 chars but try to break at a sentence
+                if len(content) > 5000:
+                    # Find the last period within the first 5000 chars
+                    last_period = content[:5000].rfind('.')
+                    if last_period > 0:
+                        content = content[:last_period+1] + " [content continues...]"
+                    else:
+                        content = content[:5000] + " [content continues...]"
+                
+                context += f"{content}\n\n"
+                logging.info(f"RAG Document {i}: {title} - {content[:100]}...")
+                
+            # Add the combined message
+            formatted_message = f"{formatted_message}\n\n{context}"
             
-            formatted_message += f"{content}\n\n"
-            logging.info(f"RAG Document {i}: {title} - {content[:100]}...")
-        
-        # Add a clear end marker
-        formatted_message += "--- END OF RETRIEVED KNOWLEDGE ---"
-        
-        # Log a reasonable amount of the message for debugging
-        log_preview_length = min(300, len(formatted_message))
-        logging.info(f"COMPLETE RAG MESSAGE PREVIEW: {formatted_message[:log_preview_length]}... [total length: {len(formatted_message)}]")
-        
+        logging.info(f"COMPLETE RAG MESSAGE: {formatted_message[:500]}... [message continues, total length: {len(formatted_message)}]")
         return formatted_message
         
     except Exception as e:
         # Log the error but don't break the conversation flow
         logging.error(f"Error formatting RAG message: {e}")
-        traceback.print_exc()
-        # Return original message without RAG context
-        return user_message
+        
+        # Fallback: Just append the raw documents without any parsing
+        try:
+            fallback_message = f"{user_message}\n\n--- RETRIEVED KNOWLEDGE ---\n\n"
+            fallback_message += str(documents)
+            logging.info("Using fallback: appending raw documents without parsing")
+            return fallback_message
+        except:
+            # Ultimate fallback - return original message
+            return user_message
 # Modified handle_text_message with thread summarization
 async def handle_text_message(turn_context: TurnContext, state):
     """Handle text messages from users with RAG integration"""
