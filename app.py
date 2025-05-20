@@ -1724,26 +1724,6 @@ async def handle_new_chat_command(turn_context: TurnContext, state, conversation
 
 # Add this to your bot initialization code
 
-        
-        # Handle other invoke types if needed
-        
-    except Exception as e:
-        logging.error(f"Error in on_invoke_activity: {e}")
-        traceback.print_exc()
-        
-        # Return an error response
-        if hasattr(turn_context, 'send_activity'):
-            await turn_context.send_activity(Activity(
-                type=ActivityTypes.invoke_response,
-                value={
-                    "statusCode": 500,
-                    "type": "application/vnd.microsoft.error",
-                    "value": str(e)
-                }
-            ))
-
-# Assign the invoke handler to the adapter
-
 async def on_adaptive_card_invoke(turn_context: TurnContext, invoke_value: dict):
     """Handler for Adaptive Card invocations"""
     try:
