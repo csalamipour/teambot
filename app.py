@@ -116,7 +116,7 @@ FILE_DIRECTORY = "files/"
 os.makedirs(FILE_DIRECTORY, exist_ok=True)
 
 # Create FastAPI app
-app = FastAPI(title="Product Management and Teams Bot")
+app = FastAPI(title="Teams AI Assistant")
 
 # Add CORS middleware
 app.add_middleware(
@@ -733,74 +733,124 @@ Email: service@firstchoicedebtrelief.com"
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
 PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant and applicable)
 '''
-# async def retrieve_documents(query, top=3):
-#     """
-#     Retrieves documents from Azure AI Search using basic parameters.
-#     Adapts to the index structure by looking for content in various fields.
-#     """
-#     try:
-#         search_client = create_search_client()
-#         if not search_client:
-#             return []
-            
-#         # Use only basic search parameters that work with any SDK version
-#         results = search_client.search(
-#             search_text=query,
-#             top=top
-#         )
-        
-#         documents = []
-        
-#         # Process search results
-#         for item in results:
-#             # Try to get content from various possible field names
-#             content = None
-#             for field_name in ["chunk", "content", "text"]:
-#                 if field_name in item:
-#                     content = item[field_name]
-#                     if content:
-#                         break
-            
-#             if not content:
-#                 # If we can't find a content field, look for any string field
-#                 for key, value in item.items():
-#                     if isinstance(value, str) and len(value) > 50:
-#                         content = value
-#                         break
-            
-#             if not content:
-#                 continue
-            
-#             # Try to get a title
-#             title = None
-#             for title_field in ["title", "name", "filename"]:
-#                 if title_field in item:
-#                     title = item[title_field]
-#                     if title:
-#                         break
-            
-#             if not title:
-#                 # Use a key as title if available
-#                 for key_field in ["id", "key", "chunk_id"]:
-#                     if key_field in item:
-#                         title = f"Document {item[key_field]}"
-#                         break
-                        
-#             if not title:
-#                 title = "Unknown Document"
-            
-#             documents.append({
-#                 "title": title,
-#                 "content": content
-#             })
-        
-#         return documents
-            
-#     except Exception as e:
-#         logging.error(f"Error retrieving documents: {e}")
-#         import traceback
-#         traceback.print_exc()
-#         return []
+# Add this function to create a loading indicator card
+def create_loading_card(message="Processing your request..."):
+    """Creates an adaptive card with a loading indicator"""
+    card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.5",
+        "body": [
+            {
+                "type": "Container",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": message,
+                        "wrap": True,
+                        "horizontalAlignment": "center"
+                    },
+                    {
+                        "type": "Image",
+                        "url": "https://aka.ms/acloading",
+                        "height": "50px",
+                        "horizontalAlignment": "center"
+                    }
+                ]
+            }
+        ]
+    }
+    
+    return Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card
+    )
+def create_error_card(message):
+    """Creates an error card with the given message"""
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.3",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "body": [
+            {
+                "type": "Container",
+                "style": "attention",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "Error",
+                        "weight": "bolder",
+                        "size": "medium"
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": message,
+                        "wrap": true
+                    }
+                ]
+            }
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": "Try Again",
+                "data": {
+                    "action": "create_email"
+                }
+            }
+        ]
+    }
+    
+    return Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card
+    )
+# Add this function to send a loading card and store its activity ID
+async def send_loading_indicator(turn_context: TurnContext, state, message="Processing your request..."):
+    """Sends a loading indicator and stores the activity ID for later updates"""
+    loading_card = create_loading_card(message)
+    reply = _create_reply(turn_context.activity)
+    reply.attachments = [loading_card]
+    
+    # Send the loading card and capture the ResourceResponse which contains the ID
+    response = await turn_context.send_activity(reply)
+    
+    # Store the activity ID in the state for later updates
+    with conversation_states_lock:
+        state["last_card_activity_id"] = response.id
+    
+    return response.id
+
+# Add this function to update an existing activity with new content
+async def update_activity_with_card(turn_context: TurnContext, state, attachment):
+    """Updates the previously sent card with new content"""
+    activity_id = None
+    
+    # Get the stored activity ID
+    with conversation_states_lock:
+        activity_id = state.get("last_card_activity_id")
+    
+    if not activity_id:
+        # If we don't have an activity ID, just send a new message
+        reply = _create_reply(turn_context.activity)
+        reply.attachments = [attachment]
+        await turn_context.send_activity(reply)
+        return
+    
+    # Create an updated activity
+    updated_activity = Activity(
+        type=ActivityTypes.message,
+        id=activity_id,
+        timestamp=datetime.utcnow(),
+        from_property=turn_context.activity.recipient,
+        recipient=turn_context.activity.from_property,
+        conversation=turn_context.activity.conversation,
+        channel_id=turn_context.activity.channel_id,
+        attachments=[attachment]
+    )
+    
+    # Update the existing activity
+    await turn_context.update_activity(updated_activity)
 async def retrieve_documents(query, top=5, mode="openai"):
     """
     Retrieves documents from either OpenAI API (default) or Azure AI Search.
@@ -2089,6 +2139,7 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
                 await initialize_chat(turn_context, None)
         elif action_data.get("action") == "generate_email":
             # Get conversation state
+            await send_loading_indicator(turn_context, state, "Generating email template...")
             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
             conversation_id = conversation_reference.conversation.id
             state = conversation_states[conversation_id]
@@ -2121,22 +2172,22 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
                 has_attachments
             )
         elif action_data.get("action") == "create_email":
-            # Send channel selection card
+            await send_loading_indicator(turn_context, state, "Generating email template...")
             await send_email_card(turn_context, "channel_selection")
         elif action_data.get("action") == "select_channel":
-            # Get the selected channel
+            await send_loading_indicator(turn_context, state, "Generating email template...")
             channel = action_data.get("channel", "intro")
             
             # Send the template selection card for this channel
             await send_email_card(turn_context, "selection", channel)
         elif action_data.get("action") == "select_template":
-            # Get the selected template
+            await send_loading_indicator(turn_context, state, "Generating email template...")
             template = action_data.get("template", "generic")
             
             # Send the appropriate template card
             await send_email_card(turn_context, template)
         elif action_data.get("action") == "edit_email":
-            # Get conversation state
+            await send_loading_indicator(turn_context, state, "Generating email template...")
             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
             conversation_id = conversation_reference.conversation.id
             state = conversation_states[conversation_id]
@@ -2144,7 +2195,7 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             # Send edit email card
             await send_edit_email_card(turn_context, state)
         elif action_data.get("action") == "apply_email_edits":
-            # Get conversation state
+            await send_loading_indicator(turn_context, state, "Generating email template...")
             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
             conversation_id = conversation_reference.conversation.id
             state = conversation_states[conversation_id]
@@ -2155,7 +2206,7 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             # Apply edits
             await apply_email_edits(turn_context, state, edit_instructions)
         elif action_data.get("action") == "cancel_edit":
-            # Cancel edit and go back to last generated email
+            await send_loading_indicator(turn_context, state, "Generating email template...")
             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
             conversation_id = conversation_reference.conversation.id
             state = conversation_states[conversation_id]
@@ -3134,16 +3185,14 @@ async def send_email_card(turn_context: TurnContext, template_mode="channel_sele
         template_mode: The template mode to display
         channel: Email channel if in selection mode
     """
-    reply = _create_reply(turn_context.activity)
-    
     if template_mode == "channel_selection":
-        reply.attachments = [create_channel_selection_card()]
+        attachment = create_channel_selection_card()
     elif template_mode == "selection":
-        reply.attachments = [create_email_card(template_mode, channel)]
+        attachment = create_email_card(template_mode, channel)
     else:
-        reply.attachments = [create_email_card(template_mode)]
-    
-    await turn_context.send_activity(reply)
+        attachment = create_email_card(template_mode)
+
+    await update_activity_with_card(turn_context, conversation_states[TurnContext.get_conversation_reference(turn_context.activity).conversation.id], attachment)
 async def handle_info_request(turn_context: TurnContext, info_type: str):
     """Handles requests for information about uploads or help"""
     if info_type == "upload":
@@ -3397,13 +3446,6 @@ def create_email_result_card(email_text):
                 "title": "Create Another Email",
                 "data": {
                     "action": "create_email"
-                }
-            },
-            {
-                "type": "Action.Submit",
-                "title": "Return to Home",
-                "data": {
-                    "action": "new_chat"
                 }
             }
         ]
@@ -4973,13 +5015,6 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
                         "data": {
                             "action": "create_email"
                         }
-                    },
-                    {
-                        "type": "Action.Submit",
-                        "title": "Return to Home",
-                        "data": {
-                            "action": "new_chat"
-                        }
                     }
                 ]
             }
@@ -4989,12 +5024,14 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
                 content_type="application/vnd.microsoft.card.adaptive",
                 content=email_card
             )
-            
-            reply = _create_reply(turn_context.activity)
-            reply.attachments = [attachment]
-            await turn_context.send_activity(reply)
+            await update_activity_with_card(turn_context, state, attachment)
+            # reply = _create_reply(turn_context.activity)
+            # reply.attachments = [attachment]
+            # await turn_context.send_activity(reply)
         else:
-            await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again with more details about what you need.")
+            error_card = create_error_card("I couldn't generate the email template. Please try again with more details.")
+            await update_activity_with_card(turn_context, state, error_card)
+            #await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again with more details about what you need.")
     except Exception as e:
         logging.error(f"Error generating email: {str(e)}")
         traceback.print_exc()
@@ -7221,7 +7258,7 @@ async def initialize_chat(turn_context: TurnContext, state=None, context=None):
         
         # Try a fallback response if everything else fails
         try:
-            await send_fallback_response(turn_context, context or "How can I help you with product management today?")
+            await send_fallback_response(turn_context, context or "How can I help you today?")
         except Exception as fallback_e:
             logging.error(f"Even fallback failed during initialization: {fallback_e}")
 
@@ -7273,7 +7310,7 @@ async def send_message(turn_context: TurnContext, state):
         
         # Use fallback if everything else fails
         try:
-            await send_fallback_response(turn_context, "Hello, how can I help you with product management today?")
+            await send_fallback_response(turn_context, "Hello, how can I help you today?")
         except:
             pass  # Last resort is to simply give up
 
@@ -7988,12 +8025,12 @@ async def messages(req: Request) -> Response:
 # Simple health check endpoint
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "Product Management and Teams Bot"}
+    return {"status": "ok", "service": "Teams AI Assistant"}
 
 # Root path redirect to health
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Product Management and Teams Bot is running."}
+    return {"status": "ok", "message": "Teams AI Assistant is running."}
 
 # Run the app with uvicorn if executed directly
 if __name__ == "__main__":
