@@ -1343,7 +1343,7 @@ def create_channel_selection_card():
                                             }
                                         ],
                                         "spacing": "small",
-                                        "separator": true
+                                        "separator": True
                                     }
                                 ]
                             },
@@ -1385,7 +1385,7 @@ def create_channel_selection_card():
                                             }
                                         ],
                                         "spacing": "small",
-                                        "separator": true
+                                        "separator": True
                                     }
                                 ]
                             }
@@ -1433,7 +1433,7 @@ def create_channel_selection_card():
                                             }
                                         ],
                                         "spacing": "small",
-                                        "separator": true
+                                        "separator": True
                                     }
                                 ]
                             },
@@ -1475,7 +1475,7 @@ def create_channel_selection_card():
                                             }
                                         ],
                                         "spacing": "small",
-                                        "separator": true
+                                        "separator": True
                                     }
                                 ]
                             }
@@ -2265,8 +2265,38 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             else:
                 await send_email_card(turn_context)
     except Exception as e:
-        logging.error(f"Error handling card action: {e}")
-        await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
+        logging.error(f"Card action error: {e}")
+        # Send a user-friendly error card instead of text
+        error_card = {
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "type": "AdaptiveCard",
+            "version": "1.5",
+            "body": [
+                {
+                    "type": "TextBlock",
+                    "text": "Something went wrong",
+                    "weight": "bolder",
+                    "size": "medium"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": "There was a problem processing your request. Please try again.",
+                    "wrap": True
+                }
+            ],
+            "actions": [
+                {
+                    "type": "Action.Submit",
+                    "title": "Try Again",
+                    "data": {
+                        "action": "create_email"
+                    }
+                }
+            ]
+        }
+        reply = _create_reply(turn_context.activity)
+        reply.attachments = [Attachment(content_type="application/vnd.microsoft.card.adaptive", content=error_card)]
+        await turn_context.send_activity(reply)
 def get_template_title(template_id):
     """
     Returns the human-readable title for a template ID.
@@ -3427,7 +3457,7 @@ def create_email_card(template_mode="selection", channel=None):
                     "type": "Input.Toggle",
                     "id": "hasAttachments",
                     "title": "Mention attachments in email?",
-                    "value": "false"
+                    "value": "False"
                 },
                 {
                     "type": "TextBlock",
@@ -3543,7 +3573,7 @@ def create_email_card(template_mode="selection", channel=None):
                 "type": "Input.Toggle",
                 "id": "hasAttachments",
                 "title": "Mention attachments in email?",
-                "value": "false"
+                "value": "False"
             },
             {
                 "type": "TextBlock",
@@ -4946,7 +4976,11 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
                     await typing_task
                 except asyncio.CancelledError:
                     pass
-                await turn_context.send_activity(create_typing_stop_activity())
+                # Add these calls at the end of stream_with_teams_ai function:
+                try:
+                    await turn_context.send_activity(create_typing_stop_activity())
+                except Exception as typing_stop_error:
+                    logging.error(f"Error stopping typing indicator: {typing_stop_error}")
         else:
             # Use custom streaming implementation if Teams AI not available
             # Setup a custom collector similar to above
@@ -5035,7 +5069,11 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
                     await typing_task
                 except asyncio.CancelledError:
                     pass
-                await turn_context.send_activity(create_typing_stop_activity())
+                # Add these calls at the end of stream_with_teams_ai function:
+                try:
+                    await turn_context.send_activity(create_typing_stop_activity())
+                except Exception as typing_stop_error:
+                    logging.error(f"Error stopping typing indicator: {typing_stop_error}")
         
         # If we have email text, create and send the card
         if email_text:
@@ -7351,7 +7389,11 @@ async def stream_with_custom_implementation(turn_context: TurnContext, state, us
             logging.error(f"Error in custom streaming: {e}")
             traceback.print_exc()
             await turn_context.send_activity("I encountered an error while processing your request. Please try again.")
-            await turn_context.send_activity(create_typing_stop_activity())
+            # Add these calls at the end of stream_with_teams_ai function:
+            try:
+                await turn_context.send_activity(create_typing_stop_activity())
+            except Exception as typing_stop_error:
+                logging.error(f"Error stopping typing indicator: {typing_stop_error}")
             # Try a fallback direct completion
             await send_fallback_response(turn_context, user_message)
     
