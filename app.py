@@ -2639,72 +2639,138 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
         
         # Check if this is an Action.Execute verb (dynamic card interaction)
         activity_type = turn_context.activity.type
-        activity_value = turn_context.activity.value if hasattr(turn_context.activity, 'value') else None
         
-        # Handle Action.Execute for dynamic cards
-        if activity_type == "invoke" and activity_value and "action" in activity_value:
-            action_info = activity_value.get("action", {})
-            verb = action_info.get("verb", "")
+        # Handle Action.Execute for dynamic cards (type 'invoke' with name 'adaptiveCard/action')
+        if activity_type == "invoke" and hasattr(turn_context.activity, 'name') and turn_context.activity.name == "adaptiveCard/action":
+            from botbuilder.schema import InvokeResponse
             
-            # Handle dynamic card refreshes
-            if verb == "refreshCard":
-                data = action_info.get("data", {})
-                state = data.get("state", "initial")
-                selection = data.get("selection", {})
-                
-                # Return the refreshed card
-                return await create_refresh_response(turn_context, create_dynamic_email_card(state, selection))
-                
-            # Handle category selection
-            elif verb == "selectCategory":
-                data = action_info.get("data", {})
-                category = data.get("category", "")
-                selection = data.get("selection", {})
-                
-                # Update selection with category
-                selection["category"] = category
-                
-                # Return updated card
-                return await create_refresh_response(turn_context, create_dynamic_email_card("category_selected", selection))
+            # Get action data from the value
+            invoke_value = turn_context.activity.value
             
-            # Handle template selection
-            elif verb == "selectTemplate":
-                data = action_info.get("data", {})
-                category = data.get("category", "")
-                template = data.get("template", "")
-                selection = data.get("selection", {})
+            if isinstance(invoke_value, dict) and "action" in invoke_value:
+                action_info = invoke_value.get("action", {})
+                verb = action_info.get("verb", "")
+                logging.info(f"Processing Action.Execute verb: {verb}")
                 
-                # Update selection
-                selection["category"] = category
-                selection["template"] = template
-                
-                # Return updated card
-                return await create_refresh_response(turn_context, create_dynamic_email_card("template_selected", selection))
+                try:
+                    # Handle dynamic card refreshes
+                    if verb == "refreshCard":
+                        data = action_info.get("data", {})
+                        state = data.get("state", "initial")
+                        selection = data.get("selection", {})
+                        
+                        # Generate refreshed card
+                        card = create_dynamic_email_card(state, selection)
+                        
+                        # Return the refreshed card using InvokeResponse
+                        response_json = {
+                            "statusCode": 200,
+                            "type": "application/vnd.microsoft.card.adaptive",
+                            "value": card.content
+                        }
+                        return InvokeResponse(status=200, body=response_json)
+                        
+                    # Handle category selection
+                    elif verb == "selectCategory":
+                        data = action_info.get("data", {})
+                        category = data.get("category", "")
+                        selection = data.get("selection", {})
+                        
+                        # Update selection with category
+                        selection["category"] = category
+                        
+                        # Generate updated card
+                        card = create_dynamic_email_card("category_selected", selection)
+                        
+                        # Return updated card
+                        response_json = {
+                            "statusCode": 200,
+                            "type": "application/vnd.microsoft.card.adaptive",
+                            "value": card.content
+                        }
+                        return InvokeResponse(status=200, body=response_json)
+                    
+                    # Handle template selection
+                    elif verb == "selectTemplate":
+                        data = action_info.get("data", {})
+                        category = data.get("category", "")
+                        template = data.get("template", "")
+                        selection = data.get("selection", {})
+                        
+                        # Update selection
+                        selection["category"] = category
+                        selection["template"] = template
+                        
+                        # Generate updated card
+                        card = create_dynamic_email_card("template_selected", selection)
+                        
+                        # Return updated card
+                        response_json = {
+                            "statusCode": 200,
+                            "type": "application/vnd.microsoft.card.adaptive",
+                            "value": card.content
+                        }
+                        return InvokeResponse(status=200, body=response_json)
+                    
+                    # Handle back to categories
+                    elif verb == "backToCategories":
+                        data = action_info.get("data", {})
+                        selection = data.get("selection", {})
+                        
+                        # Generate updated card
+                        card = create_dynamic_email_card("initial", selection)
+                        
+                        # Return updated card
+                        response_json = {
+                            "statusCode": 200,
+                            "type": "application/vnd.microsoft.card.adaptive",
+                            "value": card.content
+                        }
+                        return InvokeResponse(status=200, body=response_json)
+                    
+                    # Handle back to templates
+                    elif verb == "backToTemplates":
+                        data = action_info.get("data", {})
+                        category = data.get("category", "")
+                        selection = data.get("selection", {})
+                        
+                        # Generate updated card
+                        card = create_dynamic_email_card("category_selected", selection)
+                        
+                        # Return updated card
+                        response_json = {
+                            "statusCode": 200,
+                            "type": "application/vnd.microsoft.card.adaptive",
+                            "value": card.content
+                        }
+                        return InvokeResponse(status=200, body=response_json)
+                    
+                    # If unknown verb, return success but log warning
+                    else:
+                        logging.warning(f"Unknown Action.Execute verb: {verb}")
+                        return InvokeResponse(status=200, body={"statusCode": 200})
+                        
+                except Exception as execute_error:
+                    # Log error and return error response
+                    logging.error(f"Error handling Action.Execute: {execute_error}")
+                    traceback.print_exc()
+                    return InvokeResponse(status=500, body={"statusCode": 500, "message": str(execute_error)})
             
-            # Handle back to categories
-            elif verb == "backToCategories":
-                data = action_info.get("data", {})
-                selection = data.get("selection", {})
-                
-                # Return updated card
-                return await create_refresh_response(turn_context, create_dynamic_email_card("initial", selection))
+            # If action not properly formatted, return error
+            return InvokeResponse(status=400, body={"statusCode": 400, "message": "Invalid action format"})
             
-            # Handle back to templates
-            elif verb == "backToTemplates":
-                data = action_info.get("data", {})
-                category = data.get("category", "")
-                selection = data.get("selection", {})
-                
-                # Return updated card
-                return await create_refresh_response(turn_context, create_dynamic_email_card("category_selected", selection))
-                
+        # Handle regular Submit actions
+        if not action_data:
+            logging.warning("Action data is None or empty")
+            await turn_context.send_activity("I received your action but couldn't process it. Please try again.")
+            return
+            
         # Extract action from regular submissions
         action = action_data.get("action", "")
         logging.info(f"Processing card action: {action}")
         
         # Handle different actions
         if action == "new_chat":
-            # Code for new_chat (unchanged)
             # Reset conversation state
             if conversation_id in conversation_states:
                 # Clear any pending messages
@@ -2721,11 +2787,16 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
                 await initialize_chat(turn_context, None)
         
         elif action == "create_email" or action == "show_template_categories":
-            # Send the original card selection (backward compatibility)
-            await send_email_card(turn_context)
+            # Send typing indicator for better UX
+            await turn_context.send_activity(create_typing_activity())
+            
+            # Use the dynamic email card instead of the old approach
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [create_dynamic_email_card()]
+            await turn_context.send_activity(reply)
         
         elif action == "create_dynamic_email":
-            # Send the new dynamic email card
+            # Send the dynamic email card (using directly for backward compatibility)
             reply = _create_reply(turn_context.activity)
             reply.attachments = [create_dynamic_email_card()]
             await turn_context.send_activity(reply)
@@ -2768,7 +2839,6 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
                 has_attachments
             )
         
-        # The rest of your existing action handlers...
         elif action == "unified_generate_email":
             # Get conversation state
             if conversation_id not in conversation_states:
@@ -2914,8 +2984,366 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
                 
                 await turn_context.send_activity(reply)
         
-        # Include your existing action handlers for edit_email, apply_email_edits, etc...
+        elif action == "edit_email":
+            # Get conversation state
+            if conversation_id not in conversation_states:
+                await turn_context.send_activity("I couldn't find your conversation state. Let's start fresh.")
+                await initialize_chat(turn_context, None)
+                return
+                
+            state = conversation_states[conversation_id]
+            
+            # Send typing indicator for better UX
+            await turn_context.send_activity(create_typing_activity())
+            
+            # Send edit email card
+            await send_edit_email_card(turn_context, state)
         
+        elif action == "apply_email_edits":
+            # Get conversation state
+            if conversation_id not in conversation_states:
+                await turn_context.send_activity("I couldn't find your conversation state. Let's start fresh.")
+                await initialize_chat(turn_context, None)
+                return
+                
+            state = conversation_states[conversation_id]
+            
+            # Get edit instructions
+            edit_instructions = action_data.get("edit_instructions", "")
+            
+            if not edit_instructions.strip():
+                await turn_context.send_activity("Please provide specific edit instructions so I can update the email.")
+                await send_edit_email_card(turn_context, state)
+                return
+            
+            # Send typing indicator for better UX
+            await turn_context.send_activity(create_typing_activity())
+            await turn_context.send_activity("✏️ Applying your edits...")
+            
+            # Apply edits
+            await apply_email_edits(turn_context, state, edit_instructions)
+        
+        elif action == "cancel_edit":
+            # Get conversation state
+            if conversation_id not in conversation_states:
+                await turn_context.send_activity("I couldn't find your conversation state. Let's start fresh.")
+                await initialize_chat(turn_context, None)
+                return
+                
+            state = conversation_states[conversation_id]
+            
+            # Send typing indicator for better UX
+            await turn_context.send_activity(create_typing_activity())
+            
+            # Get the original email to display
+            with conversation_states_lock:
+                original_email = state.get("last_generated_email", "")
+            
+            if original_email:
+                # Create an email result card
+                email_card = {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.5",
+                    "body": [
+                        {
+                            "type": "Container",
+                            "style": "emphasis",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": "Generated Email",
+                                    "size": "large",
+                                    "weight": "bolder",
+                                    "horizontalAlignment": "center",
+                                    "color": "accent"
+                                }
+                            ],
+                            "bleed": True
+                        },
+                        {
+                            "type": "Container",
+                            "style": "default",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": original_email,
+                                    "wrap": True,
+                                    "spacing": "medium"
+                                }
+                            ],
+                            "padding": "Medium"
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "type": "Action.Submit",
+                            "title": "Edit This Email",
+                            "data": {
+                                "action": "edit_email"
+                            }
+                        },
+                        {
+                            "type": "Action.Submit",
+                            "title": "Create Another Email",
+                            "data": {
+                                "action": "create_email"
+                            }
+                        },
+                        {
+                            "type": "Action.Submit",
+                            "title": "Return to Home",
+                            "data": {
+                                "action": "new_chat"
+                            }
+                        }
+                    ]
+                }
+                
+                attachment = Attachment(
+                    content_type="application/vnd.microsoft.card.adaptive",
+                    content=email_card
+                )
+                
+                reply = _create_reply(turn_context.activity)
+                reply.attachments = [attachment]
+                await turn_context.send_activity(reply)
+            else:
+                await turn_context.send_activity("I couldn't find your previously generated email. Let's create a new one.")
+                reply = _create_reply(turn_context.activity)
+                reply.attachments = [create_dynamic_email_card()]
+                await turn_context.send_activity(reply)
+                
+        elif action == "update_email_content":
+            # Get conversation state
+            if conversation_id not in conversation_states:
+                await turn_context.send_activity("I couldn't find your conversation state. Let's start fresh.")
+                await initialize_chat(turn_context, None)
+                return
+                
+            state = conversation_states[conversation_id]
+            
+            # Get the updated content
+            edit_content = action_data.get("edit_content", "")
+            
+            if not edit_content.strip():
+                await turn_context.send_activity("The edited email content appears to be empty. Please provide content for the email.")
+                return
+            
+            # Send typing indicator for better UX
+            await turn_context.send_activity(create_typing_activity())
+            
+            # Update the saved email
+            with conversation_states_lock:
+                state["last_generated_email"] = edit_content
+            
+            # Create an enhanced email result card
+            email_card = {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.5",
+                "body": [
+                    {
+                        "type": "Container",
+                        "style": "emphasis",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": "Updated Email",
+                                "size": "large",
+                                "weight": "bolder",
+                                "horizontalAlignment": "center",
+                                "color": "accent" 
+                            }
+                        ],
+                        "bleed": True
+                    },
+                    {
+                        "type": "Container",
+                        "style": "default",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": edit_content,
+                                "wrap": True,
+                                "spacing": "medium"
+                            }
+                        ],
+                        "padding": "Medium"
+                    },
+                    {
+                        "type": "Container",
+                        "style": "good",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": "Email updated successfully!",
+                                "wrap": True,
+                                "size": "small",
+                                "horizontalAlignment": "center"
+                            }
+                        ],
+                        "spacing": "medium"
+                    }
+                ],
+                "actions": [
+                    {
+                        "type": "Action.Submit",
+                        "title": "Edit Again",
+                        "style": "positive",
+                        "data": {
+                            "action": "edit_email"
+                        }
+                    },
+                    {
+                        "type": "Action.Submit",
+                        "title": "Create Another Email",
+                        "data": {
+                            "action": "create_email"
+                        }
+                    },
+                    {
+                        "type": "Action.Submit",
+                        "title": "Return to Home",
+                        "data": {
+                            "action": "new_chat"
+                        }
+                    }
+                ]
+            }
+            
+            # Create attachment
+            attachment = Attachment(
+                content_type="application/vnd.microsoft.card.adaptive",
+                content=email_card
+            )
+            
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [attachment]
+            await turn_context.send_activity(reply)
+            
+        # Handle select_channel and select_template for backward compatibility
+        elif action == "select_channel":
+            channel = action_data.get("channel", "intro")
+            
+            # Instead of sending another card, use the dynamic card with pre-selection
+            selection = {
+                "category": channel
+            }
+            
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [create_dynamic_email_card("category_selected", selection)]
+            await turn_context.send_activity(reply)
+        
+        elif action == "select_template":
+            template = action_data.get("template", "generic")
+            
+            # Figure out which category this template belongs to
+            category = "generic"
+            if template.startswith("sales_"):
+                category = "sales"
+            elif template in ["welcome", "legal_update", "lost_settlement", "legal_confirmation", 
+                             "payment_returned", "legal_threat", "draft_reduction", "creditor_notices", 
+                             "collection_calls", "credit_concerns", "settlement_timeline", 
+                             "program_cost", "account_exclusion"]:
+                category = "customer_service"
+            elif template in ["introduction", "followup"]:
+                category = "intro"
+            
+            # Send the dynamic card with pre-selection
+            selection = {
+                "category": category,
+                "template": template
+            }
+            
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [create_dynamic_email_card("template_selected", selection)]
+            await turn_context.send_activity(reply)
+        
+        # For legacy generate_email action
+        elif action == "generate_email":
+            # Get conversation state
+            if conversation_id not in conversation_states:
+                await turn_context.send_activity("I couldn't find your conversation state. Let's start fresh.")
+                await initialize_chat(turn_context, None)
+                return
+                
+            state = conversation_states[conversation_id]
+            
+            # Extract template and fields
+            template_id = action_data.get("template", "generic")
+            recipient = action_data.get("recipient", "")
+            firstname = action_data.get("firstname", "")
+            gateway = action_data.get("gateway", "")
+            subject = action_data.get("subject", "")
+            instructions = action_data.get("instructions", "")
+            chain = action_data.get("chain", "")
+            has_attachments = action_data.get("hasAttachments", "false") == "true"
+            
+            # Send typing indicator
+            await turn_context.send_activity(create_typing_activity())
+            await turn_context.send_activity("📧 Generating your email template...")
+            
+            # Generate email
+            await generate_email(
+                turn_context, 
+                state, 
+                template_id, 
+                recipient, 
+                firstname, 
+                gateway, 
+                subject, 
+                instructions, 
+                chain, 
+                has_attachments
+            )
+        
+        # Handle generate_email_with_template for backward compatibility
+        elif action == "generate_email_with_template":
+            # Get conversation state
+            if conversation_id not in conversation_states:
+                await turn_context.send_activity("I couldn't find your conversation state. Let's start fresh.")
+                await initialize_chat(turn_context, None)
+                return
+                
+            state = conversation_states[conversation_id]
+            
+            # Extract fields
+            channel = action_data.get("channel", "")
+            template_id = action_data.get("template_id", "")
+            recipient = action_data.get("recipient", "")
+            firstname = action_data.get("firstname", "")
+            gateway = action_data.get("gateway", "")
+            subject = action_data.get("subject", "")
+            instructions = action_data.get("instructions", "")
+            chain = action_data.get("chain", "")
+            has_attachments = action_data.get("hasAttachments", "false") == "true"
+            
+            # Send typing indicator
+            await turn_context.send_activity(create_typing_activity())
+            await turn_context.send_activity("📧 Generating your email template...")
+            
+            # Generate email
+            await generate_email(
+                turn_context, 
+                state, 
+                template_id, 
+                recipient, 
+                firstname, 
+                gateway, 
+                subject, 
+                instructions, 
+                chain, 
+                has_attachments
+            )
+        
+        # Handle actions related to upload info and help
+        elif action == "show_upload_info":
+            await handle_info_request(turn_context, "upload")
+            
+        elif action == "show_help":
+            await handle_info_request(turn_context, "help")
+            
         # For any other actions, provide appropriate feedback
         else:
             logging.warning(f"Unknown card action: {action}")
@@ -2930,21 +3358,25 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
         await turn_context.send_activity(f"I encountered an error processing your request. Please try again.")
 async def create_refresh_response(turn_context, card):
     """
-    Creates a response for Action.Execute card refresh
+    Creates a response for Action.Execute card refresh for Teams Bot Framework
     
     Args:
         turn_context: The turn context
         card: The updated card
     
     Returns:
-        Response containing the refreshed card
+        InvokeResponse formatted correctly for Teams
     """
-    response = {
+    from botbuilder.schema import InvokeResponse
+    
+    response_json = {
         "statusCode": 200,
         "type": "application/vnd.microsoft.card.adaptive",
         "value": card.content
     }
-    return Response(content=json.dumps(response), mimetype="application/json")
+    
+    # InvokeResponse is the correct way to respond to invoke activities in Bot Framework
+    return InvokeResponse(status=200, body=response_json)
 def get_template_title(template_id):
     """
     Returns the human-readable title for a template ID.
