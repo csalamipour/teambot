@@ -1247,7 +1247,7 @@ def create_unified_email_card(state=None, active_view="main", template_data=None
     return attachment
 
 def create_collapsible_section(id, title, items, collapsed=False):
-    """Creates a collapsible section for the adaptive card"""
+    """Creates a collapsible section for the adaptive card with improved toggle indicators"""
     # Create the section
     section = {
         "type": "Container",
@@ -1274,12 +1274,20 @@ def create_collapsible_section(id, title, items, collapsed=False):
                         "width": "auto",
                         "items": [
                             {
-                                "type": "Image",
-                                "url": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMTIuNjY2NyA2TDggMTAuNjY2N0wzLjMzMzM0IDYiIHN0cm9rZT0iIzIxMjEyMSIgc3Ryb2tlLXdpZHRoPSIxLjMzMzMzIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L3N2Zz4=",
-                                "width": "16px",
-                                "height": "16px",
-                                "id": f"{id}Arrow",
-                                "altText": "Toggle"
+                                "type": "TextBlock",
+                                "text": collapsed ? "▶" : "▼",  # Changed to text symbol instead of image
+                                "size": "medium",
+                                "weight": "bolder",
+                                "id": f"{id}Arrow1",
+                                "isVisible": collapsed
+                            },
+                            {
+                                "type": "TextBlock",
+                                "text": "▼",
+                                "size": "medium",
+                                "weight": "bolder",
+                                "id": f"{id}Arrow2",
+                                "isVisible": !collapsed
                             }
                         ],
                         "verticalContentAlignment": "center"
@@ -1287,7 +1295,7 @@ def create_collapsible_section(id, title, items, collapsed=False):
                 ],
                 "selectAction": {
                     "type": "Action.ToggleVisibility",
-                    "targetElements": [f"{id}Content", f"{id}Arrow"],
+                    "targetElements": [f"{id}Content", f"{id}Arrow1", f"{id}Arrow2"],
                     "title": "toggle"
                 }
             }
@@ -1300,14 +1308,13 @@ def create_collapsible_section(id, title, items, collapsed=False):
         "type": "Container",
         "id": f"{id}Content",
         "items": items,
-        "isVisible": not collapsed,
+        "isVisible": !collapsed,
         "spacing": "small"
     }
     
     section["items"].append(content_container)
     
     return section
-
 def create_template_grid(templates):
     """Helper function to create a grid of template buttons"""
     # Create rows of 2-3 templates
@@ -5452,27 +5459,24 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
             email_text = result["response"]
             
             # Compliance check - scan for potential issues
-            potential_compliance_issues = check_email_compliance(email_text)
-            
-            # If serious compliance issues found, try regenerating once
-            if potential_compliance_issues and any(issue["severity"] == "high" for issue in potential_compliance_issues):
-                logging.warning(f"Potential compliance issues detected in email generation: {potential_compliance_issues}")
-                # Add stronger compliance guidance and regenerate
-                prompt += "\n\nWARNING: The previous generation had potential compliance issues. Please ensure the email strictly avoids:\n"
-                for issue in potential_compliance_issues:
-                    prompt += f"- {issue['description']}\n"
+            potential_compliance_issues = check_email_compliance(email_text)     
+            if potential_compliance_issues:
+                logging.info(f"Note: Compliance check detected potential issues: {potential_compliance_issues}")
                 
-                # Re-generate with stronger compliance guidance
-                result = await process_conversation_internal(
-                    client=client,
-                    session=state["session_id"],
-                    prompt=prompt,
-                    assistant=state["assistant_id"],
-                    stream_output=False
-                )
-                if isinstance(result, dict) and "response" in result:
-                    email_text = result["response"]
-            
+                # Create a PS note about compliance issues
+                ps_text = "\n\nPS: COMPLIANCE NOTE: This email may contain phrases that require review: "
+                
+                # Add specific issues to the PS
+                issue_descriptions = []
+                for issue in potential_compliance_issues:
+                    issue_descriptions.append(issue["description"])
+                
+                ps_text += ", ".join(issue_descriptions)
+                ps_text += ". Please review before sending."
+                
+                # Append the PS to the email
+                email_text += ps_text
+                
             # Save the generated email in the state for potential editing
             with conversation_states_lock:
                 state["last_generated_email"] = email_text
