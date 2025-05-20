@@ -1061,31 +1061,17 @@ def create_new_chat_card():
         "version": "1.5",
         "body": [
             {
-                "type": "Container",
-                "style": "emphasis",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Start a New Conversation",
-                        "size": "medium",
-                        "weight": "bolder",
-                        "horizontalAlignment": "center"
-                    }
-                ],
-                "bleed": True
+                "type": "TextBlock",
+                "text": "Start a New Conversation",
+                "size": "medium",
+                "weight": "bolder",
+                "horizontalAlignment": "center"
             },
             {
-                "type": "Container",
-                "style": "default",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Your previous conversation has ended. Would you like to start a new one?",
-                        "wrap": True,
-                        "horizontalAlignment": "center"
-                    }
-                ],
-                "spacing": "medium"
+                "type": "TextBlock",
+                "text": "Your previous conversation has ended. Would you like to start a new one?",
+                "wrap": True,
+                "horizontalAlignment": "center"
             }
         ],
         "actions": [
@@ -1104,6 +1090,7 @@ def create_new_chat_card():
         content_type="application/vnd.microsoft.card.adaptive",
         content=card
     )
+
 async def handle_new_chat_command(turn_context: TurnContext, state, conversation_id):
     """Handles commands to start a new chat or reset the current chat"""
     # Send typing indicator
@@ -1300,7 +1287,7 @@ def create_channel_selection_card():
             },
             {
                 "type": "Container",
-                "style": "default",
+                "spacing": "medium",
                 "items": [
                     {
                         "type": "ColumnSet",
@@ -1310,40 +1297,32 @@ def create_channel_selection_card():
                                 "width": "stretch",
                                 "items": [
                                     {
-                                        "type": "Container",
-                                        "style": "emphasis",
-                                        "items": [
+                                        "type": "TextBlock",
+                                        "text": "📧 Client Services",
+                                        "weight": "bolder",
+                                        "horizontalAlignment": "center"
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "Service emails to existing clients",
+                                        "wrap": True,
+                                        "size": "small",
+                                        "horizontalAlignment": "center",
+                                        "spacing": "none"
+                                    },
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
                                             {
-                                                "type": "TextBlock",
-                                                "text": "📧 Client Services",
-                                                "weight": "bolder",
-                                                "horizontalAlignment": "center"
-                                            },
-                                            {
-                                                "type": "TextBlock",
-                                                "text": "Service emails to existing clients",
-                                                "wrap": True,
-                                                "size": "small",
-                                                "horizontalAlignment": "center",
-                                                "spacing": "none"
-                                            },
-                                            {
-                                                "type": "ActionSet",
-                                                "actions": [
-                                                    {
-                                                        "type": "Action.Submit",
-                                                        "title": "Select",
-                                                        "style": "positive",
-                                                        "data": {
-                                                            "action": "select_channel",
-                                                            "channel": "customer_service"
-                                                        }
-                                                    }
-                                                ]
+                                                "type": "Action.Submit",
+                                                "title": "Select",
+                                                "style": "positive",
+                                                "data": {
+                                                    "action": "select_channel",
+                                                    "channel": "customer_service"
+                                                }
                                             }
-                                        ],
-                                        "spacing": "small",
-                                        "separator": True
+                                        ]
                                     }
                                 ]
                             },
@@ -1352,45 +1331,36 @@ def create_channel_selection_card():
                                 "width": "stretch",
                                 "items": [
                                     {
-                                        "type": "Container",
-                                        "style": "accent",
-                                        "items": [
+                                        "type": "TextBlock",
+                                        "text": "💼 Sales Templates",
+                                        "weight": "bolder",
+                                        "horizontalAlignment": "center"
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "Quotes and program offerings",
+                                        "wrap": True,
+                                        "size": "small",
+                                        "horizontalAlignment": "center",
+                                        "spacing": "none"
+                                    },
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
                                             {
-                                                "type": "TextBlock",
-                                                "text": "💼 Sales Templates",
-                                                "weight": "bolder",
-                                                "horizontalAlignment": "center"
-                                            },
-                                            {
-                                                "type": "TextBlock",
-                                                "text": "Quotes and program offerings",
-                                                "wrap": True,
-                                                "size": "small",
-                                                "horizontalAlignment": "center",
-                                                "spacing": "none"
-                                            },
-                                            {
-                                                "type": "ActionSet",
-                                                "actions": [
-                                                    {
-                                                        "type": "Action.Submit",
-                                                        "title": "Select",
-                                                        "style": "positive",
-                                                        "data": {
-                                                            "action": "select_channel",
-                                                            "channel": "sales"
-                                                        }
-                                                    }
-                                                ]
+                                                "type": "Action.Submit",
+                                                "title": "Select",
+                                                "style": "positive",
+                                                "data": {
+                                                    "action": "select_channel",
+                                                    "channel": "sales"
+                                                }
                                             }
-                                        ],
-                                        "spacing": "small",
-                                        "separator": True
+                                        ]
                                     }
                                 ]
                             }
-                        ],
-                        "spacing": "medium"
+                        ]
                     },
                     {
                         "type": "ColumnSet",
@@ -1400,40 +1370,32 @@ def create_channel_selection_card():
                                 "width": "stretch",
                                 "items": [
                                     {
-                                        "type": "Container",
-                                        "style": "good",
-                                        "items": [
+                                        "type": "TextBlock",
+                                        "text": "🤝 Introduction",
+                                        "weight": "bolder",
+                                        "horizontalAlignment": "center"
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "New client outreach",
+                                        "wrap": True,
+                                        "size": "small",
+                                        "horizontalAlignment": "center",
+                                        "spacing": "none"
+                                    },
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
                                             {
-                                                "type": "TextBlock",
-                                                "text": "🤝 Introduction",
-                                                "weight": "bolder",
-                                                "horizontalAlignment": "center"
-                                            },
-                                            {
-                                                "type": "TextBlock",
-                                                "text": "New client outreach",
-                                                "wrap": True,
-                                                "size": "small",
-                                                "horizontalAlignment": "center",
-                                                "spacing": "none"
-                                            },
-                                            {
-                                                "type": "ActionSet",
-                                                "actions": [
-                                                    {
-                                                        "type": "Action.Submit",
-                                                        "title": "Select",
-                                                        "style": "positive",
-                                                        "data": {
-                                                            "action": "select_channel",
-                                                            "channel": "intro"
-                                                        }
-                                                    }
-                                                ]
+                                                "type": "Action.Submit",
+                                                "title": "Select",
+                                                "style": "positive",
+                                                "data": {
+                                                    "action": "select_channel",
+                                                    "channel": "intro"
+                                                }
                                             }
-                                        ],
-                                        "spacing": "small",
-                                        "separator": True
+                                        ]
                                     }
                                 ]
                             },
@@ -1442,48 +1404,38 @@ def create_channel_selection_card():
                                 "width": "stretch",
                                 "items": [
                                     {
-                                        "type": "Container",
-                                        "style": "warning",
-                                        "items": [
+                                        "type": "TextBlock",
+                                        "text": "✨ Custom Email",
+                                        "weight": "bolder",
+                                        "horizontalAlignment": "center"
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "Create a custom email",
+                                        "wrap": True,
+                                        "size": "small",
+                                        "horizontalAlignment": "center",
+                                        "spacing": "none"
+                                    },
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
                                             {
-                                                "type": "TextBlock",
-                                                "text": "✨ Custom Email",
-                                                "weight": "bolder",
-                                                "horizontalAlignment": "center"
-                                            },
-                                            {
-                                                "type": "TextBlock",
-                                                "text": "Create a custom email",
-                                                "wrap": True,
-                                                "size": "small",
-                                                "horizontalAlignment": "center",
-                                                "spacing": "none"
-                                            },
-                                            {
-                                                "type": "ActionSet",
-                                                "actions": [
-                                                    {
-                                                        "type": "Action.Submit",
-                                                        "title": "Select",
-                                                        "style": "positive",
-                                                        "data": {
-                                                            "action": "select_template",
-                                                            "template": "generic"
-                                                        }
-                                                    }
-                                                ]
+                                                "type": "Action.Submit",
+                                                "title": "Select",
+                                                "style": "positive",
+                                                "data": {
+                                                    "action": "select_template",
+                                                    "template": "generic"
+                                                }
                                             }
-                                        ],
-                                        "spacing": "small",
-                                        "separator": True
+                                        ]
                                     }
                                 ]
                             }
-                        ],
-                        "spacing": "default"
+                        ]
                     }
-                ],
-                "spacing": "medium"
+                ]
             },
             {
                 "type": "Container",
@@ -1506,7 +1458,7 @@ def create_channel_selection_card():
                 ],
                 "spacing": "medium"
             }
-        ]
+        ],
     }
     
     attachment = Attachment(
@@ -1607,7 +1559,7 @@ def create_welcome_card():
                                 "items": [
                                     {
                                         "type": "TextBlock",
-                                        "text": "First Choice Debt Relief",
+                                        "text": "Email & Chat Assistant",
                                         "wrap": True,
                                         "size": "Large",
                                         "weight": "Bolder",
@@ -1615,7 +1567,7 @@ def create_welcome_card():
                                     },
                                     {
                                         "type": "TextBlock",
-                                        "text": "AI-powered Email Assistant",
+                                        "text": "Your AI-powered communication partner",
                                         "wrap": True,
                                         "isSubtle": True
                                     }
@@ -1787,7 +1739,6 @@ def create_edit_email_card(original_email):
             },
             {
                 "type": "Container",
-                "style": "default",
                 "items": [
                     {
                         "type": "TextBlock",
@@ -1797,7 +1748,7 @@ def create_edit_email_card(original_email):
                     },
                     {
                         "type": "Container",
-                        "style": "accent",
+                        "style": "default",
                         "items": [
                             {
                                 "type": "TextBlock",
@@ -1805,15 +1756,13 @@ def create_edit_email_card(original_email):
                                 "wrap": True
                             }
                         ],
-                        "separator": True,
-                        "padding": "Medium"
+                        "separator": True
                     }
                 ],
                 "spacing": "medium"
             },
             {
                 "type": "Container",
-                "style": "good",
                 "items": [
                     {
                         "type": "TextBlock",
@@ -1844,7 +1793,7 @@ def create_edit_email_card(original_email):
                     },
                     {
                         "type": "TextBlock",
-                        "text": "• Avoid making guarantees about specific outcomes\n• Never promise credit improvement or specific timelines\n• Maintain professional, supportive tone",
+                        "text": "• Avoid making guarantees\n• Dont commit to timelines\n• Maintain professional tone",
                         "wrap": True,
                         "size": "small"
                     }
@@ -2119,10 +2068,6 @@ async def apply_email_edits(turn_context: TurnContext, state, edit_instructions)
 async def handle_card_actions(turn_context: TurnContext, action_data):
     """Handles actions from adaptive cards"""
     try:
-        await turn_context.send_activity(create_typing_activity())
-        action_type = action_data.get("action", "unknown")
-        if action_type in ["generate_email", "select_template", "apply_email_edits"]:
-            await turn_context.send_activity(f"Processing your request... ({action_type})")
         if action_data.get("action") == "new_chat":
             # Get conversation ID
             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
@@ -2265,38 +2210,8 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             else:
                 await send_email_card(turn_context)
     except Exception as e:
-        logging.error(f"Card action error: {e}")
-        # Send a user-friendly error card instead of text
-        error_card = {
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "type": "AdaptiveCard",
-            "version": "1.5",
-            "body": [
-                {
-                    "type": "TextBlock",
-                    "text": "Something went wrong",
-                    "weight": "bolder",
-                    "size": "medium"
-                },
-                {
-                    "type": "TextBlock",
-                    "text": "There was a problem processing your request. Please try again.",
-                    "wrap": True
-                }
-            ],
-            "actions": [
-                {
-                    "type": "Action.Submit",
-                    "title": "Try Again",
-                    "data": {
-                        "action": "create_email"
-                    }
-                }
-            ]
-        }
-        reply = _create_reply(turn_context.activity)
-        reply.attachments = [Attachment(content_type="application/vnd.microsoft.card.adaptive", content=error_card)]
-        await turn_context.send_activity(reply)
+        logging.error(f"Error handling card action: {e}")
+        await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
 def get_template_title(template_id):
     """
     Returns the human-readable title for a template ID.
@@ -2726,7 +2641,7 @@ def get_template_channel(template_id):
         return "intro"
 def create_email_card(template_mode="selection", channel=None):
     """
-    Creates an adaptive card for email composition with hierarchical template selection.
+    Creates an adaptive card for email composition with template selection.
     
     Args:
         template_mode (str): Mode of the card - "selection", "generic", or specific template name
@@ -2735,669 +2650,269 @@ def create_email_card(template_mode="selection", channel=None):
     if template_mode == "selection":
         # Template selection card based on channel
         card = {
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
             "type": "AdaptiveCard",
-            "version": "1.5",
+            "version": "1.0",
             "body": [
                 {
-                    "type": "Container",
-                    "style": "emphasis",
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": f"First Choice Debt Relief {channel.replace('_', ' ').title() if channel else ''} Email Templates",
-                            "size": "large",
-                            "weight": "bolder",
-                            "horizontalAlignment": "center"
-                        },
-                        {
-                            "type": "TextBlock",
-                            "text": "Please select an email template category:",
-                            "wrap": True,
-                            "horizontalAlignment": "center"
-                        }
-                    ],
-                    "bleed": True
+                    "type": "TextBlock",
+                    "text": f"First Choice Debt Relief {channel.replace('_', ' ').title() if channel else ''} Email Templates",
+                    "size": "large",
+                    "weight": "bolder"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": "Please select an email template:",
+                    "wrap": True
                 }
-            ]
+            ],
+            "actions": []
         }
         
-        # Add hierarchical sections based on channel
+        # Add actions based on channel
         if channel == "sales":
-            card["body"].append({
-                "type": "Container",
-                "style": "accent",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Quote Templates",
-                        "weight": "bolder",
-                        "size": "medium"
-                    },
-                    {
-                        "type": "ColumnSet",
-                        "columns": [
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Quick Quotes",
-                                        "weight": "bolder",
-                                        "horizontalAlignment": "center",
-                                        "size": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.Submit",
-                                                "title": "Quick Quote Email",
-                                                "data": {
-                                                    "action": "select_template",
-                                                    "template": "sales_quick_quote"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Detailed Quotes",
-                                        "weight": "bolder",
-                                        "horizontalAlignment": "center",
-                                        "size": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.Submit",
-                                                "title": "Initial Quote Email",
-                                                "data": {
-                                                    "action": "select_template",
-                                                    "template": "sales_quote"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
+            card["actions"] = [
+                {
+                    "type": "Action.Submit",
+                    "title": "Quick Quote Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "sales_quick_quote"
                     }
-                ],
-                "spacing": "medium"
-            })
-            
-            card["body"].append({
-                "type": "Container",
-                "style": "good",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Analysis & Overview",
-                        "weight": "bolder",
-                        "size": "medium"
-                    },
-                    {
-                        "type": "ColumnSet",
-                        "columns": [
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Financial",
-                                        "weight": "bolder",
-                                        "horizontalAlignment": "center",
-                                        "size": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.Submit",
-                                                "title": "Financial Analysis",
-                                                "data": {
-                                                    "action": "select_template",
-                                                    "template": "sales_analysis"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Program",
-                                        "weight": "bolder",
-                                        "horizontalAlignment": "center",
-                                        "size": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.Submit",
-                                                "title": "Program Overview",
-                                                "data": {
-                                                    "action": "select_template",
-                                                    "template": "sales_overview"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Initial Quote Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "sales_quote"
                     }
-                ],
-                "spacing": "medium"
-            })
-            
-            card["body"].append({
-                "type": "Container",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Other Templates",
-                        "weight": "bolder",
-                        "size": "medium"
-                    },
-                    {
-                        "type": "ActionSet",
-                        "actions": [
-                            {
-                                "type": "Action.Submit",
-                                "title": "Generic Sales Email",
-                                "data": {
-                                    "action": "select_template",
-                                    "template": "sales_generic"
-                                }
-                            }
-                        ]
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Financial Analysis Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "sales_analysis"
                     }
-                ],
-                "spacing": "medium"
-            })
-            
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Program Overview Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "sales_overview"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Generic Sales Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "sales_generic"
+                    }
+                }
+            ]
         elif channel == "customer_service":
-            # Client Communications section
-            card["body"].append({
-                "type": "Container",
-                "style": "default",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "General Client Communications",
-                        "weight": "bolder",
-                        "size": "medium"
-                    },
-                    {
-                        "type": "ColumnSet",
-                        "columns": [
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Welcome",
-                                        "weight": "bolder",
-                                        "horizontalAlignment": "center",
-                                        "size": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.Submit",
-                                                "title": "Welcome Email",
-                                                "data": {
-                                                    "action": "select_template",
-                                                    "template": "welcome"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Program Concerns",
-                                        "weight": "bolder",
-                                        "horizontalAlignment": "center",
-                                        "size": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.ShowCard",
-                                                "title": "Select Concern Type",
-                                                "card": {
-                                                    "type": "AdaptiveCard",
-                                                    "body": [
-                                                        {
-                                                            "type": "ActionSet",
-                                                            "actions": [
-                                                                {
-                                                                    "type": "Action.Submit",
-                                                                    "title": "Credit Concerns",
-                                                                    "data": {
-                                                                        "action": "select_template",
-                                                                        "template": "credit_concerns"
-                                                                    }
-                                                                }
-                                                            ]
-                                                        },
-                                                        {
-                                                            "type": "ActionSet",
-                                                            "actions": [
-                                                                {
-                                                                    "type": "Action.Submit",
-                                                                    "title": "Program Cost Concerns",
-                                                                    "data": {
-                                                                        "action": "select_template",
-                                                                        "template": "program_cost"
-                                                                    }
-                                                                }
-                                                            ]
-                                                        },
-                                                        {
-                                                            "type": "ActionSet",
-                                                            "actions": [
-                                                                {
-                                                                    "type": "Action.Submit",
-                                                                    "title": "Account Exclusion",
-                                                                    "data": {
-                                                                        "action": "select_template",
-                                                                        "template": "account_exclusion"
-                                                                    }
-                                                                }
-                                                            ]
-                                                        }
-                                                    ]
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
+            # Create categories for better organization
+            general_templates = [
+                {
+                    "type": "TextBlock",
+                    "text": "General Client Communications",
+                    "weight": "bolder",
+                    "size": "medium",
+                    "spacing": "medium"
+                }
+            ]
+            
+            general_actions = [
+                {
+                    "type": "Action.Submit",
+                    "title": "Welcome Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "welcome"
                     }
-                ],
-                "spacing": "medium"
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Credit Concerns Response",
+                    "data": {
+                        "action": "select_template",
+                        "template": "credit_concerns"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Settlement Timeline Info",
+                    "data": {
+                        "action": "select_template",
+                        "template": "settlement_timeline"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Program Cost Concerns",
+                    "data": {
+                        "action": "select_template",
+                        "template": "program_cost"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Account Exclusion Response",
+                    "data": {
+                        "action": "select_template",
+                        "template": "account_exclusion"
+                    }
+                }
+            ]
+            
+            legal_templates = [
+                {
+                    "type": "TextBlock",
+                    "text": "Legal & Collection Communications",
+                    "weight": "bolder",
+                    "size": "medium",
+                    "spacing": "medium"
+                }
+            ]
+            
+            legal_actions = [
+                {
+                    "type": "Action.Submit",
+                    "title": "Legal Update",
+                    "data": {
+                        "action": "select_template",
+                        "template": "legal_update"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Legal Threat Response",
+                    "data": {
+                        "action": "select_template",
+                        "template": "legal_threat"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Legal Document Confirmation",
+                    "data": {
+                        "action": "select_template",
+                        "template": "legal_confirmation"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Collection Calls Response",
+                    "data": {
+                        "action": "select_template",
+                        "template": "collection_calls"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Creditor Notices Response",
+                    "data": {
+                        "action": "select_template",
+                        "template": "creditor_notices"
+                    }
+                }
+            ]
+            
+            payment_templates = [
+                {
+                    "type": "TextBlock",
+                    "text": "Payment & Settlement Communications",
+                    "weight": "bolder",
+                    "size": "medium",
+                    "spacing": "medium"
+                }
+            ]
+            
+            payment_actions = [
+                {
+                    "type": "Action.Submit",
+                    "title": "Lost Settlement",
+                    "data": {
+                        "action": "select_template",
+                        "template": "lost_settlement"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Payment Returned",
+                    "data": {
+                        "action": "select_template",
+                        "template": "payment_returned"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Draft Reduction Request",
+                    "data": {
+                        "action": "select_template",
+                        "template": "draft_reduction"
+                    }
+                }
+            ]
+            
+            # Add all sections to the card body
+            card["body"].extend(general_templates)
+            card["body"].append({
+                "type": "ActionSet",
+                "actions": general_actions
             })
             
-            # Legal section
+            card["body"].extend(legal_templates)
             card["body"].append({
-                "type": "Container",
-                "style": "warning",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Legal & Collection Communications",
-                        "weight": "bolder",
-                        "size": "medium"
-                    },
-                    {
-                        "type": "ColumnSet",
-                        "columns": [
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Legal Status",
-                                        "weight": "bolder",
-                                        "horizontalAlignment": "center",
-                                        "size": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.ShowCard",
-                                                "title": "Legal Templates",
-                                                "card": {
-                                                    "type": "AdaptiveCard",
-                                                    "body": [
-                                                        {
-                                                            "type": "ActionSet",
-                                                            "actions": [
-                                                                {
-                                                                    "type": "Action.Submit",
-                                                                    "title": "Legal Update",
-                                                                    "data": {
-                                                                        "action": "select_template",
-                                                                        "template": "legal_update"
-                                                                    }
-                                                                }
-                                                            ]
-                                                        },
-                                                        {
-                                                            "type": "ActionSet",
-                                                            "actions": [
-                                                                {
-                                                                    "type": "Action.Submit",
-                                                                    "title": "Legal Threat Response",
-                                                                    "data": {
-                                                                        "action": "select_template",
-                                                                        "template": "legal_threat"
-                                                                    }
-                                                                }
-                                                            ]
-                                                        },
-                                                        {
-                                                            "type": "ActionSet",
-                                                            "actions": [
-                                                                {
-                                                                    "type": "Action.Submit",
-                                                                    "title": "Legal Document Confirmation",
-                                                                    "data": {
-                                                                        "action": "select_template",
-                                                                        "template": "legal_confirmation"
-                                                                    }
-                                                                }
-                                                            ]
-                                                        }
-                                                    ]
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Collection Issues",
-                                        "weight": "bolder",
-                                        "horizontalAlignment": "center",
-                                        "size": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.ShowCard",
-                                                "title": "Collection Templates",
-                                                "card": {
-                                                    "type": "AdaptiveCard",
-                                                    "body": [
-                                                        {
-                                                            "type": "ActionSet",
-                                                            "actions": [
-                                                                {
-                                                                    "type": "Action.Submit",
-                                                                    "title": "Collection Calls Response",
-                                                                    "data": {
-                                                                        "action": "select_template",
-                                                                        "template": "collection_calls"
-                                                                    }
-                                                                }
-                                                            ]
-                                                        },
-                                                        {
-                                                            "type": "ActionSet",
-                                                            "actions": [
-                                                                {
-                                                                    "type": "Action.Submit",
-                                                                    "title": "Creditor Notices Response",
-                                                                    "data": {
-                                                                        "action": "select_template",
-                                                                        "template": "creditor_notices"
-                                                                    }
-                                                                }
-                                                            ]
-                                                        }
-                                                    ]
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ],
-                "spacing": "medium"
+                "type": "ActionSet",
+                "actions": legal_actions
             })
             
-            # Payment section
+            card["body"].extend(payment_templates)
             card["body"].append({
-                "type": "Container",
-                "style": "attention",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Payment & Settlement Communications",
-                        "weight": "bolder",
-                        "size": "medium"
-                    },
-                    {
-                        "type": "ColumnSet",
-                        "columns": [
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Settlement Status",
-                                        "weight": "bolder",
-                                        "horizontalAlignment": "center",
-                                        "size": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.Submit",
-                                                "title": "Settlement Timeline",
-                                                "data": {
-                                                    "action": "select_template",
-                                                    "template": "settlement_timeline"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Payment Issues",
-                                        "weight": "bolder",
-                                        "horizontalAlignment": "center",
-                                        "size": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.ShowCard",
-                                                "title": "Payment Templates",
-                                                "card": {
-                                                    "type": "AdaptiveCard",
-                                                    "body": [
-                                                        {
-                                                            "type": "ActionSet",
-                                                            "actions": [
-                                                                {
-                                                                    "type": "Action.Submit",
-                                                                    "title": "Lost Settlement",
-                                                                    "data": {
-                                                                        "action": "select_template",
-                                                                        "template": "lost_settlement"
-                                                                    }
-                                                                }
-                                                            ]
-                                                        },
-                                                        {
-                                                            "type": "ActionSet",
-                                                            "actions": [
-                                                                {
-                                                                    "type": "Action.Submit",
-                                                                    "title": "Payment Returned",
-                                                                    "data": {
-                                                                        "action": "select_template",
-                                                                        "template": "payment_returned"
-                                                                    }
-                                                                }
-                                                            ]
-                                                        },
-                                                        {
-                                                            "type": "ActionSet",
-                                                            "actions": [
-                                                                {
-                                                                    "type": "Action.Submit",
-                                                                    "title": "Draft Reduction Request",
-                                                                    "data": {
-                                                                        "action": "select_template",
-                                                                        "template": "draft_reduction"
-                                                                    }
-                                                                }
-                                                            ]
-                                                        }
-                                                    ]
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ],
-                "spacing": "medium"
+                "type": "ActionSet",
+                "actions": payment_actions
             })
             
         elif channel == "intro":
-            card["body"].append({
-                "type": "Container",
-                "style": "emphasis",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Introduction Templates",
-                        "weight": "bolder",
-                        "size": "medium"
-                    },
-                    {
-                        "type": "ColumnSet",
-                        "columns": [
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "First Contact",
-                                        "weight": "bolder",
-                                        "horizontalAlignment": "center",
-                                        "size": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.Submit",
-                                                "title": "Introduction Email",
-                                                "data": {
-                                                    "action": "select_template",
-                                                    "template": "introduction"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            {
-                                "type": "Column",
-                                "width": "stretch",
-                                "items": [
-                                    {
-                                        "type": "TextBlock",
-                                        "text": "Check-in",
-                                        "weight": "bolder",
-                                        "horizontalAlignment": "center",
-                                        "size": "small"
-                                    },
-                                    {
-                                        "type": "ActionSet",
-                                        "actions": [
-                                            {
-                                                "type": "Action.Submit",
-                                                "title": "Follow-up Email",
-                                                "data": {
-                                                    "action": "select_template",
-                                                    "template": "followup"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        "type": "TextBlock",
-                        "text": "Custom Template",
-                        "weight": "bolder",
-                        "horizontalAlignment": "center",
-                        "size": "small"
-                    },
-                    {
-                        "type": "ActionSet",
-                        "actions": [
-                            {
-                                "type": "Action.Submit",
-                                "title": "Generic Email",
-                                "data": {
-                                    "action": "select_template",
-                                    "template": "generic"
-                                }
-                            }
-                        ]
+            card["actions"] = [
+                {
+                    "type": "Action.Submit",
+                    "title": "Introduction Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "introduction"
                     }
-                ],
-                "spacing": "medium"
-            })
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Follow-up Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "followup"
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Generic Email",
+                    "data": {
+                        "action": "select_template",
+                        "template": "generic"
+                    }
+                }
+            ]
         
         # Add back button
-        card["actions"] = [
-            {
-                "type": "Action.Submit",
-                "title": "Back to Channels",
-                "data": {
-                    "action": "create_email"
-                }
+        card["actions"] = card.get("actions", [])
+        card["actions"].append({
+            "type": "Action.Submit",
+            "title": "Back to Channels",
+            "data": {
+                "action": "create_email"
             }
-        ]
+        })
             
     elif template_mode == "generic" or template_mode == "sales_generic":
         # Generic email card
@@ -3457,7 +2972,7 @@ def create_email_card(template_mode="selection", channel=None):
                     "type": "Input.Toggle",
                     "id": "hasAttachments",
                     "title": "Mention attachments in email?",
-                    "value": "False"
+                    "value": "false"
                 },
                 {
                     "type": "TextBlock",
@@ -3573,7 +3088,7 @@ def create_email_card(template_mode="selection", channel=None):
                 "type": "Input.Toggle",
                 "id": "hasAttachments",
                 "title": "Mention attachments in email?",
-                "value": "False"
+                "value": "false"
             },
             {
                 "type": "TextBlock",
@@ -3639,7 +3154,7 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
             "body": [
                 {
                     "type": "Container",
-                    "style": "emphasis",
+                    "style": "attention",
                     "items": [
                         {
                             "type": "TextBlock",
@@ -3653,7 +3168,6 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
                 },
                 {
                     "type": "Container",
-                    "style": "default",
                     "items": [
                         {
                             "type": "TextBlock",
@@ -3690,8 +3204,7 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
                                 }
                             ]
                         }
-                    ],
-                    "spacing": "Medium"
+                    ]
                 }
             ],
             "actions": [
@@ -3722,7 +3235,7 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
             "body": [
                 {
                     "type": "Container",
-                    "style": "emphasis",
+                    "style": "accent",
                     "items": [
                         {
                             "type": "TextBlock",
@@ -3736,7 +3249,6 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
                 },
                 {
                     "type": "Container",
-                    "style": "default",
                     "items": [
                         {
                             "type": "TextBlock",
@@ -3789,8 +3301,7 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
                             "text": "\"Write a professional email to the marketing team about the new product launch\"\n\n\"Summarize the key points from the document I just uploaded\"\n\n\"Draft a meeting invitation for a project kickoff on Friday\"",
                             "wrap": True
                         }
-                    ],
-                    "spacing": "Medium"
+                    ]
                 }
             ],
             "actions": [
@@ -3887,6 +3398,13 @@ def create_email_result_card(email_text):
                 "data": {
                     "action": "create_email"
                 }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Return to Home",
+                "data": {
+                    "action": "new_chat"
+                }
             }
         ]
     }
@@ -3900,33 +3418,22 @@ def create_email_result_card(email_text):
 def create_template_selection_card():
     """Creates an adaptive card for selecting email template categories"""
     card = {
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
-        "version": "1.5",
+        "version": "1.0",
         "body": [
             {
-                "type": "Container",
-                "style": "emphasis",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": "Email Template Categories",
-                        "size": "large",
-                        "weight": "bolder",
-                        "horizontalAlignment": "center"
-                    },
-                    {
-                        "type": "TextBlock",
-                        "text": "Select a template category to start your email",
-                        "wrap": True,
-                        "horizontalAlignment": "center"
-                    }
-                ],
-                "bleed": True
+                "type": "TextBlock",
+                "text": "Email Template Categories",
+                "size": "large",
+                "weight": "bolder"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Select a template category to start your email",
+                "wrap": True
             },
             {
                 "type": "Container",
-                "style": "default",
                 "items": [
                     {
                         "type": "ColumnSet",
@@ -3936,31 +3443,18 @@ def create_template_selection_card():
                                 "width": "stretch",
                                 "items": [
                                     {
-                                        "type": "Container",
-                                        "style": "accent",
-                                        "items": [
+                                        "type": "ActionSet",
+                                        "actions": [
                                             {
-                                                "type": "TextBlock",
-                                                "text": "📩 Introduction",
-                                                "weight": "bolder",
-                                                "horizontalAlignment": "center"
-                                            },
-                                            {
-                                                "type": "ActionSet",
-                                                "actions": [
-                                                    {
-                                                        "type": "Action.Submit",
-                                                        "title": "Select",
-                                                        "data": {
-                                                            "action": "template_category",
-                                                            "category": "introduction"
-                                                        },
-                                                        "style": "positive"
-                                                    }
-                                                ]
+                                                "type": "Action.Submit",
+                                                "title": "📩 Introduction",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "introduction"
+                                                },
+                                                "style": "positive"
                                             }
-                                        ],
-                                        "spacing": "small"
+                                        ]
                                     }
                                 ]
                             },
@@ -3969,30 +3463,17 @@ def create_template_selection_card():
                                 "width": "stretch",
                                 "items": [
                                     {
-                                        "type": "Container",
-                                        "style": "good",
-                                        "items": [
+                                        "type": "ActionSet",
+                                        "actions": [
                                             {
-                                                "type": "TextBlock",
-                                                "text": "🔄 Follow-up",
-                                                "weight": "bolder",
-                                                "horizontalAlignment": "center"
-                                            },
-                                            {
-                                                "type": "ActionSet",
-                                                "actions": [
-                                                    {
-                                                        "type": "Action.Submit",
-                                                        "title": "Select",
-                                                        "data": {
-                                                            "action": "template_category",
-                                                            "category": "followup"
-                                                        }
-                                                    }
-                                                ]
+                                                "type": "Action.Submit",
+                                                "title": "🔄 Follow-up",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "followup"
+                                                }
                                             }
-                                        ],
-                                        "spacing": "small"
+                                        ]
                                     }
                                 ]
                             }
@@ -4006,30 +3487,17 @@ def create_template_selection_card():
                                 "width": "stretch",
                                 "items": [
                                     {
-                                        "type": "Container",
-                                        "style": "warning",
-                                        "items": [
+                                        "type": "ActionSet",
+                                        "actions": [
                                             {
-                                                "type": "TextBlock",
-                                                "text": "📝 Request",
-                                                "weight": "bolder",
-                                                "horizontalAlignment": "center"
-                                            },
-                                            {
-                                                "type": "ActionSet",
-                                                "actions": [
-                                                    {
-                                                        "type": "Action.Submit",
-                                                        "title": "Select",
-                                                        "data": {
-                                                            "action": "template_category",
-                                                            "category": "request"
-                                                        }
-                                                    }
-                                                ]
+                                                "type": "Action.Submit",
+                                                "title": "📝 Request",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "request"
+                                                }
                                             }
-                                        ],
-                                        "spacing": "small"
+                                        ]
                                     }
                                 ]
                             },
@@ -4038,46 +3506,109 @@ def create_template_selection_card():
                                 "width": "stretch",
                                 "items": [
                                     {
-                                        "type": "Container",
-                                        "style": "attention",
-                                        "items": [
+                                        "type": "ActionSet",
+                                        "actions": [
                                             {
-                                                "type": "TextBlock",
-                                                "text": "🙏 Thank You",
-                                                "weight": "bolder",
-                                                "horizontalAlignment": "center"
-                                            },
-                                            {
-                                                "type": "ActionSet",
-                                                "actions": [
-                                                    {
-                                                        "type": "Action.Submit",
-                                                        "title": "Select",
-                                                        "data": {
-                                                            "action": "template_category",
-                                                            "category": "thankyou"
-                                                        }
-                                                    }
-                                                ]
+                                                "type": "Action.Submit",
+                                                "title": "🙏 Thank You",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "thankyou"
+                                                }
                                             }
-                                        ],
-                                        "spacing": "small"
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "type": "ColumnSet",
+                        "columns": [
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "📊 Status Update",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "status"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "📅 Meeting",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "meeting"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "type": "ColumnSet",
+                        "columns": [
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "⚠️ Urgent",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "urgent"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Column",
+                                "width": "stretch",
+                                "items": [
+                                    {
+                                        "type": "ActionSet",
+                                        "actions": [
+                                            {
+                                                "type": "Action.Submit",
+                                                "title": "✨ Custom",
+                                                "data": {
+                                                    "action": "template_category",
+                                                    "category": "custom"
+                                                }
+                                            }
+                                        ]
                                     }
                                 ]
                             }
                         ]
                     }
-                ],
-                "spacing": "medium"
-            }
-        ],
-        "actions": [
-            {
-                "type": "Action.Submit",
-                "title": "Back to Email Types",
-                "data": {
-                    "action": "create_email"
-                }
+                ]
             }
         ]
     }
@@ -4266,24 +3797,17 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
         "version": "1.5",
         "body": [
             {
-                "type": "Container",
-                "style": "emphasis",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "size": "medium",
-                        "weight": "bolder",
-                        "text": f"{defaults['title']} Email Template",
-                        "horizontalAlignment": "center",
-                        "wrap": True,
-                        "style": "heading"
-                    }
-                ],
-                "bleed": True
+                "type": "TextBlock",
+                "size": "medium",
+                "weight": "bolder",
+                "text": f"{defaults['title']} Email Template",
+                "horizontalAlignment": "center",
+                "wrap": True,
+                "style": "heading"
             },
             {
                 "type": "Container",
-                "style": "default",
+                "style": "emphasis",
                 "items": [
                     {
                         "type": "TextBlock",
@@ -4310,15 +3834,13 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
                         "isRequired": True,
                         "errorMessage": "Subject is required"
                     }
-                ],
-                "spacing": "medium"
+                ]
             }
         ],
         "actions": [
             {
                 "type": "Action.Submit",
                 "title": "Generate Email",
-                "style": "positive",
                 "data": {
                     "action": "generate_category_email",
                     "category": category
@@ -4389,7 +3911,6 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
     # Add purpose/details section based on category
     purpose_container = {
         "type": "Container",
-        "style": "accent",
         "items": [
             {
                 "type": "TextBlock",
@@ -4407,15 +3928,13 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
                 "isRequired": True,
                 "errorMessage": "Please provide content details"
             }
-        ],
-        "spacing": "medium"
+        ]
     }
     
-    # Add category-specific sections with improved styling
+    # Add category-specific sections
     if category == "followup":
         followup_container = {
             "type": "Container",
-            "style": "good",
             "items": [
                 {
                     "type": "TextBlock",
@@ -4460,15 +3979,13 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
                     ],
                     "value": "request_update"
                 }
-            ],
-            "spacing": "medium"
+            ]
         }
         card["body"].append(followup_container)
     
     elif category == "request":
         request_container = {
             "type": "Container",
-            "style": "warning",
             "items": [
                 {
                     "type": "TextBlock",
@@ -4510,15 +4027,13 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
                     ],
                     "value": "medium"
                 }
-            ],
-            "spacing": "medium"
+            ]
         }
         card["body"].append(request_container)
     
     elif category == "meeting":
         meeting_container = {
             "type": "Container",
-            "style": "emphasis",
             "items": [
                 {
                     "type": "TextBlock",
@@ -4582,15 +4097,13 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
                     ],
                     "value": "initial"
                 }
-            ],
-            "spacing": "medium"
+            ]
         }
         card["body"].append(meeting_container)
     
     elif category == "status":
         status_container = {
             "type": "Container",
-            "style": "accent",
             "items": [
                 {
                     "type": "TextBlock",
@@ -4643,8 +4156,7 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
                     "placeholder": "List any challenges or blockers",
                     "isMultiline": True
                 }
-            ],
-            "spacing": "medium"
+            ]
         }
         card["body"].append(status_container)
 
@@ -4654,7 +4166,6 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
     # Common optional fields for all categories
     optional_container = {
         "type": "Container",
-        "style": "attention",
         "items": [
             {
                 "type": "TextBlock",
@@ -4697,8 +4208,7 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
                 ],
                 "value": "none"
             }
-        ],
-        "spacing": "medium"
+        ]
     }
     
     card["body"].append(optional_container)
@@ -4711,6 +4221,7 @@ async def send_category_email_card(turn_context: TurnContext, category: str):
     reply = _create_reply(turn_context.activity)
     reply.attachments = [attachment]
     await turn_context.send_activity(reply)
+
 def get_category_defaults(category: str) -> dict:
     """Returns default values and placeholders for the selected category"""
     defaults = {
@@ -4976,11 +4487,7 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
                     await typing_task
                 except asyncio.CancelledError:
                     pass
-                # Add these calls at the end of stream_with_teams_ai function:
-                try:
-                    await turn_context.send_activity(create_typing_stop_activity())
-                except Exception as typing_stop_error:
-                    logging.error(f"Error stopping typing indicator: {typing_stop_error}")
+                await turn_context.send_activity(create_typing_stop_activity())
         else:
             # Use custom streaming implementation if Teams AI not available
             # Setup a custom collector similar to above
@@ -5069,11 +4576,7 @@ async def generate_category_email(turn_context: TurnContext, state, category: st
                     await typing_task
                 except asyncio.CancelledError:
                     pass
-                # Add these calls at the end of stream_with_teams_ai function:
-                try:
-                    await turn_context.send_activity(create_typing_stop_activity())
-                except Exception as typing_stop_error:
-                    logging.error(f"Error stopping typing indicator: {typing_stop_error}")
+                await turn_context.send_activity(create_typing_stop_activity())
         
         # If we have email text, create and send the card
         if email_text:
@@ -5422,70 +4925,64 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
             
             # Create an enhanced email result card with more options
             email_card = {
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "type": "AdaptiveCard",
-            "version": "1.5",
-            "body": [
-                {
-                    "type": "Container",
-                    "style": "emphasis",
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": get_template_title(template_id) if template_id != "generic" else "Generated Email",
-                            "size": "large",
-                            "weight": "bolder",
-                            "horizontalAlignment": "center"
-                        }
-                    ],
-                    "bleed": True
-                },
-                {
-                    "type": "Container",
-                    "style": "default",
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": email_text,
-                            "wrap": True,
-                            "spacing": "medium"
-                        }
-                    ],
-                    "padding": "Medium"
-                },
-                {
-                    "type": "Container",
-                    "style": "good",
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": "Email generated successfully!",
-                            "wrap": True,
-                            "size": "small",
-                            "horizontalAlignment": "center"
-                        }
-                    ],
-                    "spacing": "medium"
-                }
-            ],
-            "actions": [
-                {
-                    "type": "Action.Submit",
-                    "title": "Edit This Email",
-                    "style": "positive",
-                    "data": {
-                        "action": "edit_email"
+                "type": "AdaptiveCard",
+                "version": "1.3",
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "body": [
+                    {
+                        "type": "Container",
+                        "style": "emphasis",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": get_template_title(template_id) if template_id != "generic" else "Generated Email",
+                                "size": "large",
+                                "weight": "bolder",
+                                "horizontalAlignment": "center",
+                                "color": "accent"
+                            }
+                        ],
+                        "bleed": True
+                    },
+                    {
+                        "type": "Container",
+                        "style": "default",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": email_text,
+                                "wrap": True,
+                                "spacing": "medium"
+                            }
+                        ],
+                        "padding": "Medium"
                     }
-                },
-                {
-                    "type": "Action.Submit",
-                    "title": "Create Another Email",
-                    "data": {
-                        "action": "create_email"
+                ],
+                "actions": [
+                    {
+                        "type": "Action.Submit",
+                        "title": "Edit This Email",
+                        "data": {
+                            "action": "edit_email"
+                        }
+                    },
+                    {
+                        "type": "Action.Submit",
+                        "title": "Create Another Email",
+                        "style": "positive",
+                        "data": {
+                            "action": "create_email"
+                        }
+                    },
+                    {
+                        "type": "Action.Submit",
+                        "title": "Return to Home",
+                        "data": {
+                            "action": "new_chat"
+                        }
                     }
-                }
-            ]
-        }
+                ]
+            }
             
             # Create attachment
             attachment = Attachment(
@@ -7389,11 +6886,7 @@ async def stream_with_custom_implementation(turn_context: TurnContext, state, us
             logging.error(f"Error in custom streaming: {e}")
             traceback.print_exc()
             await turn_context.send_activity("I encountered an error while processing your request. Please try again.")
-            # Add these calls at the end of stream_with_teams_ai function:
-            try:
-                await turn_context.send_activity(create_typing_stop_activity())
-            except Exception as typing_stop_error:
-                logging.error(f"Error stopping typing indicator: {typing_stop_error}")
+            await turn_context.send_activity(create_typing_stop_activity())
             # Try a fallback direct completion
             await send_fallback_response(turn_context, user_message)
     
