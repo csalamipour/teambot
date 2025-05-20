@@ -39,8 +39,9 @@ from botbuilder.schema import (
     ConversationReference,
     ChannelAccount,
     ConversationAccount,
-    Entity
+    Entity,
 )
+
 
 from botbuilder.schema.teams import (
     FileDownloadInfo,
@@ -110,6 +111,8 @@ operation_statuses = {}
 # Create adapter with proper settings for Bot Framework
 SETTINGS = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
 ADAPTER = BotFrameworkAdapter(SETTINGS)
+# First, implement the on_invoke_activity function
+# Catch-all for errors
 async def on_error(context: TurnContext, error: Exception):
     # Print the error to the console
     logger.error(f"\n [on_turn_error] unhandled error: {error}")
@@ -137,6 +140,8 @@ async def on_error(context: TurnContext, error: Exception):
         await send_fallback_response(context, None)
     except:
         pass  # If even this fails, just continue
+# Handler for adaptive card invokes
+# Define the on_invoke_activity handler
 async def on_invoke_activity(turn_context: TurnContext):
     """Handles invoke activities"""
     try:
@@ -144,15 +149,22 @@ async def on_invoke_activity(turn_context: TurnContext):
         
         if activity.name == "adaptiveCard/action":
             invoke_value = activity.value
-            response = await on_adaptive_card_invoke(turn_context, invoke_value)
-            
-            # Send response
-            if response and hasattr(turn_context, 'send_activity'):
-                await turn_context.send_activity(Activity(
-                    type=ActivityTypes.invoke_response,
-                    value=response
-                ))
+            await handle_card_actions(turn_context, invoke_value)
             return
+        
+        # Handle other invoke types if needed
+        
+    except Exception as e:
+        logging.error(f"Error in on_invoke_activity: {e}")
+        traceback.print_exc()
+        
+        # Try to send a fallback response
+        try:
+            await turn_context.send_activity("I encountered an error processing your card action. Please try again.")
+        except:
+            pass
+    
+    return None
 ADAPTER.on_turn_error = on_error
 ADAPTER.on_invoke_activity = on_invoke_activity
 # Directory for file handling
