@@ -1049,8 +1049,7 @@ def create_unified_email_card(state=None, active_view="main", template_data=None
         
         # Get template title
         template_title = get_template_title(template_id)
-        card["body"][0]["items"][0]["text"] = template_title
-        
+        card["body"][0]["items"][0]["text"] = f"{template_title}"
         # Create form container
         form_container = {
             "type": "Container",
@@ -2629,6 +2628,7 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             return
         
         # Handle template selection from hierarchical card
+        # In handle_card_actions function, make sure this section is correct:
         elif action_data.get("action") == "select_template_from_hierarchy":
             # Determine which template was selected based on dropdown values
             template_id = None
@@ -2640,9 +2640,9 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
                 # Handle direct category selections
                 if category == "generic":
                     template_id = "generic"
-                elif category in ["customer_service", "sales", "intro"]:
+                elif category in ["client_services", "sales", "intro"]:
                     # These categories need more specific template selection
-                    if category == "customer_service":
+                    if category == "client_services":
                         if "clientServicesGeneral" in action_data and action_data["clientServicesGeneral"]:
                             template_id = action_data["clientServicesGeneral"]
                         elif "clientServicesLegal" in action_data and action_data["clientServicesLegal"]:
@@ -2658,7 +2658,7 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             if not template_id:
                 template_id = "generic"
             
-            # Show the template form
+            # Show the template form with the CORRECT TEMPLATE ID
             template_data = {"template": template_id}
             unified_card = create_unified_email_card(state, "template", template_data)
             
@@ -3871,6 +3871,7 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
 
 def create_email_result_card(email_text):
     """Creates an enhanced card displaying the generated email with edit option"""
+    
     card = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
