@@ -110,7 +110,51 @@ operation_statuses = {}
 # Create adapter with proper settings for Bot Framework
 SETTINGS = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
 ADAPTER = BotFrameworkAdapter(SETTINGS)
+async def on_error(context: TurnContext, error: Exception):
+    # Print the error to the console
+    logger.error(f"\n [on_turn_error] unhandled error: {error}")
+    traceback.print_exc()
+    
+    # Send a message to the user
+    await context.send_activity("The bot encountered an error. Please try again.")
+    
+    # Send a trace activity if we're talking to the Bot Framework Emulator
+    if context.activity.channel_id == "emulator":
+        # Create a trace activity that contains the error object
+        trace_activity = Activity(
+            label="TurnError",
+            name="on_turn_error Trace",
+            timestamp=datetime.utcnow(),
+            type=ActivityTypes.trace,
+            value=f"{error}",
+            value_type="https://www.botframework.com/schemas/error",
+        )
+        # Send a trace activity, which will be displayed in Bot Framework Emulator
+        await context.send_activity(trace_activity)
 
+    # Try to recover with fallback response
+    try:
+        await send_fallback_response(context, None)
+    except:
+        pass  # If even this fails, just continue
+async def on_invoke_activity(turn_context: TurnContext):
+    """Handles invoke activities"""
+    try:
+        activity = turn_context.activity
+        
+        if activity.name == "adaptiveCard/action":
+            invoke_value = activity.value
+            response = await on_adaptive_card_invoke(turn_context, invoke_value)
+            
+            # Send response
+            if response and hasattr(turn_context, 'send_activity'):
+                await turn_context.send_activity(Activity(
+                    type=ActivityTypes.invoke_response,
+                    value=response
+                ))
+            return
+ADAPTER.on_turn_error = on_error
+ADAPTER.on_invoke_activity = on_invoke_activity
 # Directory for file handling
 FILE_DIRECTORY = "files/"
 os.makedirs(FILE_DIRECTORY, exist_ok=True)
@@ -733,74 +777,634 @@ Email: service@firstchoicedebtrelief.com"
 PS: Remember to embody First Choice Debt Relief's commitment to helping clients achieve financial freedom through every interaction, supporting employees in providing exceptional service at each client touchpoint.
 PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant and applicable)
 '''
-# async def retrieve_documents(query, top=3):
-#     """
-#     Retrieves documents from Azure AI Search using basic parameters.
-#     Adapts to the index structure by looking for content in various fields.
-#     """
-#     try:
-#         search_client = create_search_client()
-#         if not search_client:
-#             return []
-            
-#         # Use only basic search parameters that work with any SDK version
-#         results = search_client.search(
-#             search_text=query,
-#             top=top
-#         )
+def create_unified_email_card(state=None, active_view="main", template_data=None):
+    """
+    Creates a single unified adaptive card for email template selection and generation.
+    
+    Args:
+        state: The conversation state (optional)
+        active_view: Which view to display (main, customer_service, sales, intro, or template)
+        template_data: Data for template-specific view (template_id, form_data, etc.)
+    
+    Returns:
+        Attachment: The complete adaptive card
+    """
+    # Base card structure
+    card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.5",
+        "body": [
+            {
+                "type": "Container",
+                "style": "emphasis",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "First Choice Debt Relief Email Creator",
+                        "size": "large",
+                        "weight": "bolder",
+                        "horizontalAlignment": "center"
+                    }
+                ],
+                "bleed": True
+            }
+        ],
+        "actions": []
+    }
+    
+    # Main view - shows the channel categories
+    if active_view == "main":
+        card["body"].append({
+            "type": "TextBlock",
+            "text": "Select an email category to get started",
+            "wrap": True,
+            "horizontalAlignment": "center"
+        })
         
-#         documents = []
+        card["body"].append({
+            "type": "Container",
+            "items": [
+                {
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "width": "stretch",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": "📧 Client Services",
+                                    "weight": "bolder",
+                                    "horizontalAlignment": "center"
+                                },
+                                {
+                                    "type": "TextBlock",
+                                    "text": "Service emails to existing clients",
+                                    "wrap": True,
+                                    "size": "small",
+                                    "horizontalAlignment": "center",
+                                    "spacing": "none"
+                                }
+                            ]
+                        },
+                        {
+                            "type": "Column",
+                            "width": "stretch",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": "💼 Sales Templates",
+                                    "weight": "bolder",
+                                    "horizontalAlignment": "center"
+                                },
+                                {
+                                    "type": "TextBlock",
+                                    "text": "Quotes and program offerings",
+                                    "wrap": True,
+                                    "size": "small",
+                                    "horizontalAlignment": "center",
+                                    "spacing": "none"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        })
         
-#         # Process search results
-#         for item in results:
-#             # Try to get content from various possible field names
-#             content = None
-#             for field_name in ["chunk", "content", "text"]:
-#                 if field_name in item:
-#                     content = item[field_name]
-#                     if content:
-#                         break
-            
-#             if not content:
-#                 # If we can't find a content field, look for any string field
-#                 for key, value in item.items():
-#                     if isinstance(value, str) and len(value) > 50:
-#                         content = value
-#                         break
-            
-#             if not content:
-#                 continue
-            
-#             # Try to get a title
-#             title = None
-#             for title_field in ["title", "name", "filename"]:
-#                 if title_field in item:
-#                     title = item[title_field]
-#                     if title:
-#                         break
-            
-#             if not title:
-#                 # Use a key as title if available
-#                 for key_field in ["id", "key", "chunk_id"]:
-#                     if key_field in item:
-#                         title = f"Document {item[key_field]}"
-#                         break
-                        
-#             if not title:
-#                 title = "Unknown Document"
-            
-#             documents.append({
-#                 "title": title,
-#                 "content": content
-#             })
+        card["body"].append({
+            "type": "ColumnSet",
+            "columns": [
+                {
+                    "type": "Column",
+                    "width": "stretch",
+                    "items": [
+                        {
+                            "type": "ActionSet",
+                            "actions": [
+                                {
+                                    "type": "Action.Submit",
+                                    "title": "Select",
+                                    "style": "positive",
+                                    "data": {
+                                        "action": "view_change",
+                                        "view": "customer_service"
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "type": "Column",
+                    "width": "stretch",
+                    "items": [
+                        {
+                            "type": "ActionSet",
+                            "actions": [
+                                {
+                                    "type": "Action.Submit",
+                                    "title": "Select",
+                                    "style": "positive",
+                                    "data": {
+                                        "action": "view_change",
+                                        "view": "sales"
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        })
         
-#         return documents
-            
-#     except Exception as e:
-#         logging.error(f"Error retrieving documents: {e}")
-#         import traceback
-#         traceback.print_exc()
-#         return []
+        card["body"].append({
+            "type": "Container",
+            "items": [
+                {
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "width": "stretch",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": "🤝 Introduction",
+                                    "weight": "bolder",
+                                    "horizontalAlignment": "center"
+                                },
+                                {
+                                    "type": "TextBlock",
+                                    "text": "New client outreach",
+                                    "wrap": True,
+                                    "size": "small",
+                                    "horizontalAlignment": "center",
+                                    "spacing": "none"
+                                }
+                            ]
+                        },
+                        {
+                            "type": "Column",
+                            "width": "stretch",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": "✨ Custom Email",
+                                    "weight": "bolder",
+                                    "horizontalAlignment": "center"
+                                },
+                                {
+                                    "type": "TextBlock",
+                                    "text": "Create a custom email",
+                                    "wrap": True,
+                                    "size": "small",
+                                    "horizontalAlignment": "center",
+                                    "spacing": "none"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        })
+        
+        card["body"].append({
+            "type": "ColumnSet",
+            "columns": [
+                {
+                    "type": "Column",
+                    "width": "stretch",
+                    "items": [
+                        {
+                            "type": "ActionSet",
+                            "actions": [
+                                {
+                                    "type": "Action.Submit",
+                                    "title": "Select",
+                                    "style": "positive",
+                                    "data": {
+                                        "action": "view_change",
+                                        "view": "intro"
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "type": "Column",
+                    "width": "stretch",
+                    "items": [
+                        {
+                            "type": "ActionSet",
+                            "actions": [
+                                {
+                                    "type": "Action.Submit",
+                                    "title": "Select",
+                                    "style": "positive",
+                                    "data": {
+                                        "action": "view_change",
+                                        "view": "template",
+                                        "template": "generic"
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        })
+        
+        # Add compliance reminder
+        card["body"].append({
+            "type": "Container",
+            "style": "attention",
+            "items": [
+                {
+                    "type": "TextBlock",
+                    "text": "Compliance Reminder",
+                    "weight": "bolder",
+                    "horizontalAlignment": "center",
+                    "size": "small"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": "Always ensure communications follow FCDR compliance guidelines.",
+                    "wrap": True,
+                    "size": "small",
+                    "horizontalAlignment": "center"
+                }
+            ],
+            "spacing": "medium"
+        })
+        
+    # Customer Service Templates View
+    elif active_view == "customer_service":
+        card["body"][0]["items"][0]["text"] = "Client Services Email Templates"
+        
+        # Add back navigation
+        card["body"].append({
+            "type": "TextBlock",
+            "text": "Select a template type:",
+            "wrap": True,
+            "horizontalAlignment": "center"
+        })
+        
+        # Create categories for better organization
+        # General client communications
+        card["body"].append({
+            "type": "TextBlock",
+            "text": "General Client Communications",
+            "weight": "bolder",
+            "size": "medium",
+            "spacing": "medium"
+        })
+        
+        general_templates = [
+            {"title": "Welcome Email", "template": "welcome"},
+            {"title": "Credit Concerns Response", "template": "credit_concerns"},
+            {"title": "Settlement Timeline Info", "template": "settlement_timeline"},
+            {"title": "Program Cost Concerns", "template": "program_cost"},
+            {"title": "Account Exclusion Response", "template": "account_exclusion"}
+        ]
+        
+        card["body"].append(create_template_grid(general_templates))
+        
+        # Legal & Collection Communications
+        card["body"].append({
+            "type": "TextBlock",
+            "text": "Legal & Collection Communications",
+            "weight": "bolder",
+            "size": "medium",
+            "spacing": "medium"
+        })
+        
+        legal_templates = [
+            {"title": "Legal Update", "template": "legal_update"},
+            {"title": "Legal Threat Response", "template": "legal_threat"},
+            {"title": "Legal Document Confirmation", "template": "legal_confirmation"},
+            {"title": "Collection Calls Response", "template": "collection_calls"},
+            {"title": "Creditor Notices Response", "template": "creditor_notices"}
+        ]
+        
+        card["body"].append(create_template_grid(legal_templates))
+        
+        # Payment & Settlement Communications
+        card["body"].append({
+            "type": "TextBlock",
+            "text": "Payment & Settlement Communications",
+            "weight": "bolder",
+            "size": "medium",
+            "spacing": "medium"
+        })
+        
+        payment_templates = [
+            {"title": "Lost Settlement", "template": "lost_settlement"},
+            {"title": "Payment Returned", "template": "payment_returned"},
+            {"title": "Draft Reduction Request", "template": "draft_reduction"}
+        ]
+        
+        card["body"].append(create_template_grid(payment_templates))
+        
+        # Add back button
+        card["actions"] = [
+            {
+                "type": "Action.Submit",
+                "title": "Back to Categories",
+                "data": {
+                    "action": "view_change",
+                    "view": "main"
+                }
+            }
+        ]
+    
+    # Sales Templates View
+    elif active_view == "sales":
+        card["body"][0]["items"][0]["text"] = "Sales Email Templates"
+        
+        card["body"].append({
+            "type": "TextBlock",
+            "text": "Select a template type:",
+            "wrap": True,
+            "horizontalAlignment": "center"
+        })
+        
+        sales_templates = [
+            {"title": "Quick Quote Email", "template": "sales_quick_quote"},
+            {"title": "Initial Quote Email", "template": "sales_quote"},
+            {"title": "Financial Analysis Email", "template": "sales_analysis"},
+            {"title": "Program Overview Email", "template": "sales_overview"},
+            {"title": "Generic Sales Email", "template": "sales_generic"}
+        ]
+        
+        card["body"].append(create_template_grid(sales_templates))
+        
+        # Add back button
+        card["actions"] = [
+            {
+                "type": "Action.Submit",
+                "title": "Back to Categories",
+                "data": {
+                    "action": "view_change",
+                    "view": "main"
+                }
+            }
+        ]
+    
+    # Intro Templates View
+    elif active_view == "intro":
+        card["body"][0]["items"][0]["text"] = "Introduction Email Templates"
+        
+        card["body"].append({
+            "type": "TextBlock",
+            "text": "Select a template type:",
+            "wrap": True,
+            "horizontalAlignment": "center"
+        })
+        
+        intro_templates = [
+            {"title": "Introduction Email", "template": "introduction"},
+            {"title": "Follow-up Email", "template": "followup"},
+            {"title": "Generic Email", "template": "generic"}
+        ]
+        
+        card["body"].append(create_template_grid(intro_templates))
+        
+        # Add back button
+        card["actions"] = [
+            {
+                "type": "Action.Submit",
+                "title": "Back to Categories",
+                "data": {
+                    "action": "view_change",
+                    "view": "main"
+                }
+            }
+        ]
+    
+    # Template-specific view
+    elif active_view == "template":
+        if not template_data or "template" not in template_data:
+            template_id = "generic"
+        else:
+            template_id = template_data["template"]
+        
+        # Get template title
+        template_title = get_template_title(template_id)
+        card["body"][0]["items"][0]["text"] = template_title
+        
+        # Common fields for all templates
+        card["body"].append({
+            "type": "TextBlock",
+            "text": "Recipient (Optional)",
+            "wrap": True
+        })
+        card["body"].append({
+            "type": "Input.Text",
+            "id": "recipient",
+            "placeholder": "Enter recipient(s)"
+        })
+        
+        # Only add client name field for non-generic templates
+        if template_id != "generic" and not template_id.startswith("sales_generic"):
+            card["body"].append({
+                "type": "TextBlock",
+                "text": "Client First Name",
+                "wrap": True
+            })
+            card["body"].append({
+                "type": "Input.Text",
+                "id": "firstname",
+                "placeholder": "Enter client's first name"
+            })
+        
+        # Add template-specific fields
+        if template_id == "lost_settlement":
+            card["body"].extend([
+                {
+                    "type": "TextBlock",
+                    "text": "Payment Gateway",
+                    "wrap": True
+                },
+                {
+                    "type": "Input.Text",
+                    "id": "gateway",
+                    "placeholder": "Enter payment gateway (e.g., bank account)"
+                }
+            ])
+        
+        # For generic template, add subject field
+        if template_id == "generic" or template_id.startswith("sales_generic"):
+            card["body"].extend([
+                {
+                    "type": "TextBlock",
+                    "text": "Subject",
+                    "wrap": True
+                },
+                {
+                    "type": "Input.Text",
+                    "id": "subject",
+                    "placeholder": "Enter email subject"
+                }
+            ])
+        
+        # Add compliance reminder for specific templates
+        if template_id in ["credit_concerns", "legal_threat", "settlement_timeline"]:
+            card["body"].extend([
+                {
+                    "type": "TextBlock",
+                    "text": "Compliance Reminder",
+                    "wrap": True,
+                    "weight": "bolder",
+                    "color": "attention",
+                    "spacing": "medium"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": "Remember to follow compliance guidelines. Avoid making guarantees or promises about specific outcomes.",
+                    "wrap": True,
+                    "isSubtle": True,
+                    "color": "attention"
+                }
+            ])
+        
+        # Add instructions field for all templates
+        card["body"].extend([
+            {
+                "type": "TextBlock",
+                "text": "Instructions (Optional)",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "instructions",
+                "placeholder": "Any specific details or modifications to the template - your instructions will take priority over the template",
+                "isMultiline": True
+            }
+        ])
+        
+        # For generic templates, add previous email field
+        if template_id == "generic" or template_id.startswith("sales_generic"):
+            card["body"].extend([
+                {
+                    "type": "TextBlock",
+                    "text": "Previous Email (for replies)",
+                    "wrap": True
+                },
+                {
+                    "type": "Input.Text",
+                    "id": "chain",
+                    "placeholder": "Paste previous email if this is a reply",
+                    "isMultiline": True
+                }
+            ])
+        
+        # Add attachment toggle
+        card["body"].extend([
+            {
+                "type": "Input.Toggle",
+                "id": "hasAttachments",
+                "title": "Mention attachments in email?",
+                "value": "false"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Note: This only mentions attachments in the text. To actually attach files, you'll need to add them when sending the email in your email client.",
+                "wrap": True,
+                "isSubtle": True,
+                "size": "small"
+            }
+        ])
+        
+        # Add generate and back buttons
+        card["actions"] = [
+            {
+                "type": "Action.Submit",
+                "title": "Generate Email",
+                "style": "positive",
+                "data": {
+                    "action": "generate_email",
+                    "template": template_id
+                }
+            },
+            {
+                "type": "Action.Submit",
+                "title": "Back to Templates",
+                "data": {
+                    "action": "view_change",
+                    "view": get_template_channel(template_id)
+                }
+            }
+        ]
+    
+    # Create attachment
+    attachment = Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card
+    )
+    
+    return attachment
+
+def create_template_grid(templates):
+    """Helper function to create a grid of template buttons"""
+    # Create rows of 2-3 templates
+    rows = []
+    current_row = []
+    
+    for i, template in enumerate(templates):
+        current_row.append(template)
+        
+        if len(current_row) == 3 or i == len(templates) - 1:
+            rows.append(current_row)
+            current_row = []
+    
+    # Create the grid container
+    grid_container = {
+        "type": "Container",
+        "items": []
+    }
+    
+    # Add each row as a column set
+    for row in rows:
+        column_set = {
+            "type": "ColumnSet",
+            "columns": []
+        }
+        
+        for template in row:
+            column = {
+                "type": "Column",
+                "width": "stretch",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": template["title"],
+                        "wrap": True,
+                        "horizontalAlignment": "center"
+                    },
+                    {
+                        "type": "ActionSet",
+                        "actions": [
+                            {
+                                "type": "Action.Submit",
+                                "title": "Select",
+                                "data": {
+                                    "action": "view_change",
+                                    "view": "template",
+                                    "template": template["template"]
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+            column_set["columns"].append(column)
+        
+        grid_container["items"].append(column_set)
+    
+    return grid_container
 async def retrieve_documents(query, top=5, mode="openai"):
     """
     Retrieves documents from either OpenAI API (default) or Azure AI Search.
@@ -1090,7 +1694,6 @@ def create_new_chat_card():
         content_type="application/vnd.microsoft.card.adaptive",
         content=card
     )
-
 async def handle_new_chat_command(turn_context: TurnContext, state, conversation_id):
     """Handles commands to start a new chat or reset the current chat"""
     # Send typing indicator
@@ -1106,6 +1709,69 @@ async def handle_new_chat_command(turn_context: TurnContext, state, conversation
     
     # Initialize a new chat
     await initialize_chat(turn_context, None)  # Pass None to force new state creation
+
+# Add this to your bot initialization code
+
+        
+        # Handle other invoke types if needed
+        
+    except Exception as e:
+        logging.error(f"Error in on_invoke_activity: {e}")
+        traceback.print_exc()
+        
+        # Return an error response
+        if hasattr(turn_context, 'send_activity'):
+            await turn_context.send_activity(Activity(
+                type=ActivityTypes.invoke_response,
+                value={
+                    "statusCode": 500,
+                    "type": "application/vnd.microsoft.error",
+                    "value": str(e)
+                }
+            ))
+
+# Assign the invoke handler to the adapter
+
+async def on_adaptive_card_invoke(turn_context: TurnContext, invoke_value: dict):
+    """Handler for Adaptive Card invocations"""
+    try:
+        # Extract the action data from the invoke value
+        action_data = invoke_value.get("action", {})
+        
+        # Process the action through our card handler
+        await handle_card_actions(turn_context, action_data)
+        
+        # Return a successful response
+        return {
+            "statusCode": 200,
+            "type": "application/vnd.microsoft.activity.message",
+            "value": "Action processed successfully"
+        }
+    except Exception as e:
+        logging.error(f"Error handling adaptive card invoke: {e}")
+        traceback.print_exc()
+        
+        # Return an error response
+        return {
+            "statusCode": 500,
+            "type": "application/vnd.microsoft.error",
+            "value": str(e)
+        }
+# async def handle_new_chat_command(turn_context: TurnContext, state, conversation_id):
+#     """Handles commands to start a new chat or reset the current chat"""
+#     # Send typing indicator
+#     await turn_context.send_activity(create_typing_activity())
+    
+#     # Clear any pending messages for this conversation
+#     with pending_messages_lock:
+#         if conversation_id in pending_messages:
+#             pending_messages[conversation_id].clear()
+    
+#     # Send a message informing the user
+#     await turn_context.send_activity("Starting a new conversation...")
+    
+#     # Initialize a new chat
+#     await initialize_chat(turn_context, None)  # Pass None to force new state creation
 def create_typing_stop_activity():
     """Creates an activity to explicitly stop the typing indicator"""
     return Activity(
@@ -2065,34 +2731,183 @@ async def apply_email_edits(turn_context: TurnContext, state, edit_instructions)
         traceback.print_exc()
         await turn_context.send_activity(f"I encountered an error while editing your email. Please try again or contact support if the issue persists.")
 # Add this to your handle_card_actions function
+# async def handle_card_actions(turn_context: TurnContext, action_data):
+#     """Handles actions from adaptive cards"""
+#     try:
+#         if action_data.get("action") == "new_chat":
+#             # Get conversation ID
+#             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+#             conversation_id = conversation_reference.conversation.id
+            
+#             # Reset conversation state
+#             if conversation_id in conversation_states:
+#                 # Clear any pending messages
+#                 with pending_messages_lock:
+#                     if conversation_id in pending_messages:
+#                         pending_messages[conversation_id].clear()
+                
+#                 # Send typing indicator
+#                 await turn_context.send_activity(create_typing_activity())
+                
+#                 # Initialize new chat
+#                 await initialize_chat(turn_context, None)  # Pass None to force new state creation
+#             else:
+#                 await initialize_chat(turn_context, None)
+#         elif action_data.get("action") == "generate_email":
+#             # Get conversation state
+#             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+#             conversation_id = conversation_reference.conversation.id
+#             state = conversation_states[conversation_id]
+            
+#             # Get template type
+#             template_id = action_data.get("template", "generic")
+            
+#             # Extract common fields
+#             recipient = action_data.get("recipient", "")
+#             instructions = action_data.get("instructions", "")
+#             chain = action_data.get("chain", "")
+#             has_attachments = action_data.get("hasAttachments", "false") == "true"
+            
+#             # Extract template-specific fields
+#             firstname = action_data.get("firstname", "")
+#             gateway = action_data.get("gateway", "")
+#             subject = action_data.get("subject", "")
+            
+#             # Generate email using AI
+#             await generate_email(
+#                 turn_context, 
+#                 state, 
+#                 template_id, 
+#                 recipient, 
+#                 firstname, 
+#                 gateway, 
+#                 subject, 
+#                 instructions, 
+#                 chain, 
+#                 has_attachments
+#             )
+#         elif action_data.get("action") == "create_email":
+#             # Send channel selection card
+#             await send_email_card(turn_context, "channel_selection")
+#         elif action_data.get("action") == "select_channel":
+#             # Get the selected channel
+#             channel = action_data.get("channel", "intro")
+            
+#             # Send the template selection card for this channel
+#             await send_email_card(turn_context, "selection", channel)
+#         elif action_data.get("action") == "select_template":
+#             # Get the selected template
+#             template = action_data.get("template", "generic")
+            
+#             # Send the appropriate template card
+#             await send_email_card(turn_context, template)
+#         elif action_data.get("action") == "edit_email":
+#             # Get conversation state
+#             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+#             conversation_id = conversation_reference.conversation.id
+#             state = conversation_states[conversation_id]
+            
+#             # Send edit email card
+#             await send_edit_email_card(turn_context, state)
+#         elif action_data.get("action") == "apply_email_edits":
+#             # Get conversation state
+#             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+#             conversation_id = conversation_reference.conversation.id
+#             state = conversation_states[conversation_id]
+            
+#             # Get edit instructions
+#             edit_instructions = action_data.get("edit_instructions", "")
+            
+#             # Apply edits
+#             await apply_email_edits(turn_context, state, edit_instructions)
+#         elif action_data.get("action") == "cancel_edit":
+#             # Cancel edit and go back to last generated email
+#             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+#             conversation_id = conversation_reference.conversation.id
+#             state = conversation_states[conversation_id]
+            
+#             with conversation_states_lock:
+#                 original_email = state.get("last_generated_email", "")
+            
+#             if original_email:
+#                 # Create an email result card
+#                 email_card = {
+#                     "type": "AdaptiveCard",
+#                     "version": "1.0",
+#                     "body": [
+#                         {
+#                             "type": "TextBlock",
+#                             "text": "Generated Email",
+#                             "size": "large",
+#                             "weight": "bolder"
+#                         },
+#                         {
+#                             "type": "TextBlock",
+#                             "text": original_email,
+#                             "wrap": True
+#                         }
+#                     ],
+#                     "actions": [
+#                         {
+#                             "type": "Action.Submit",
+#                             "title": "Edit This Email",
+#                             "data": {
+#                                 "action": "edit_email"
+#                             }
+#                         },
+#                         {
+#                             "type": "Action.Submit",
+#                             "title": "Create Another Email",
+#                             "data": {
+#                                 "action": "create_email"
+#                             }
+#                         }
+#                     ]
+#                 }
+                
+#                 attachment = Attachment(
+#                     content_type="application/vnd.microsoft.card.adaptive",
+#                     content=email_card
+#                 )
+                
+#                 reply = _create_reply(turn_context.activity)
+#                 reply.attachments = [attachment]
+#                 await turn_context.send_activity(reply)
+#             else:
+#                 await send_email_card(turn_context)
+#     except Exception as e:
+#         logging.error(f"Error handling card action: {e}")
+#         await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
 async def handle_card_actions(turn_context: TurnContext, action_data):
-    """Handles actions from adaptive cards"""
+    """Handles actions from adaptive cards with improved unified card UI"""
     try:
-        if action_data.get("action") == "new_chat":
-            # Get conversation ID
-            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-            conversation_id = conversation_reference.conversation.id
+        conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+        conversation_id = conversation_reference.conversation.id
+        
+        # Check if we have state for this conversation
+        if conversation_id not in conversation_states:
+            # Initialize state if needed
+            await initialize_chat(turn_context, None)
+        
+        state = conversation_states[conversation_id]
+        
+        # Handle view changes for the unified card
+        if action_data.get("action") == "view_change":
+            view = action_data.get("view", "main")
+            template = action_data.get("template", None)
             
-            # Reset conversation state
-            if conversation_id in conversation_states:
-                # Clear any pending messages
-                with pending_messages_lock:
-                    if conversation_id in pending_messages:
-                        pending_messages[conversation_id].clear()
-                
-                # Send typing indicator
-                await turn_context.send_activity(create_typing_activity())
-                
-                # Initialize new chat
-                await initialize_chat(turn_context, None)  # Pass None to force new state creation
-            else:
-                await initialize_chat(turn_context, None)
+            # Create the unified card with appropriate view
+            template_data = {"template": template} if template else None
+            unified_card = create_unified_email_card(state, view, template_data)
+            
+            # Send the updated card
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [unified_card]
+            await turn_context.send_activity(reply)
+            return
+        
+        # Handle email generation from unified card
         elif action_data.get("action") == "generate_email":
-            # Get conversation state
-            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-            conversation_id = conversation_reference.conversation.id
-            state = conversation_states[conversation_id]
-            
             # Get template type
             template_id = action_data.get("template", "generic")
             
@@ -2120,95 +2935,48 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
                 chain, 
                 has_attachments
             )
-        elif action_data.get("action") == "create_email":
-            # Send channel selection card
-            await send_email_card(turn_context, "channel_selection")
-        elif action_data.get("action") == "select_channel":
-            # Get the selected channel
-            channel = action_data.get("channel", "intro")
+            return
+        
+        # Handle new chat command
+        elif action_data.get("action") == "new_chat":
+            await handle_new_chat_command(turn_context, state, conversation_id)
+            return
             
-            # Send the template selection card for this channel
-            await send_email_card(turn_context, "selection", channel)
-        elif action_data.get("action") == "select_template":
-            # Get the selected template
-            template = action_data.get("template", "generic")
-            
-            # Send the appropriate template card
-            await send_email_card(turn_context, template)
+        # Handle email editing
         elif action_data.get("action") == "edit_email":
-            # Get conversation state
-            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-            conversation_id = conversation_reference.conversation.id
-            state = conversation_states[conversation_id]
-            
-            # Send edit email card
             await send_edit_email_card(turn_context, state)
+            return
+            
+        # Handle applying email edits
         elif action_data.get("action") == "apply_email_edits":
-            # Get conversation state
-            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-            conversation_id = conversation_reference.conversation.id
-            state = conversation_states[conversation_id]
-            
-            # Get edit instructions
             edit_instructions = action_data.get("edit_instructions", "")
-            
-            # Apply edits
             await apply_email_edits(turn_context, state, edit_instructions)
-        elif action_data.get("action") == "cancel_edit":
-            # Cancel edit and go back to last generated email
-            conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-            conversation_id = conversation_reference.conversation.id
-            state = conversation_states[conversation_id]
+            return
             
+        # Handle canceling edit
+        elif action_data.get("action") == "cancel_edit":
             with conversation_states_lock:
                 original_email = state.get("last_generated_email", "")
             
             if original_email:
-                # Create an email result card
-                email_card = {
-                    "type": "AdaptiveCard",
-                    "version": "1.0",
-                    "body": [
-                        {
-                            "type": "TextBlock",
-                            "text": "Generated Email",
-                            "size": "large",
-                            "weight": "bolder"
-                        },
-                        {
-                            "type": "TextBlock",
-                            "text": original_email,
-                            "wrap": True
-                        }
-                    ],
-                    "actions": [
-                        {
-                            "type": "Action.Submit",
-                            "title": "Edit This Email",
-                            "data": {
-                                "action": "edit_email"
-                            }
-                        },
-                        {
-                            "type": "Action.Submit",
-                            "title": "Create Another Email",
-                            "data": {
-                                "action": "create_email"
-                            }
-                        }
-                    ]
-                }
-                
-                attachment = Attachment(
-                    content_type="application/vnd.microsoft.card.adaptive",
-                    content=email_card
-                )
-                
-                reply = _create_reply(turn_context.activity)
-                reply.attachments = [attachment]
-                await turn_context.send_activity(reply)
+                await turn_context.send_activity(create_email_result_card(original_email))
             else:
-                await send_email_card(turn_context)
+                # Go back to main view if no email
+                unified_card = create_unified_email_card(state, "main")
+                reply = _create_reply(turn_context.activity)
+                reply.attachments = [unified_card]
+                await turn_context.send_activity(reply)
+            return
+            
+        # For backward compatibility, route other actions to the unified card approach
+        else:
+            # Default to showing main view
+            unified_card = create_unified_email_card(state, "main")
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [unified_card]
+            await turn_context.send_activity(reply)
+            return
+            
     except Exception as e:
         logging.error(f"Error handling card action: {e}")
         await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
@@ -3125,24 +3893,63 @@ def create_email_card(template_mode="selection", channel=None):
     )
     
     return attachment
-async def send_email_card(turn_context: TurnContext, template_mode="channel_selection", channel=None):
+# async def send_email_card(turn_context: TurnContext, template_mode="channel_selection", channel=None):
+#     """
+#     Sends an email composer card to the user.
+    
+#     Args:
+#         turn_context: The turn context
+#         template_mode: The template mode to display
+#         channel: Email channel if in selection mode
+#     """
+#     reply = _create_reply(turn_context.activity)
+    
+#     if template_mode == "channel_selection":
+#         reply.attachments = [create_channel_selection_card()]
+#     elif template_mode == "selection":
+#         reply.attachments = [create_email_card(template_mode, channel)]
+#     else:
+#         reply.attachments = [create_email_card(template_mode)]
+    
+#     await turn_context.send_activity(reply)
+async def send_email_card(turn_context: TurnContext, template_mode="main", channel=None):
     """
-    Sends an email composer card to the user.
+    Sends a unified email card using the new approach.
     
     Args:
         turn_context: The turn context
-        template_mode: The template mode to display
-        channel: Email channel if in selection mode
+        template_mode: The view to display (main, customer_service, sales, intro, or template name)
+        channel: Email channel if in selection mode (legacy parameter, not used in unified approach)
     """
-    reply = _create_reply(turn_context.activity)
+    # Get state
+    conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+    conversation_id = conversation_reference.conversation.id
     
-    if template_mode == "channel_selection":
-        reply.attachments = [create_channel_selection_card()]
-    elif template_mode == "selection":
-        reply.attachments = [create_email_card(template_mode, channel)]
+    if conversation_id in conversation_states:
+        state = conversation_states[conversation_id]
     else:
-        reply.attachments = [create_email_card(template_mode)]
+        state = None
     
+    # Determine the view and template
+    view = template_mode
+    template_data = None
+    
+    # Handle legacy parameters
+    if template_mode == "channel_selection":
+        view = "main"
+    elif template_mode == "selection" and channel:
+        view = channel
+    elif template_mode not in ["main", "customer_service", "sales", "intro"]:
+        # This is a template name
+        view = "template"
+        template_data = {"template": template_mode}
+    
+    # Create the unified card
+    card = create_unified_email_card(state, view, template_data)
+    
+    # Send the card
+    reply = _create_reply(turn_context.activity)
+    reply.attachments = [card]
     await turn_context.send_activity(reply)
 async def handle_info_request(turn_context: TurnContext, info_type: str):
     """Handles requests for information about uploads or help"""
@@ -3333,8 +4140,83 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
 
 
 # Example of handling email generation result
+# def create_email_result_card(email_text):
+#     """Creates an enhanced card displaying the generated email with copy options and formatting"""
+#     card = {
+#         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+#         "type": "AdaptiveCard",
+#         "version": "1.5",
+#         "body": [
+#             {
+#                 "type": "Container",
+#                 "style": "emphasis",
+#                 "items": [
+#                     {
+#                         "type": "TextBlock",
+#                         "text": "Generated Email Template",
+#                         "size": "large",
+#                         "weight": "bolder",
+#                         "horizontalAlignment": "center",
+#                         "color": "accent"
+#                     }
+#                 ],
+#                 "bleed": True
+#             },
+#             {
+#                 "type": "Container",
+#                 "style": "default",
+#                 "items": [
+#                     {
+#                         "type": "TextBlock",
+#                         "text": email_text,
+#                         "wrap": True,
+#                         "spacing": "medium"
+#                     }
+#                 ],
+#                 "padding": "Medium"
+#             },
+#             {
+#                 "type": "Container",
+#                 "style": "good",
+#                 "items": [
+#                     {
+#                         "type": "TextBlock",
+#                         "text": "Success! Email template generated according to FCDR guidelines.",
+#                         "wrap": True,
+#                         "size": "small",
+#                         "horizontalAlignment": "center"
+#                     }
+#                 ],
+#                 "spacing": "medium"
+#             }
+#         ],
+#         "actions": [
+#             {
+#                 "type": "Action.Submit",
+#                 "title": "Edit This Email",
+#                 "style": "positive",
+#                 "data": {
+#                     "action": "edit_email"
+#                 }
+#             },
+#             {
+#                 "type": "Action.Submit",
+#                 "title": "Create Another Email",
+#                 "data": {
+#                     "action": "create_email"
+#                 }
+#             }
+#         ]
+#     }
+    
+#     attachment = Attachment(
+#         content_type="application/vnd.microsoft.card.adaptive",
+#         content=card
+#     )
+    
+#     return attachment
 def create_email_result_card(email_text):
-    """Creates an enhanced card displaying the generated email with copy options and formatting"""
+    """Creates an enhanced card displaying the generated email with edit option"""
     card = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
@@ -3396,7 +4278,8 @@ def create_email_result_card(email_text):
                 "type": "Action.Submit",
                 "title": "Create Another Email",
                 "data": {
-                    "action": "create_email"
+                    "action": "view_change",
+                    "view": "main"
                 }
             }
         ]
@@ -4970,15 +5853,16 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
                 ]
             }
             
-            # Create attachment
-            attachment = Attachment(
-                content_type="application/vnd.microsoft.card.adaptive",
-                content=email_card
-            )
+            # # Create attachment
+            # attachment = Attachment(
+            #     content_type="application/vnd.microsoft.card.adaptive",
+            #     content=email_card
+            # )
             
-            reply = _create_reply(turn_context.activity)
-            reply.attachments = [attachment]
-            await turn_context.send_activity(reply)
+            # reply = _create_reply(turn_context.activity)
+            # reply.attachments = [attachment]
+            # await turn_context.send_activity(reply)
+            await turn_context.send_activity(create_email_result_card(email_text))
         else:
             await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again with more details about what you need.")
     except Exception as e:
@@ -5035,36 +5919,7 @@ async def send_new_chat_card(turn_context: TurnContext):
 # ----- Teams Bot Logic Functions -----
 
 # Catch-all for errors
-async def on_error(context: TurnContext, error: Exception):
-    # Print the error to the console
-    logger.error(f"\n [on_turn_error] unhandled error: {error}")
-    traceback.print_exc()
-    
-    # Send a message to the user
-    await context.send_activity("The bot encountered an error. Please try again.")
-    
-    # Send a trace activity if we're talking to the Bot Framework Emulator
-    if context.activity.channel_id == "emulator":
-        # Create a trace activity that contains the error object
-        trace_activity = Activity(
-            label="TurnError",
-            name="on_turn_error Trace",
-            timestamp=datetime.utcnow(),
-            type=ActivityTypes.trace,
-            value=f"{error}",
-            value_type="https://www.botframework.com/schemas/error",
-        )
-        # Send a trace activity, which will be displayed in Bot Framework Emulator
-        await context.send_activity(trace_activity)
 
-    # Try to recover with fallback response
-    try:
-        await send_fallback_response(context, None)
-    except:
-        pass  # If even this fails, just continue
-
-# Assign the error handler
-ADAPTER.on_turn_error = on_error
 
 def _create_reply(activity, text=None, text_format=None):
     """Helper method to create a reply message."""
@@ -6009,16 +6864,180 @@ async def format_message_with_rag(user_message, documents):
             # Ultimate fallback - return original message
             return user_message
 # Modified handle_text_message with thread summarization
+# async def handle_text_message(turn_context: TurnContext, state):
+#     """Handle text messages from users with RAG integration"""
+#     user_message = turn_context.activity.text.strip()
+#     conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+#     conversation_id = conversation_reference.conversation.id
+    
+#     # Handle special commands
+#     if user_message.lower() in ["/email", "create email", "write email", "email template", "email"]:
+#         await send_email_card(turn_context)
+#         return
+#     if user_message.lower() in ["/new", "/reset", "new chat", "start over", "reset chat"]:
+#         await handle_new_chat_command(turn_context, state, conversation_id)
+#         return
+        
+#     # Extract user identity for security validation
+#     user_id = turn_context.activity.from_property.id if hasattr(turn_context.activity, 'from_property') else "unknown"
+    
+#     # Thread-safe access to state values
+#     with conversation_states_lock:
+#         stored_user_id = state.get("user_id")
+#         stored_assistant_id = state.get("assistant_id")
+#         stored_session_id = state.get("session_id")
+    
+#     # Verify user identity matches state (double-check)
+#     if stored_user_id and stored_user_id != user_id:
+#         logging.warning(f"SECURITY ALERT: User mismatch detected in handle_text_message! Expected {stored_user_id}, got {user_id}")
+#         # This is a severe security issue - reinitialize chat for this user
+#         await turn_context.send_activity("For security reasons, I need to create a new conversation session.")
+#         await initialize_chat(turn_context, None, context=user_message)
+#         return
+    
+#     # Record this user's message processing (audit trail)
+#     logging.info(f"Processing message from user {user_id} in conversation {conversation_id}: {user_message[:50]}...")
+    
+#     # If no assistant yet, initialize chat with the message as context
+#     if not stored_assistant_id:
+#         # Initialize chat silently first
+#         success = await initialize_chat_silent(turn_context, state)
+        
+#         if success:
+#             # Now process the user's message directly
+#             with conversation_states_lock:
+#                 stored_assistant_id = state.get("assistant_id")
+#                 stored_session_id = state.get("session_id")
+            
+#             # Process the message without sending welcome messages
+#             client = create_client()
+            
+#             # RAG INTEGRATION - RETRIEVE RELEVANT DOCUMENTS
+#             relevant_docs = await retrieve_documents(user_message, top=3)
+            
+#             # Format the message with RAG context and user query
+#             enhanced_message = await format_message_with_rag(user_message, relevant_docs)
+            
+#             # Send the enhanced message
+#             client.beta.threads.messages.create(
+#                 thread_id=stored_session_id,
+#                 role="user",
+#                 content=enhanced_message
+#             )
+            
+#             # Process the message with streaming
+#             if TEAMS_AI_AVAILABLE:
+#                 await stream_with_teams_ai(turn_context, state, None)
+#             else:
+#                 await stream_with_custom_implementation(turn_context, state, None)
+#         else:
+#             # Fallback if initialization failed
+#             await turn_context.send_activity("I'm sorry, I encountered an issue while setting up our conversation. Please try again.")
+        
+#         return
+    
+#     # Send typing indicator
+#     await turn_context.send_activity(create_typing_activity())
+    
+#     # Check if thread needs summarization (with thread safety)
+#     summarized = False
+#     if stored_session_id:
+#         client = create_client()
+#         summarized = await summarize_thread_if_needed(client, stored_session_id, state, threshold=30)
+        
+#         if summarized:
+#             # Update stored_session_id after summarization (thread may have changed)
+#             with conversation_states_lock:
+#                 stored_session_id = state.get("session_id")
+                
+#             await turn_context.send_activity("I've summarized our previous conversation to maintain context while keeping the conversation focused.")
+    
+#     # Mark thread as busy (thread-safe)
+#     current_session_id = None
+#     with conversation_states_lock:
+#         state["active_run"] = True
+#         current_session_id = state.get("session_id")
+    
+#     if current_session_id:
+#         with active_runs_lock:
+#             active_runs[current_session_id] = True
+    
+#     try:
+#         # Double-verify resources before proceeding
+#         client = create_client()
+#         validation = await validate_resources(client, current_session_id, stored_assistant_id)
+        
+#         # If any resource is invalid, force recovery
+#         if not validation["thread_valid"] or not validation["assistant_valid"]:
+#             logging.warning(f"Resource validation failed for user {user_id}: thread_valid={validation['thread_valid']}, assistant_valid={validation['assistant_valid']}")
+#             raise Exception("Invalid conversation resources detected - forcing recovery")
+        
+#         # RAG INTEGRATION - RETRIEVE RELEVANT DOCUMENTS
+#         relevant_docs = await retrieve_documents(user_message, top=3)
+        
+#         # Format the message with RAG context and user query
+#         enhanced_message = await format_message_with_rag(user_message, relevant_docs)
+        
+#         # Send the enhanced message
+#         try:
+#             client.beta.threads.messages.create(
+#                 thread_id=current_session_id,
+#                 role="user",
+#                 content=enhanced_message
+#             )
+#         except Exception as msg_error:
+#             logging.error(f"Error adding message to thread: {msg_error}")
+#             raise
+            
+#         # Use the optimal streaming approach based on available libraries and preferences
+#         if TEAMS_AI_AVAILABLE:
+#             # Use enhanced streaming with Teams AI library
+#             await stream_with_teams_ai(turn_context, state, None)
+#         else:
+#             # Use custom TeamsStreamingResponse if Teams AI library is not available
+#             await stream_with_custom_implementation(turn_context, state, None)
+        
+#         # Mark thread as no longer busy (thread-safe)
+#         with conversation_states_lock:
+#             state["active_run"] = False
+#             current_session_id = state.get("session_id")
+        
+#         with active_runs_lock:
+#             if current_session_id in active_runs:
+#                 del active_runs[current_session_id]
+        
+#         # Process any pending messages
+#         await process_pending_messages(turn_context, state, conversation_id)
+            
+#     except Exception as e:
+#         # Mark thread as no longer busy even on error (thread-safe)
+#         with conversation_states_lock:
+#             state["active_run"] = False
+#             current_session_id = state.get("session_id")
+            
+#         with active_runs_lock:
+#             if current_session_id in active_runs:
+#                 del active_runs[current_session_id]
+            
+#         # Don't show raw error details to users
+#         logging.error(f"Error in handle_text_message for user {user_id}: {str(e)}")
+#         traceback.print_exc()
+#         await turn_context.send_activity("I'm sorry, I encountered a problem while processing your message. Please try again.")
+        
+#         # Try a fallback direct completion if there was a severe error
+#         try:
+#             await send_fallback_response(turn_context, user_message)
+#         except Exception as fallback_error:
+#             logging.error(f"Fallback response also failed: {fallback_error}")
 async def handle_text_message(turn_context: TurnContext, state):
     """Handle text messages from users with RAG integration"""
     user_message = turn_context.activity.text.strip()
     conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
     conversation_id = conversation_reference.conversation.id
-    
-    # Handle special commands
     if user_message.lower() in ["/email", "create email", "write email", "email template", "email"]:
-        await send_email_card(turn_context)
+        await send_email_card(turn_context, "main")  # Always show the main view for email commands
         return
+
     if user_message.lower() in ["/new", "/reset", "new chat", "start over", "reset chat"]:
         await handle_new_chat_command(turn_context, state, conversation_id)
         return
