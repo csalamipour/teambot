@@ -2636,129 +2636,6 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
         # Get conversation info for state access
         conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
         conversation_id = conversation_reference.conversation.id
-        
-        # Check if this is an Action.Execute verb (dynamic card interaction)
-        activity_type = turn_context.activity.type
-        
-        # Handle Action.Execute for dynamic cards (type 'invoke' with name 'adaptiveCard/action')
-        if activity_type == "invoke" and hasattr(turn_context.activity, 'name') and turn_context.activity.name == "adaptiveCard/action":
-            from botbuilder.schema import InvokeResponse
-            
-            # Get action data from the value
-            invoke_value = turn_context.activity.value
-            
-            if isinstance(invoke_value, dict) and "action" in invoke_value:
-                action_info = invoke_value.get("action", {})
-                verb = action_info.get("verb", "")
-                logging.info(f"Processing Action.Execute verb: {verb}")
-                
-                try:
-                    # Handle dynamic card refreshes
-                    if verb == "refreshCard":
-                        data = action_info.get("data", {})
-                        state = data.get("state", "initial")
-                        selection = data.get("selection", {})
-                        
-                        # Generate refreshed card
-                        card = create_dynamic_email_card(state, selection)
-                        
-                        # Return the refreshed card using InvokeResponse
-                        response_json = {
-                            "statusCode": 200,
-                            "type": "application/vnd.microsoft.card.adaptive",
-                            "value": card.content
-                        }
-                        return InvokeResponse(status=200, body=response_json)
-                        
-                    # Handle category selection
-                    elif verb == "selectCategory":
-                        data = action_info.get("data", {})
-                        category = data.get("category", "")
-                        selection = data.get("selection", {})
-                        
-                        # Update selection with category
-                        selection["category"] = category
-                        
-                        # Generate updated card
-                        card = create_dynamic_email_card("category_selected", selection)
-                        
-                        # Return updated card
-                        response_json = {
-                            "statusCode": 200,
-                            "type": "application/vnd.microsoft.card.adaptive",
-                            "value": card.content
-                        }
-                        return InvokeResponse(status=200, body=response_json)
-                    
-                    # Handle template selection
-                    elif verb == "selectTemplate":
-                        data = action_info.get("data", {})
-                        category = data.get("category", "")
-                        template = data.get("template", "")
-                        selection = data.get("selection", {})
-                        
-                        # Update selection
-                        selection["category"] = category
-                        selection["template"] = template
-                        
-                        # Generate updated card
-                        card = create_dynamic_email_card("template_selected", selection)
-                        
-                        # Return updated card
-                        response_json = {
-                            "statusCode": 200,
-                            "type": "application/vnd.microsoft.card.adaptive",
-                            "value": card.content
-                        }
-                        return InvokeResponse(status=200, body=response_json)
-                    
-                    # Handle back to categories
-                    elif verb == "backToCategories":
-                        data = action_info.get("data", {})
-                        selection = data.get("selection", {})
-                        
-                        # Generate updated card
-                        card = create_dynamic_email_card("initial", selection)
-                        
-                        # Return updated card
-                        response_json = {
-                            "statusCode": 200,
-                            "type": "application/vnd.microsoft.card.adaptive",
-                            "value": card.content
-                        }
-                        return InvokeResponse(status=200, body=response_json)
-                    
-                    # Handle back to templates
-                    elif verb == "backToTemplates":
-                        data = action_info.get("data", {})
-                        category = data.get("category", "")
-                        selection = data.get("selection", {})
-                        
-                        # Generate updated card
-                        card = create_dynamic_email_card("category_selected", selection)
-                        
-                        # Return updated card
-                        response_json = {
-                            "statusCode": 200,
-                            "type": "application/vnd.microsoft.card.adaptive",
-                            "value": card.content
-                        }
-                        return InvokeResponse(status=200, body=response_json)
-                    
-                    # If unknown verb, return success but log warning
-                    else:
-                        logging.warning(f"Unknown Action.Execute verb: {verb}")
-                        return InvokeResponse(status=200, body={"statusCode": 200})
-                        
-                except Exception as execute_error:
-                    # Log error and return error response
-                    logging.error(f"Error handling Action.Execute: {execute_error}")
-                    traceback.print_exc()
-                    return InvokeResponse(status=500, body={"statusCode": 500, "message": str(execute_error)})
-            
-            # If action not properly formatted, return error
-            return InvokeResponse(status=400, body={"statusCode": 400, "message": "Invalid action format"})
-            
         # Handle regular Submit actions
         if not action_data:
             logging.warning("Action data is None or empty")
@@ -6264,7 +6141,131 @@ def _create_reply(activity, text=None, text_format=None):
         text_format=text_format or None,
         locale=activity.locale,
     )
+async def handle_adaptive_card_action(turn_context: TurnContext):
+    """
+    Handles invoke activities of type 'adaptiveCard/action' for dynamic card interactions.
+    
+    Args:
+        turn_context: The turn context object
+    
+    Returns:
+        InvokeResponse: A properly formatted invoke response
+    """
+    from botbuilder.schema import InvokeResponse
 
+    try:
+        # Get conversation info for state access
+        conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+        conversation_id = conversation_reference.conversation.id
+        
+        # Get action data from the value
+        invoke_value = turn_context.activity.value
+        
+        if isinstance(invoke_value, dict) and "action" in invoke_value:
+            action_info = invoke_value.get("action", {})
+            verb = action_info.get("verb", "")
+            logging.info(f"Processing Action.Execute verb: {verb}")
+            
+            # Handle different verbs
+            if verb == "refreshCard":
+                data = action_info.get("data", {})
+                state = data.get("state", "initial")
+                selection = data.get("selection", {})
+                
+                # Generate refreshed card
+                card = create_dynamic_email_card(state, selection)
+                
+                # Return the refreshed card using InvokeResponse
+                response_json = {
+                    "statusCode": 200,
+                    "type": "application/vnd.microsoft.card.adaptive",
+                    "value": card.content
+                }
+                return InvokeResponse(status=200, body=response_json)
+                
+            elif verb == "selectCategory":
+                data = action_info.get("data", {})
+                category = data.get("category", "")
+                selection = data.get("selection", {})
+                
+                # Update selection with category
+                selection["category"] = category
+                
+                # Generate updated card
+                card = create_dynamic_email_card("category_selected", selection)
+                
+                # Return updated card
+                response_json = {
+                    "statusCode": 200,
+                    "type": "application/vnd.microsoft.card.adaptive",
+                    "value": card.content
+                }
+                return InvokeResponse(status=200, body=response_json)
+            
+            elif verb == "selectTemplate":
+                data = action_info.get("data", {})
+                category = data.get("category", "")
+                template = data.get("template", "")
+                selection = data.get("selection", {})
+                
+                # Update selection
+                selection["category"] = category
+                selection["template"] = template
+                
+                # Generate updated card
+                card = create_dynamic_email_card("template_selected", selection)
+                
+                # Return updated card
+                response_json = {
+                    "statusCode": 200,
+                    "type": "application/vnd.microsoft.card.adaptive",
+                    "value": card.content
+                }
+                return InvokeResponse(status=200, body=response_json)
+            
+            elif verb == "backToCategories":
+                data = action_info.get("data", {})
+                selection = data.get("selection", {})
+                
+                # Generate updated card
+                card = create_dynamic_email_card("initial", selection)
+                
+                # Return updated card
+                response_json = {
+                    "statusCode": 200,
+                    "type": "application/vnd.microsoft.card.adaptive",
+                    "value": card.content
+                }
+                return InvokeResponse(status=200, body=response_json)
+            
+            elif verb == "backToTemplates":
+                data = action_info.get("data", {})
+                category = data.get("category", "")
+                selection = data.get("selection", {})
+                
+                # Generate updated card
+                card = create_dynamic_email_card("category_selected", selection)
+                
+                # Return updated card
+                response_json = {
+                    "statusCode": 200,
+                    "type": "application/vnd.microsoft.card.adaptive",
+                    "value": card.content
+                }
+                return InvokeResponse(status=200, body=response_json)
+            
+            # If unknown verb, return success but log warning
+            else:
+                logging.warning(f"Unknown Action.Execute verb: {verb}")
+                return InvokeResponse(status=200, body={"statusCode": 200})
+                
+        # If action not properly formatted, return error
+        return InvokeResponse(status=400, body={"statusCode": 400, "message": "Invalid action format"})
+        
+    except Exception as e:
+        logging.error(f"Error handling adaptiveCard/action: {e}")
+        traceback.print_exc()
+        return InvokeResponse(status=500, body={"statusCode": 500, "message": str(e)})
 # Bot logic handler
 # Modified bot_logic function to properly handle email card submissions
 async def bot_logic(turn_context: TurnContext):
@@ -6282,7 +6283,17 @@ async def bot_logic(turn_context: TurnContext):
     
     # Log incoming activity with user context
     logging.info(f"Processing activity type {turn_context.activity.type} from user {user_id} in conversation {conversation_id}")
-    
+    if turn_context.activity.type == "invoke" and hasattr(turn_context.activity, 'name'):
+        if turn_context.activity.name == "adaptiveCard/action":
+            try:
+                # Process the adaptive card action
+                response = await handle_adaptive_card_action(turn_context)
+                return response
+            except Exception as e:
+                logging.error(f"Error handling adaptiveCard/action: {e}")
+                traceback.print_exc()
+                from botbuilder.schema import InvokeResponse
+                return InvokeResponse(status=500, body={"statusCode": 500, "message": str(e)})
     # Thread-safe state initialization
     with conversation_states_lock:
         if conversation_id not in conversation_states:
