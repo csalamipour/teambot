@@ -1275,7 +1275,7 @@ def create_collapsible_section(id, title, items, collapsed=False):
                         "items": [
                             {
                                 "type": "TextBlock",
-                                "text": collapsed ? "▶" : "▼",  # Changed to text symbol instead of image
+                                "text": "▶" if collapsed else "▼",  # Python's correct ternary syntax
                                 "size": "medium",
                                 "weight": "bolder",
                                 "id": f"{id}Arrow1",
@@ -1287,7 +1287,7 @@ def create_collapsible_section(id, title, items, collapsed=False):
                                 "size": "medium",
                                 "weight": "bolder",
                                 "id": f"{id}Arrow2",
-                                "isVisible": !collapsed
+                                "isVisible": not collapsed  # Not operator instead of ! in Python
                             }
                         ],
                         "verticalContentAlignment": "center"
@@ -1308,7 +1308,7 @@ def create_collapsible_section(id, title, items, collapsed=False):
         "type": "Container",
         "id": f"{id}Content",
         "items": items,
-        "isVisible": !collapsed,
+        "isVisible": not collapsed,  # Not operator instead of ! in Python
         "spacing": "small"
     }
     
