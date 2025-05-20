@@ -791,11 +791,11 @@ PS: Remember to use "RETRIEVED KNOWLEDGE" to enrich your response (if relevant a
 '''
 def create_unified_email_card(state=None, active_view="main", template_data=None):
     """
-    Creates a single unified adaptive card for email template selection and generation.
+    Creates a hierarchical adaptive card for email template selection, using dropdowns and nested sections.
     
     Args:
         state: The conversation state (optional)
-        active_view: Which view to display (main, customer_service, sales, intro, or template)
+        active_view: Which view to display (main, template)
         template_data: Data for template-specific view (template_id, form_data, etc.)
     
     Returns:
@@ -821,216 +821,202 @@ def create_unified_email_card(state=None, active_view="main", template_data=None
                 ],
                 "bleed": True
             }
-        ],
-        "actions": []
+        ]
     }
     
-    # Main view - shows the channel categories
+    # For the main view, show the category selector
     if active_view == "main":
-        card["body"].append({
-            "type": "TextBlock",
-            "text": "Select an email category to get started",
-            "wrap": True,
-            "horizontalAlignment": "center"
-        })
-        
-        card["body"].append({
+        # Main container for hierarchical layout
+        main_container = {
             "type": "Container",
             "items": [
                 {
-                    "type": "ColumnSet",
-                    "columns": [
-                        {
-                            "type": "Column",
-                            "width": "stretch",
-                            "items": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": "📧 Client Services",
-                                    "weight": "bolder",
-                                    "horizontalAlignment": "center"
-                                },
-                                {
-                                    "type": "TextBlock",
-                                    "text": "Service emails to existing clients",
-                                    "wrap": True,
-                                    "size": "small",
-                                    "horizontalAlignment": "center",
-                                    "spacing": "none"
-                                }
-                            ]
-                        },
-                        {
-                            "type": "Column",
-                            "width": "stretch",
-                            "items": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": "💼 Sales Templates",
-                                    "weight": "bolder",
-                                    "horizontalAlignment": "center"
-                                },
-                                {
-                                    "type": "TextBlock",
-                                    "text": "Quotes and program offerings",
-                                    "wrap": True,
-                                    "size": "small",
-                                    "horizontalAlignment": "center",
-                                    "spacing": "none"
-                                }
-                            ]
-                        }
-                    ]
+                    "type": "TextBlock",
+                    "text": "Select an email category to get started",
+                    "wrap": True,
+                    "weight": "bolder",
+                    "size": "medium",
+                    "horizontalAlignment": "center",
+                    "spacing": "medium"
                 }
             ]
-        })
+        }
         
-        card["body"].append({
-            "type": "ColumnSet",
-            "columns": [
+        # Create dropdown for category selection
+        category_dropdown = {
+            "type": "Input.ChoiceSet",
+            "id": "emailCategory",
+            "style": "expanded",
+            "choices": [
                 {
-                    "type": "Column",
-                    "width": "stretch",
-                    "items": [
-                        {
-                            "type": "ActionSet",
-                            "actions": [
-                                {
-                                    "type": "Action.Submit",
-                                    "title": "Select",
-                                    "style": "positive",
-                                    "data": {
-                                        "action": "view_change",
-                                        "view": "customer_service"
-                                    }
-                                }
-                            ]
-                        }
-                    ]
+                    "title": "📧 Client Services - Service emails to existing clients",
+                    "value": "customer_service"
                 },
                 {
-                    "type": "Column",
-                    "width": "stretch",
-                    "items": [
-                        {
-                            "type": "ActionSet",
-                            "actions": [
-                                {
-                                    "type": "Action.Submit",
-                                    "title": "Select",
-                                    "style": "positive",
-                                    "data": {
-                                        "action": "view_change",
-                                        "view": "sales"
-                                    }
-                                }
-                            ]
-                        }
-                    ]
-                }
-            ]
-        })
-        
-        card["body"].append({
-            "type": "Container",
-            "items": [
-                {
-                    "type": "ColumnSet",
-                    "columns": [
-                        {
-                            "type": "Column",
-                            "width": "stretch",
-                            "items": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": "🤝 Introduction",
-                                    "weight": "bolder",
-                                    "horizontalAlignment": "center"
-                                },
-                                {
-                                    "type": "TextBlock",
-                                    "text": "New client outreach",
-                                    "wrap": True,
-                                    "size": "small",
-                                    "horizontalAlignment": "center",
-                                    "spacing": "none"
-                                }
-                            ]
-                        },
-                        {
-                            "type": "Column",
-                            "width": "stretch",
-                            "items": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": "✨ Custom Email",
-                                    "weight": "bolder",
-                                    "horizontalAlignment": "center"
-                                },
-                                {
-                                    "type": "TextBlock",
-                                    "text": "Create a custom email",
-                                    "wrap": True,
-                                    "size": "small",
-                                    "horizontalAlignment": "center",
-                                    "spacing": "none"
-                                }
-                            ]
-                        }
-                    ]
-                }
-            ]
-        })
-        
-        card["body"].append({
-            "type": "ColumnSet",
-            "columns": [
-                {
-                    "type": "Column",
-                    "width": "stretch",
-                    "items": [
-                        {
-                            "type": "ActionSet",
-                            "actions": [
-                                {
-                                    "type": "Action.Submit",
-                                    "title": "Select",
-                                    "style": "positive",
-                                    "data": {
-                                        "action": "view_change",
-                                        "view": "intro"
-                                    }
-                                }
-                            ]
-                        }
-                    ]
+                    "title": "💼 Sales Templates - Quotes and program offerings",
+                    "value": "sales"
                 },
                 {
-                    "type": "Column",
-                    "width": "stretch",
-                    "items": [
-                        {
-                            "type": "ActionSet",
-                            "actions": [
-                                {
-                                    "type": "Action.Submit",
-                                    "title": "Select",
-                                    "style": "positive",
-                                    "data": {
-                                        "action": "view_change",
-                                        "view": "template",
-                                        "template": "generic"
-                                    }
-                                }
-                            ]
-                        }
+                    "title": "🤝 Introduction - New client outreach",
+                    "value": "intro"
+                },
+                {
+                    "title": "✨ Custom Email - Create a custom email",
+                    "value": "generic"
+                }
+            ],
+            "spacing": "medium"
+        }
+        
+        main_container["items"].append(category_dropdown)
+        
+        # Add template selection sections for each category
+        # Client Services section
+        client_services_section = create_collapsible_section(
+            "client_services_section",
+            "Client Services Templates",
+            [
+                # General Client Communications
+                {
+                    "type": "TextBlock",
+                    "text": "General Client Communications",
+                    "weight": "bolder",
+                    "size": "small",
+                    "spacing": "medium"
+                },
+                {
+                    "type": "Input.ChoiceSet",
+                    "id": "clientServicesGeneral",
+                    "style": "compact",
+                    "choices": [
+                        {"title": "Welcome Email", "value": "welcome"},
+                        {"title": "Credit Concerns Response", "value": "credit_concerns"},
+                        {"title": "Settlement Timeline Info", "value": "settlement_timeline"},
+                        {"title": "Program Cost Concerns", "value": "program_cost"},
+                        {"title": "Account Exclusion Response", "value": "account_exclusion"}
+                    ]
+                },
+                # Legal & Collection Communications
+                {
+                    "type": "TextBlock",
+                    "text": "Legal & Collection Communications",
+                    "weight": "bolder",
+                    "size": "small",
+                    "spacing": "medium"
+                },
+                {
+                    "type": "Input.ChoiceSet",
+                    "id": "clientServicesLegal",
+                    "style": "compact",
+                    "choices": [
+                        {"title": "Legal Update", "value": "legal_update"},
+                        {"title": "Legal Threat Response", "value": "legal_threat"},
+                        {"title": "Legal Document Confirmation", "value": "legal_confirmation"},
+                        {"title": "Collection Calls Response", "value": "collection_calls"},
+                        {"title": "Creditor Notices Response", "value": "creditor_notices"}
+                    ]
+                },
+                # Payment & Settlement Communications
+                {
+                    "type": "TextBlock",
+                    "text": "Payment & Settlement Communications",
+                    "weight": "bolder",
+                    "size": "small",
+                    "spacing": "medium"
+                },
+                {
+                    "type": "Input.ChoiceSet",
+                    "id": "clientServicesPayment",
+                    "style": "compact",
+                    "choices": [
+                        {"title": "Lost Settlement", "value": "lost_settlement"},
+                        {"title": "Payment Returned", "value": "payment_returned"},
+                        {"title": "Draft Reduction Request", "value": "draft_reduction"}
                     ]
                 }
-            ]
+            ],
+            True  # initially collapsed
+        )
+        
+        # Sales section
+        sales_section = create_collapsible_section(
+            "sales_section",
+            "Sales Templates",
+            [
+                {
+                    "type": "Input.ChoiceSet",
+                    "id": "salesTemplates",
+                    "style": "compact",
+                    "choices": [
+                        {"title": "Quick Quote Email", "value": "sales_quick_quote"},
+                        {"title": "Initial Quote Email", "value": "sales_quote"},
+                        {"title": "Financial Analysis Email", "value": "sales_analysis"},
+                        {"title": "Program Overview Email", "value": "sales_overview"},
+                        {"title": "Generic Sales Email", "value": "sales_generic"}
+                    ]
+                }
+            ],
+            True  # initially collapsed
+        )
+        
+        # Intro section
+        intro_section = create_collapsible_section(
+            "intro_section",
+            "Introduction Templates",
+            [
+                {
+                    "type": "Input.ChoiceSet",
+                    "id": "introTemplates",
+                    "style": "compact",
+                    "choices": [
+                        {"title": "Introduction Email", "value": "introduction"},
+                        {"title": "Follow-up Email", "value": "followup"},
+                        {"title": "Generic Email", "value": "generic"}
+                    ]
+                }
+            ],
+            True  # initially collapsed
+        )
+        
+        # Add generic email section
+        generic_section = create_collapsible_section(
+            "generic_section",
+            "Custom Email",
+            [
+                {
+                    "type": "TextBlock",
+                    "text": "Create a completely custom email",
+                    "wrap": True,
+                    "size": "small"
+                }
+            ],
+            True  # initially collapsed
+        )
+        
+        # Add sections to main container
+        main_container["items"].append(client_services_section)
+        main_container["items"].append(sales_section)
+        main_container["items"].append(intro_section)
+        main_container["items"].append(generic_section)
+        
+        # Add button to proceed based on selection
+        main_container["items"].append({
+            "type": "ActionSet",
+            "actions": [
+                {
+                    "type": "Action.Submit",
+                    "title": "Continue",
+                    "style": "positive",
+                    "data": {
+                        "action": "select_template_from_hierarchy"
+                    }
+                }
+            ],
+            "spacing": "medium"
         })
         
         # Add compliance reminder
-        card["body"].append({
+        main_container["items"].append({
             "type": "Container",
             "style": "attention",
             "items": [
@@ -1052,150 +1038,8 @@ def create_unified_email_card(state=None, active_view="main", template_data=None
             "spacing": "medium"
         })
         
-    # Customer Service Templates View
-    elif active_view == "customer_service":
-        card["body"][0]["items"][0]["text"] = "Client Services Email Templates"
+        card["body"].append(main_container)
         
-        # Add back navigation
-        card["body"].append({
-            "type": "TextBlock",
-            "text": "Select a template type:",
-            "wrap": True,
-            "horizontalAlignment": "center"
-        })
-        
-        # Create categories for better organization
-        # General client communications
-        card["body"].append({
-            "type": "TextBlock",
-            "text": "General Client Communications",
-            "weight": "bolder",
-            "size": "medium",
-            "spacing": "medium"
-        })
-        
-        general_templates = [
-            {"title": "Welcome Email", "template": "welcome"},
-            {"title": "Credit Concerns Response", "template": "credit_concerns"},
-            {"title": "Settlement Timeline Info", "template": "settlement_timeline"},
-            {"title": "Program Cost Concerns", "template": "program_cost"},
-            {"title": "Account Exclusion Response", "template": "account_exclusion"}
-        ]
-        
-        card["body"].append(create_template_grid(general_templates))
-        
-        # Legal & Collection Communications
-        card["body"].append({
-            "type": "TextBlock",
-            "text": "Legal & Collection Communications",
-            "weight": "bolder",
-            "size": "medium",
-            "spacing": "medium"
-        })
-        
-        legal_templates = [
-            {"title": "Legal Update", "template": "legal_update"},
-            {"title": "Legal Threat Response", "template": "legal_threat"},
-            {"title": "Legal Document Confirmation", "template": "legal_confirmation"},
-            {"title": "Collection Calls Response", "template": "collection_calls"},
-            {"title": "Creditor Notices Response", "template": "creditor_notices"}
-        ]
-        
-        card["body"].append(create_template_grid(legal_templates))
-        
-        # Payment & Settlement Communications
-        card["body"].append({
-            "type": "TextBlock",
-            "text": "Payment & Settlement Communications",
-            "weight": "bolder",
-            "size": "medium",
-            "spacing": "medium"
-        })
-        
-        payment_templates = [
-            {"title": "Lost Settlement", "template": "lost_settlement"},
-            {"title": "Payment Returned", "template": "payment_returned"},
-            {"title": "Draft Reduction Request", "template": "draft_reduction"}
-        ]
-        
-        card["body"].append(create_template_grid(payment_templates))
-        
-        # Add back button
-        card["actions"] = [
-            {
-                "type": "Action.Submit",
-                "title": "Back to Categories",
-                "data": {
-                    "action": "view_change",
-                    "view": "main"
-                }
-            }
-        ]
-    
-    # Sales Templates View
-    elif active_view == "sales":
-        card["body"][0]["items"][0]["text"] = "Sales Email Templates"
-        
-        card["body"].append({
-            "type": "TextBlock",
-            "text": "Select a template type:",
-            "wrap": True,
-            "horizontalAlignment": "center"
-        })
-        
-        sales_templates = [
-            {"title": "Quick Quote Email", "template": "sales_quick_quote"},
-            {"title": "Initial Quote Email", "template": "sales_quote"},
-            {"title": "Financial Analysis Email", "template": "sales_analysis"},
-            {"title": "Program Overview Email", "template": "sales_overview"},
-            {"title": "Generic Sales Email", "template": "sales_generic"}
-        ]
-        
-        card["body"].append(create_template_grid(sales_templates))
-        
-        # Add back button
-        card["actions"] = [
-            {
-                "type": "Action.Submit",
-                "title": "Back to Categories",
-                "data": {
-                    "action": "view_change",
-                    "view": "main"
-                }
-            }
-        ]
-    
-    # Intro Templates View
-    elif active_view == "intro":
-        card["body"][0]["items"][0]["text"] = "Introduction Email Templates"
-        
-        card["body"].append({
-            "type": "TextBlock",
-            "text": "Select a template type:",
-            "wrap": True,
-            "horizontalAlignment": "center"
-        })
-        
-        intro_templates = [
-            {"title": "Introduction Email", "template": "introduction"},
-            {"title": "Follow-up Email", "template": "followup"},
-            {"title": "Generic Email", "template": "generic"}
-        ]
-        
-        card["body"].append(create_template_grid(intro_templates))
-        
-        # Add back button
-        card["actions"] = [
-            {
-                "type": "Action.Submit",
-                "title": "Back to Categories",
-                "data": {
-                    "action": "view_change",
-                    "view": "main"
-                }
-            }
-        ]
-    
     # Template-specific view
     elif active_view == "template":
         if not template_data or "template" not in template_data:
@@ -1207,34 +1051,52 @@ def create_unified_email_card(state=None, active_view="main", template_data=None
         template_title = get_template_title(template_id)
         card["body"][0]["items"][0]["text"] = template_title
         
+        # Create form container
+        form_container = {
+            "type": "Container",
+            "items": []
+        }
+        
         # Common fields for all templates
-        card["body"].append({
-            "type": "TextBlock",
-            "text": "Recipient (Optional)",
-            "wrap": True
-        })
-        card["body"].append({
-            "type": "Input.Text",
-            "id": "recipient",
-            "placeholder": "Enter recipient(s)"
-        })
+        form_container["items"].extend([
+            {
+                "type": "TextBlock",
+                "text": "Recipient Information",
+                "wrap": True,
+                "weight": "bolder",
+                "size": "medium",
+                "spacing": "medium"
+            },
+            {
+                "type": "TextBlock",
+                "text": "Recipient (Optional)",
+                "wrap": True
+            },
+            {
+                "type": "Input.Text",
+                "id": "recipient",
+                "placeholder": "Enter recipient(s)"
+            }
+        ])
         
         # Only add client name field for non-generic templates
         if template_id != "generic" and not template_id.startswith("sales_generic"):
-            card["body"].append({
-                "type": "TextBlock",
-                "text": "Client First Name",
-                "wrap": True
-            })
-            card["body"].append({
-                "type": "Input.Text",
-                "id": "firstname",
-                "placeholder": "Enter client's first name"
-            })
+            form_container["items"].extend([
+                {
+                    "type": "TextBlock",
+                    "text": "Client First Name",
+                    "wrap": True
+                },
+                {
+                    "type": "Input.Text",
+                    "id": "firstname",
+                    "placeholder": "Enter client's first name"
+                }
+            ])
         
         # Add template-specific fields
         if template_id == "lost_settlement":
-            card["body"].extend([
+            form_container["items"].extend([
                 {
                     "type": "TextBlock",
                     "text": "Payment Gateway",
@@ -1249,7 +1111,7 @@ def create_unified_email_card(state=None, active_view="main", template_data=None
         
         # For generic template, add subject field
         if template_id == "generic" or template_id.startswith("sales_generic"):
-            card["body"].extend([
+            form_container["items"].extend([
                 {
                     "type": "TextBlock",
                     "text": "Subject",
@@ -1262,94 +1124,119 @@ def create_unified_email_card(state=None, active_view="main", template_data=None
                 }
             ])
         
-        # Add compliance reminder for specific templates
-        if template_id in ["credit_concerns", "legal_threat", "settlement_timeline"]:
-            card["body"].extend([
+        # Add collapsible content section
+        content_section = create_collapsible_section(
+            "content_section",
+            "Email Content",
+            [
                 {
                     "type": "TextBlock",
-                    "text": "Compliance Reminder",
-                    "wrap": True,
-                    "weight": "bolder",
-                    "color": "attention",
-                    "spacing": "medium"
-                },
-                {
-                    "type": "TextBlock",
-                    "text": "Remember to follow compliance guidelines. Avoid making guarantees or promises about specific outcomes.",
-                    "wrap": True,
-                    "isSubtle": True,
-                    "color": "attention"
-                }
-            ])
-        
-        # Add instructions field for all templates
-        card["body"].extend([
-            {
-                "type": "TextBlock",
-                "text": "Instructions (Optional)",
-                "wrap": True
-            },
-            {
-                "type": "Input.Text",
-                "id": "instructions",
-                "placeholder": "Any specific details or modifications to the template - your instructions will take priority over the template",
-                "isMultiline": True
-            }
-        ])
-        
-        # For generic templates, add previous email field
-        if template_id == "generic" or template_id.startswith("sales_generic"):
-            card["body"].extend([
-                {
-                    "type": "TextBlock",
-                    "text": "Previous Email (for replies)",
+                    "text": "Instructions (Optional)",
                     "wrap": True
                 },
                 {
                     "type": "Input.Text",
-                    "id": "chain",
-                    "placeholder": "Paste previous email if this is a reply",
+                    "id": "instructions",
+                    "placeholder": "Any specific details or modifications to the template - your instructions will take priority over the template",
                     "isMultiline": True
+                }
+            ],
+            False  # initially expanded
+        )
+        form_container["items"].append(content_section)
+        
+        # For generic templates, add previous email section
+        if template_id == "generic" or template_id.startswith("sales_generic"):
+            previous_email_section = create_collapsible_section(
+                "previous_email_section",
+                "Previous Email (for replies)",
+                [
+                    {
+                        "type": "Input.Text",
+                        "id": "chain",
+                        "placeholder": "Paste previous email if this is a reply",
+                        "isMultiline": True
+                    }
+                ],
+                True  # initially collapsed
+            )
+            form_container["items"].append(previous_email_section)
+        
+        # Add options section
+        options_section = create_collapsible_section(
+            "options_section",
+            "Additional Options",
+            [
+                {
+                    "type": "Input.Toggle",
+                    "id": "hasAttachments",
+                    "title": "Mention attachments in email?",
+                    "value": "false"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": "Note: This only mentions attachments in the text. To actually attach files, you'll need to add them when sending the email in your email client.",
+                    "wrap": True,
+                    "isSubtle": True,
+                    "size": "small"
+                }
+            ],
+            True  # initially collapsed
+        )
+        form_container["items"].append(options_section)
+        
+        # Add compliance reminder for specific templates
+        if template_id in ["credit_concerns", "legal_threat", "settlement_timeline"]:
+            form_container["items"].extend([
+                {
+                    "type": "Container",
+                    "style": "attention",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Compliance Reminder",
+                            "wrap": True,
+                            "weight": "bolder",
+                            "size": "small",
+                            "spacing": "medium"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "Remember to follow compliance guidelines. Avoid making guarantees or promises about specific outcomes.",
+                            "wrap": True,
+                            "size": "small"
+                        }
+                    ],
+                    "spacing": "medium"
                 }
             ])
         
-        # Add attachment toggle
-        card["body"].extend([
-            {
-                "type": "Input.Toggle",
-                "id": "hasAttachments",
-                "title": "Mention attachments in email?",
-                "value": "false"
-            },
-            {
-                "type": "TextBlock",
-                "text": "Note: This only mentions attachments in the text. To actually attach files, you'll need to add them when sending the email in your email client.",
-                "wrap": True,
-                "isSubtle": True,
-                "size": "small"
-            }
-        ])
+        # Add buttons
+        form_container["items"].append({
+            "type": "ActionSet",
+            "actions": [
+                {
+                    "type": "Action.Submit",
+                    "title": "Generate Email",
+                    "style": "positive",
+                    "data": {
+                        "action": "generate_email",
+                        "template": template_id
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "Back to Templates",
+                    "data": {
+                        "action": "view_change",
+                        "view": "main"
+                    }
+                }
+            ],
+            "spacing": "medium"
+        })
         
-        # Add generate and back buttons
-        card["actions"] = [
-            {
-                "type": "Action.Submit",
-                "title": "Generate Email",
-                "style": "positive",
-                "data": {
-                    "action": "generate_email",
-                    "template": template_id
-                }
-            },
-            {
-                "type": "Action.Submit",
-                "title": "Back to Templates",
-                "data": {
-                    "action": "view_change",
-                    "view": get_template_channel(template_id)
-                }
-            }
-        ]
+        card["body"].append(form_container)
     
     # Create attachment
     attachment = Attachment(
@@ -1358,6 +1245,68 @@ def create_unified_email_card(state=None, active_view="main", template_data=None
     )
     
     return attachment
+
+def create_collapsible_section(id, title, items, collapsed=False):
+    """Creates a collapsible section for the adaptive card"""
+    # Create the section
+    section = {
+        "type": "Container",
+        "style": "emphasis" if not collapsed else "default",
+        "id": id,
+        "items": [
+            {
+                "type": "ColumnSet",
+                "columns": [
+                    {
+                        "type": "Column",
+                        "width": "stretch",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": title,
+                                "weight": "bolder",
+                                "size": "medium"
+                            }
+                        ]
+                    },
+                    {
+                        "type": "Column",
+                        "width": "auto",
+                        "items": [
+                            {
+                                "type": "Image",
+                                "url": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMTIuNjY2NyA2TDggMTAuNjY2N0wzLjMzMzM0IDYiIHN0cm9rZT0iIzIxMjEyMSIgc3Ryb2tlLXdpZHRoPSIxLjMzMzMzIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L3N2Zz4=",
+                                "width": "16px",
+                                "height": "16px",
+                                "id": f"{id}Arrow",
+                                "altText": "Toggle"
+                            }
+                        ],
+                        "verticalContentAlignment": "center"
+                    }
+                ],
+                "selectAction": {
+                    "type": "Action.ToggleVisibility",
+                    "targetElements": [f"{id}Content", f"{id}Arrow"],
+                    "title": "toggle"
+                }
+            }
+        ],
+        "spacing": "medium"
+    }
+
+    # Add the content with initial visibility state
+    content_container = {
+        "type": "Container",
+        "id": f"{id}Content",
+        "items": items,
+        "isVisible": not collapsed,
+        "spacing": "small"
+    }
+    
+    section["items"].append(content_container)
+    
+    return section
 
 def create_template_grid(templates):
     """Helper function to create a grid of template buttons"""
@@ -2499,9 +2448,8 @@ async def send_edit_email_card(turn_context: TurnContext, state):
         await turn_context.send_activity("I couldn't find a recently generated email to edit. Please create a new email first.")
         return
     
-    reply = _create_reply(turn_context.activity)
-    reply.attachments = [create_edit_email_card(original_email)]
-    await turn_context.send_activity(reply)
+    edit_card = create_edit_email_card(original_email)
+    await send_card_response(turn_context, edit_card)
 async def apply_email_edits(turn_context: TurnContext, state, edit_instructions):
     """
     Applies edits to the previously generated email with enhanced compliance guidance and validation.
@@ -2639,237 +2587,14 @@ async def apply_email_edits(turn_context: TurnContext, state, edit_instructions)
             with conversation_states_lock:
                 state["last_generated_email"] = edited_email
             
-            # Create an enhanced email result card
-            email_card = {
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "type": "AdaptiveCard",
-                "version": "1.5",
-                "body": [
-                    {
-                        "type": "Container",
-                        "style": "emphasis",
-                        "items": [
-                            {
-                                "type": "TextBlock",
-                                "text": "Edited Email",
-                                "size": "large",
-                                "weight": "bolder",
-                                "horizontalAlignment": "center",
-                                "color": "accent" 
-                            }
-                        ],
-                        "bleed": True
-                    },
-                    {
-                        "type": "Container",
-                        "style": "default",
-                        "items": [
-                            {
-                                "type": "TextBlock",
-                                "text": edited_email,
-                                "wrap": True,
-                                "spacing": "medium"
-                            }
-                        ],
-                        "padding": "Medium"
-                    },
-                    {
-                        "type": "Container",
-                        "style": "good",
-                        "items": [
-                            {
-                                "type": "TextBlock",
-                                "text": "Email edited successfully!",
-                                "wrap": True,
-                                "size": "small",
-                                "horizontalAlignment": "center"
-                            }
-                        ],
-                        "spacing": "medium"
-                    }
-                ],
-                "actions": [
-                    {
-                        "type": "Action.Submit",
-                        "title": "Edit Again",
-                        "style": "positive",
-                        "data": {
-                            "action": "edit_email"
-                        }
-                    },
-                    {
-                        "type": "Action.Submit",
-                        "title": "Create Another Email",
-                        "data": {
-                            "action": "create_email"
-                        }
-                    }
-                ]
-            }
-            
-            # Create attachment
-            attachment = Attachment(
-                content_type="application/vnd.microsoft.card.adaptive",
-                content=email_card
-            )
-            
-            reply = _create_reply(turn_context.activity)
-            reply.attachments = [attachment]
-            await turn_context.send_activity(reply)
+            email_card = create_email_result_card(edited_email)
+            await send_card_response(turn_context, email_card)
         else:
             await turn_context.send_activity("I'm sorry, I couldn't edit the email. Please try again with different instructions.")
     except Exception as e:
         logging.error(f"Error editing email: {str(e)}")
         traceback.print_exc()
         await turn_context.send_activity(f"I encountered an error while editing your email. Please try again or contact support if the issue persists.")
-# Add this to your handle_card_actions function
-# async def handle_card_actions(turn_context: TurnContext, action_data):
-#     """Handles actions from adaptive cards"""
-#     try:
-#         if action_data.get("action") == "new_chat":
-#             # Get conversation ID
-#             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-#             conversation_id = conversation_reference.conversation.id
-            
-#             # Reset conversation state
-#             if conversation_id in conversation_states:
-#                 # Clear any pending messages
-#                 with pending_messages_lock:
-#                     if conversation_id in pending_messages:
-#                         pending_messages[conversation_id].clear()
-                
-#                 # Send typing indicator
-#                 await turn_context.send_activity(create_typing_activity())
-                
-#                 # Initialize new chat
-#                 await initialize_chat(turn_context, None)  # Pass None to force new state creation
-#             else:
-#                 await initialize_chat(turn_context, None)
-#         elif action_data.get("action") == "generate_email":
-#             # Get conversation state
-#             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-#             conversation_id = conversation_reference.conversation.id
-#             state = conversation_states[conversation_id]
-            
-#             # Get template type
-#             template_id = action_data.get("template", "generic")
-            
-#             # Extract common fields
-#             recipient = action_data.get("recipient", "")
-#             instructions = action_data.get("instructions", "")
-#             chain = action_data.get("chain", "")
-#             has_attachments = action_data.get("hasAttachments", "false") == "true"
-            
-#             # Extract template-specific fields
-#             firstname = action_data.get("firstname", "")
-#             gateway = action_data.get("gateway", "")
-#             subject = action_data.get("subject", "")
-            
-#             # Generate email using AI
-#             await generate_email(
-#                 turn_context, 
-#                 state, 
-#                 template_id, 
-#                 recipient, 
-#                 firstname, 
-#                 gateway, 
-#                 subject, 
-#                 instructions, 
-#                 chain, 
-#                 has_attachments
-#             )
-#         elif action_data.get("action") == "create_email":
-#             # Send channel selection card
-#             await send_email_card(turn_context, "channel_selection")
-#         elif action_data.get("action") == "select_channel":
-#             # Get the selected channel
-#             channel = action_data.get("channel", "intro")
-            
-#             # Send the template selection card for this channel
-#             await send_email_card(turn_context, "selection", channel)
-#         elif action_data.get("action") == "select_template":
-#             # Get the selected template
-#             template = action_data.get("template", "generic")
-            
-#             # Send the appropriate template card
-#             await send_email_card(turn_context, template)
-#         elif action_data.get("action") == "edit_email":
-#             # Get conversation state
-#             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-#             conversation_id = conversation_reference.conversation.id
-#             state = conversation_states[conversation_id]
-            
-#             # Send edit email card
-#             await send_edit_email_card(turn_context, state)
-#         elif action_data.get("action") == "apply_email_edits":
-#             # Get conversation state
-#             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-#             conversation_id = conversation_reference.conversation.id
-#             state = conversation_states[conversation_id]
-            
-#             # Get edit instructions
-#             edit_instructions = action_data.get("edit_instructions", "")
-            
-#             # Apply edits
-#             await apply_email_edits(turn_context, state, edit_instructions)
-#         elif action_data.get("action") == "cancel_edit":
-#             # Cancel edit and go back to last generated email
-#             conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-#             conversation_id = conversation_reference.conversation.id
-#             state = conversation_states[conversation_id]
-            
-#             with conversation_states_lock:
-#                 original_email = state.get("last_generated_email", "")
-            
-#             if original_email:
-#                 # Create an email result card
-#                 email_card = {
-#                     "type": "AdaptiveCard",
-#                     "version": "1.0",
-#                     "body": [
-#                         {
-#                             "type": "TextBlock",
-#                             "text": "Generated Email",
-#                             "size": "large",
-#                             "weight": "bolder"
-#                         },
-#                         {
-#                             "type": "TextBlock",
-#                             "text": original_email,
-#                             "wrap": True
-#                         }
-#                     ],
-#                     "actions": [
-#                         {
-#                             "type": "Action.Submit",
-#                             "title": "Edit This Email",
-#                             "data": {
-#                                 "action": "edit_email"
-#                             }
-#                         },
-#                         {
-#                             "type": "Action.Submit",
-#                             "title": "Create Another Email",
-#                             "data": {
-#                                 "action": "create_email"
-#                             }
-#                         }
-#                     ]
-#                 }
-                
-#                 attachment = Attachment(
-#                     content_type="application/vnd.microsoft.card.adaptive",
-#                     content=email_card
-#                 )
-                
-#                 reply = _create_reply(turn_context.activity)
-#                 reply.attachments = [attachment]
-#                 await turn_context.send_activity(reply)
-#             else:
-#                 await send_email_card(turn_context)
-#     except Exception as e:
-#         logging.error(f"Error handling card action: {e}")
-#         await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
 async def handle_card_actions(turn_context: TurnContext, action_data):
     """Handles actions from adaptive cards with improved unified card UI"""
     try:
@@ -2893,9 +2618,45 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             unified_card = create_unified_email_card(state, view, template_data)
             
             # Send the updated card
-            reply = _create_reply(turn_context.activity)
-            reply.attachments = [unified_card]
-            await turn_context.send_activity(reply)
+            await send_card_response(turn_context, unified_card)
+            return
+        
+        # Handle template selection from hierarchical card
+        elif action_data.get("action") == "select_template_from_hierarchy":
+            # Determine which template was selected based on dropdown values
+            template_id = None
+            
+            # Check each possible dropdown to find the selected template
+            if "emailCategory" in action_data:
+                category = action_data.get("emailCategory")
+                
+                # Handle direct category selections
+                if category == "generic":
+                    template_id = "generic"
+                elif category in ["customer_service", "sales", "intro"]:
+                    # These categories need more specific template selection
+                    if category == "customer_service":
+                        if "clientServicesGeneral" in action_data and action_data["clientServicesGeneral"]:
+                            template_id = action_data["clientServicesGeneral"]
+                        elif "clientServicesLegal" in action_data and action_data["clientServicesLegal"]:
+                            template_id = action_data["clientServicesLegal"]
+                        elif "clientServicesPayment" in action_data and action_data["clientServicesPayment"]:
+                            template_id = action_data["clientServicesPayment"]
+                    elif category == "sales" and "salesTemplates" in action_data:
+                        template_id = action_data["salesTemplates"]
+                    elif category == "intro" and "introTemplates" in action_data:
+                        template_id = action_data["introTemplates"]
+            
+            # If we couldn't determine a template, default to generic
+            if not template_id:
+                template_id = "generic"
+            
+            # Show the template form
+            template_data = {"template": template_id}
+            unified_card = create_unified_email_card(state, "template", template_data)
+            
+            # Send the updated card
+            await send_card_response(turn_context, unified_card)
             return
         
         # Handle email generation from unified card
@@ -2929,48 +2690,40 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             )
             return
         
-        # Handle new chat command
+        # Handle other actions as before
         elif action_data.get("action") == "new_chat":
             await handle_new_chat_command(turn_context, state, conversation_id)
             return
-            
-        # Handle email editing
         elif action_data.get("action") == "edit_email":
             await send_edit_email_card(turn_context, state)
             return
-            
-        # Handle applying email edits
         elif action_data.get("action") == "apply_email_edits":
             edit_instructions = action_data.get("edit_instructions", "")
             await apply_email_edits(turn_context, state, edit_instructions)
             return
-            
-        # Handle canceling edit
         elif action_data.get("action") == "cancel_edit":
             with conversation_states_lock:
                 original_email = state.get("last_generated_email", "")
             
             if original_email:
-                await turn_context.send_activity(create_email_result_card(original_email))
+                result_card = create_email_result_card(original_email)
+                await send_card_response(turn_context, result_card)
             else:
                 # Go back to main view if no email
                 unified_card = create_unified_email_card(state, "main")
-                reply = _create_reply(turn_context.activity)
-                reply.attachments = [unified_card]
-                await turn_context.send_activity(reply)
+                await send_card_response(turn_context, unified_card)
             return
-            
+        
         # For backward compatibility, route other actions to the unified card approach
         else:
             # Default to showing main view
             unified_card = create_unified_email_card(state, "main")
-            reply = _create_reply(turn_context.activity)
-            reply.attachments = [unified_card]
-            await turn_context.send_activity(reply)
+            await send_card_response(turn_context, unified_card)
             return
             
     except Exception as e:
         logging.error(f"Error handling card action: {e}")
+        traceback.print_exc()
         await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
 def get_template_title(template_id):
     """
@@ -3885,32 +3638,13 @@ def create_email_card(template_mode="selection", channel=None):
     )
     
     return attachment
-# async def send_email_card(turn_context: TurnContext, template_mode="channel_selection", channel=None):
-#     """
-#     Sends an email composer card to the user.
-    
-#     Args:
-#         turn_context: The turn context
-#         template_mode: The template mode to display
-#         channel: Email channel if in selection mode
-#     """
-#     reply = _create_reply(turn_context.activity)
-    
-#     if template_mode == "channel_selection":
-#         reply.attachments = [create_channel_selection_card()]
-#     elif template_mode == "selection":
-#         reply.attachments = [create_email_card(template_mode, channel)]
-#     else:
-#         reply.attachments = [create_email_card(template_mode)]
-    
-#     await turn_context.send_activity(reply)
 async def send_email_card(turn_context: TurnContext, template_mode="main", channel=None):
     """
-    Sends a unified email card using the new approach.
+    Sends a unified email card using the new hierarchical approach.
     
     Args:
         turn_context: The turn context
-        template_mode: The view to display (main, customer_service, sales, intro, or template name)
+        template_mode: The view to display (main, template, or template name)
         channel: Email channel if in selection mode (legacy parameter, not used in unified approach)
     """
     # Get state
@@ -3930,8 +3664,8 @@ async def send_email_card(turn_context: TurnContext, template_mode="main", chann
     if template_mode == "channel_selection":
         view = "main"
     elif template_mode == "selection" and channel:
-        view = channel
-    elif template_mode not in ["main", "customer_service", "sales", "intro"]:
+        view = "main"  # In the new approach, we always start at main
+    elif template_mode not in ["main", "template"]:
         # This is a template name
         view = "template"
         template_data = {"template": template_mode}
@@ -3939,10 +3673,8 @@ async def send_email_card(turn_context: TurnContext, template_mode="main", chann
     # Create the unified card
     card = create_unified_email_card(state, view, template_data)
     
-    # Send the card
-    reply = _create_reply(turn_context.activity)
-    reply.attachments = [card]
-    await turn_context.send_activity(reply)
+    # Send the card using the new helper function
+    await send_card_response(turn_context, card)
 async def handle_info_request(turn_context: TurnContext, info_type: str):
     """Handles requests for information about uploads or help"""
     if info_type == "upload":
@@ -4130,83 +3862,6 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
         reply.attachments = [attachment]
         await turn_context.send_activity(reply)
 
-
-# Example of handling email generation result
-# def create_email_result_card(email_text):
-#     """Creates an enhanced card displaying the generated email with copy options and formatting"""
-#     card = {
-#         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-#         "type": "AdaptiveCard",
-#         "version": "1.5",
-#         "body": [
-#             {
-#                 "type": "Container",
-#                 "style": "emphasis",
-#                 "items": [
-#                     {
-#                         "type": "TextBlock",
-#                         "text": "Generated Email Template",
-#                         "size": "large",
-#                         "weight": "bolder",
-#                         "horizontalAlignment": "center",
-#                         "color": "accent"
-#                     }
-#                 ],
-#                 "bleed": True
-#             },
-#             {
-#                 "type": "Container",
-#                 "style": "default",
-#                 "items": [
-#                     {
-#                         "type": "TextBlock",
-#                         "text": email_text,
-#                         "wrap": True,
-#                         "spacing": "medium"
-#                     }
-#                 ],
-#                 "padding": "Medium"
-#             },
-#             {
-#                 "type": "Container",
-#                 "style": "good",
-#                 "items": [
-#                     {
-#                         "type": "TextBlock",
-#                         "text": "Success! Email template generated according to FCDR guidelines.",
-#                         "wrap": True,
-#                         "size": "small",
-#                         "horizontalAlignment": "center"
-#                     }
-#                 ],
-#                 "spacing": "medium"
-#             }
-#         ],
-#         "actions": [
-#             {
-#                 "type": "Action.Submit",
-#                 "title": "Edit This Email",
-#                 "style": "positive",
-#                 "data": {
-#                     "action": "edit_email"
-#                 }
-#             },
-#             {
-#                 "type": "Action.Submit",
-#                 "title": "Create Another Email",
-#                 "data": {
-#                     "action": "create_email"
-#                 }
-#             }
-#         ]
-#     }
-    
-#     attachment = Attachment(
-#         content_type="application/vnd.microsoft.card.adaptive",
-#         content=card
-#     )
-    
-#     return attachment
 def create_email_result_card(email_text):
     """Creates an enhanced card displaying the generated email with edit option"""
     card = {
@@ -4283,6 +3938,47 @@ def create_email_result_card(email_text):
     )
     
     return attachment
+
+async def send_card_response(turn_context: TurnContext, attachment):
+    """
+    Properly creates and sends a response with an attachment.
+    
+    Args:
+        turn_context: The turn context
+        attachment: The attachment to send
+    """
+    reply = Activity(
+        type=ActivityTypes.message,
+        attachments=[attachment],
+        input_hint=None  # Explicitly set input_hint
+    )
+    
+    # Copy necessary properties from the incoming activity
+    if hasattr(turn_context.activity, 'conversation'):
+        reply.conversation = turn_context.activity.conversation
+    
+    if hasattr(turn_context.activity, 'from_property'):
+        reply.recipient = ChannelAccount(
+            id=turn_context.activity.from_property.id,
+            name=turn_context.activity.from_property.name,
+        )
+    
+    if hasattr(turn_context.activity, 'recipient'):
+        reply.from_property = ChannelAccount(
+            id=turn_context.activity.recipient.id,
+            name=turn_context.activity.recipient.name,
+        )
+    
+    if hasattr(turn_context.activity, 'reply_to_id'):
+        reply.reply_to_id = turn_context.activity.id
+    
+    if hasattr(turn_context.activity, 'service_url'):
+        reply.service_url = turn_context.activity.service_url
+    
+    if hasattr(turn_context.activity, 'channel_id'):
+        reply.channel_id = turn_context.activity.channel_id
+    
+    await turn_context.send_activity(reply)
 def create_template_selection_card():
     """Creates an adaptive card for selecting email template categories"""
     card = {
@@ -5791,70 +5487,8 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
                     "has_attachments": has_attachments
                 }
             
-            # Create an enhanced email result card with more options
-            email_card = {
-                "type": "AdaptiveCard",
-                "version": "1.3",
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "body": [
-                    {
-                        "type": "Container",
-                        "style": "emphasis",
-                        "items": [
-                            {
-                                "type": "TextBlock",
-                                "text": get_template_title(template_id) if template_id != "generic" else "Generated Email",
-                                "size": "large",
-                                "weight": "bolder",
-                                "horizontalAlignment": "center",
-                                "color": "accent"
-                            }
-                        ],
-                        "bleed": True
-                    },
-                    {
-                        "type": "Container",
-                        "style": "default",
-                        "items": [
-                            {
-                                "type": "TextBlock",
-                                "text": email_text,
-                                "wrap": True,
-                                "spacing": "medium"
-                            }
-                        ],
-                        "padding": "Medium"
-                    }
-                ],
-                "actions": [
-                    {
-                        "type": "Action.Submit",
-                        "title": "Edit This Email",
-                        "data": {
-                            "action": "edit_email"
-                        }
-                    },
-                    {
-                        "type": "Action.Submit",
-                        "title": "Create Another Email",
-                        "style": "positive",
-                        "data": {
-                            "action": "create_email"
-                        }
-                    }
-                ]
-            }
-            
-            # # Create attachment
-            # attachment = Attachment(
-            #     content_type="application/vnd.microsoft.card.adaptive",
-            #     content=email_card
-            # )
-            
-            # reply = _create_reply(turn_context.activity)
-            # reply.attachments = [attachment]
-            # await turn_context.send_activity(reply)
-            await turn_context.send_activity(create_email_result_card(email_text))
+            result_card = create_email_result_card(email_text)
+            await send_card_response(turn_context, result_card)
         else:
             await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again with more details about what you need.")
     except Exception as e:
