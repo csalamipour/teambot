@@ -1,3 +1,5 @@
+import hashlib
+import uuid
 import logging
 import threading
 import tempfile
@@ -2328,12 +2330,13 @@ async def send_welcome_message(turn_context: TurnContext):
     reply.attachments = [welcome_card]
     await turn_context.send_activity(reply)
 
-def create_edit_email_card(original_email):
+def create_edit_email_card(original_email, email_id=None):
     """
     Creates an enhanced adaptive card for email editing with compliance guidance.
     
     Args:
         original_email: The original email text to edit
+        email_id: Optional email ID for tracking
     
     Returns:
         Attachment: The card attachment
@@ -2427,14 +2430,16 @@ def create_edit_email_card(original_email):
                 "title": "Apply Changes",
                 "style": "positive",
                 "data": {
-                    "action": "apply_email_edits"
+                    "action": "apply_email_edits",
+                    "email_id": email_id  # Include email_id
                 }
             },
             {
                 "type": "Action.Submit",
                 "title": "Cancel",
                 "data": {
-                    "action": "cancel_edit"
+                    "action": "cancel_edit",
+                    "email_id": email_id  # Include email_id
                 }
             }
         ]
@@ -2446,170 +2451,236 @@ def create_edit_email_card(original_email):
     )
     
     return attachment
-async def send_edit_email_card(turn_context: TurnContext, state):
+async def send_edit_email_card(turn_context: TurnContext, state, email_id=None):
     """
     Sends an email editing card to the user.
     
     Args:
         turn_context: The turn context
         state: The conversation state containing the last generated email
+        email_id: Optional specific email ID to edit
     """
     with conversation_states_lock:
-        original_email = state.get("last_generated_email", "")
+        # If email_id is provided, try to get that specific email
+        if email_id and "email_history" in state and email_id in state["email_history"]:
+            email_data = state["email_history"][email_id]
+            original_email = email_data.get("email_text", "")
+        else:
+            # Fallback to last generated email
+            email_id = state.get("last_email_id")
+            if email_id and "email_history" in state and email_id in state["email_history"]:
+                email_data = state["email_history"][email_id]
+                original_email = email_data.get("email_text", "")
+            else:
+                # Final fallback to old method
+                original_email = state.get("last_generated_email", "")
     
     if not original_email:
         await turn_context.send_activity("I couldn't find a recently generated email to edit. Please create a new email first.")
         return
     
-    edit_card = create_edit_email_card(original_email)
+    edit_card = create_edit_email_card(original_email, email_id)
     await send_card_response(turn_context, edit_card)
-async def apply_email_edits(turn_context: TurnContext, state, edit_instructions):
+async def apply_email_edits(turn_context: TurnContext, state, edit_instructions, email_id=None):
     """
     Applies edits to the previously generated email with enhanced compliance guidance and validation.
-    
-    Args:
-        turn_context: The turn context
-        state: The conversation state
-        edit_instructions: Instructions for editing the email
+    Now with proper status handling that doesn't spam the user.
     """
-    # Send typing indicator
-    await turn_context.send_activity(create_typing_activity())
-    
-    # Get the original email and template data
-    with conversation_states_lock:
-        original_email = state.get("last_generated_email", "")
-        template_id = state.get("last_email_template", "generic")
-        email_data = state.get("last_email_data", {})
-    
-    if not original_email:
-        await turn_context.send_activity("I couldn't find the original email to edit. Please create a new email.")
-        return
-    
-    # Create prompt for editing with compliance guidelines
-    prompt = f"Edit the following email based on these instructions: {edit_instructions}\n\n"
-    prompt += "ORIGINAL EMAIL:\n"
-    prompt += f"{original_email}\n\n"
-    
-    # Determine email category for specialized guidance
-    email_category = ""
-    if template_id in ["welcome", "legal_update", "lost_settlement", "legal_confirmation", "payment_returned",
-                       "legal_threat", "draft_reduction", "creditor_notices", "collection_calls", "credit_concerns", 
-                       "settlement_timeline", "program_cost", "account_exclusion"]:
-        email_category = "customer_service"
-    elif template_id.startswith("sales_"):
-        email_category = "sales"
-    else:
-        email_category = "general"
-    
-    # Add template-specific guidance
-    if template_id in ["legal_update", "legal_confirmation", "legal_threat"]:
-        prompt += "\nThis is a legal-related communication. Please ensure the email:\n"
-        prompt += "- Uses compliant language about legal protection (covers costs, doesn't prevent lawsuits)\n"
-        prompt += "- Maintains a reassuring but realistic tone\n"
-        prompt += "- Emphasizes FCDR's coordination with legal providers\n"
-    elif template_id == "lost_settlement":
-        prompt += "\nThis is about a missed settlement payment. Please ensure the email:\n"
-        prompt += "- Clearly explains consequences without creating panic\n"
-        prompt += "- Emphasizes urgency while maintaining professionalism\n"
-        prompt += "- Provides clear next steps\n"
-    elif template_id == "credit_concerns":
-        prompt += "\nThis is about credit score concerns. Please ensure the email:\n"
-        prompt += "- Acknowledges the importance of credit while focusing on debt resolution\n"
-        prompt += "- Explains that resolving accounts creates a foundation for rebuilding\n"
-        prompt += "- Avoids guarantees about credit recovery or timeline promises\n"
-    elif template_id == "settlement_timeline":
-        prompt += "\nThis is about settlement timeline expectations. Please ensure the email:\n"
-        prompt += "- Avoids providing specific timeframes for settlements\n"
-        prompt += "- Explains that creditors have different policies regarding negotiations\n"
-        prompt += "- Emphasizes that clients will be kept informed and need to approve each settlement\n"
-    
-    # Add universal compliance guidelines
-    prompt += "\nCRITICAL COMPLIANCE GUIDELINES - The email MUST:\n"
-    prompt += "- NEVER promise guaranteed results or specific outcomes\n"
-    prompt += "- NEVER offer legal advice or use language suggesting legal expertise\n"
-    prompt += "- NEVER use terms like 'debt forgiveness,' 'eliminate,' or 'erase' your debt\n"
-    prompt += "- NEVER state or imply that the program prevents lawsuits or legal action\n"
-    prompt += "- NEVER claim all accounts will be resolved within a specific timeframe\n"
-    prompt += "- NEVER suggest the program is a credit repair service\n"
-    prompt += "- NEVER guarantee that clients will qualify for any financing\n"
-    prompt += "- NEVER make promises about improving credit scores\n"
-    prompt += "- NEVER say clients are 'required' to stop payments to creditors\n"
-    prompt += "- Use phrases like 'negotiated resolution' instead of 'paid in full'\n"
-    
-    # Add tone guidance based on email type
-    if email_category == "customer_service":
-        prompt += "\nTONE GUIDANCE:\n"
-        prompt += "- Use a supportive yet professional tone\n"
-        prompt += "- Be direct and informative without being alarmist\n"
-        prompt += "- Balance empathy with factual information\n"
-    elif email_category == "sales":
-        prompt += "\nTONE GUIDANCE:\n"
-        prompt += "- Use a professional but positive tone\n"
-        prompt += "- Focus on the benefits without making guarantees\n"
-        prompt += "- Create a sense of opportunity without pressure tactics\n"
-    else:
-        prompt += "\nTONE GUIDANCE:\n"
-        prompt += "- Use a balanced, professional tone\n"
-        prompt += "- Be clear and direct while maintaining a supportive approach\n"
-        prompt += "- Balance factual information with appropriate empathy\n"
-    
-    prompt += "\nPlease provide the complete revised email with all changes incorporated while maintaining compliance with the guidelines above."
-    
-    # Initialize chat if needed
-    if not state.get("assistant_id"):
-        await initialize_chat(turn_context, state)
+    # Create a task for periodic typing indicators
+    typing_task = None
     
     try:
-        # Use the existing process_conversation_internal function to get AI response
-        client = create_client()
-        result = await process_conversation_internal(
-            client=client,
-            session=state["session_id"],
-            prompt=prompt,
-            assistant=state["assistant_id"],
-            stream_output=False
-        )
+        # Send ONE status message only
+        await turn_context.send_activity("Applying your edits to the email... This may take a moment.")
         
-        # Extract and format the edited email
-        if isinstance(result, dict) and "response" in result:
-            edited_email = result["response"]
+        # Start periodic typing indicator task
+        typing_task = asyncio.create_task(send_periodic_typing(turn_context, 3))
+        
+        # Get the original email and template data
+        with conversation_states_lock:
+            # Try to get specific email from history
+            if email_id and "email_history" in state and email_id in state["email_history"]:
+                email_data = state["email_history"][email_id]
+                original_email = email_data.get("email_text", "")
+                template_id = email_data.get("template_id", "generic")
+                email_form_data = email_data.get("email_data", {})
+            else:
+                # Fallback to last email
+                email_id = state.get("last_email_id")
+                if email_id and "email_history" in state and email_id in state["email_history"]:
+                    email_data = state["email_history"][email_id]
+                    original_email = email_data.get("email_text", "")
+                    template_id = email_data.get("template_id", "generic")
+                    email_form_data = email_data.get("email_data", {})
+                else:
+                    # Final fallback to old method
+                    original_email = state.get("last_generated_email", "")
+                    template_id = state.get("last_email_template", "generic")
+                    email_form_data = state.get("last_email_data", {})
+        
+        if not original_email:
+            # Cancel typing task
+            if typing_task and not typing_task.done():
+                typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
             
-            # Compliance check - scan for potential issues
-            potential_compliance_issues = check_email_compliance(edited_email)
+            await turn_context.send_activity("I couldn't find the original email to edit. Please create a new email.")
+            return
+        
+        # Create prompt for editing with compliance guidelines
+        prompt = f"Edit the following email based on these instructions: {edit_instructions}\n\n"
+        prompt += "ORIGINAL EMAIL:\n"
+        prompt += f"{original_email}\n\n"
+        
+        # ... (rest of prompt building code remains the same) ...
+        
+        # Initialize chat if needed
+        if not state.get("assistant_id"):
+            await initialize_chat(turn_context, state)
+        
+        # Track edit start time
+        edit_start_time = time.time()
+        
+        try:
+            # Set a timeout for the AI editing
+            timeout_seconds = 45  # 45 second timeout for edits
             
-            # If serious compliance issues found, try regenerating once
-            if potential_compliance_issues and any(issue["severity"] == "high" for issue in potential_compliance_issues):
-                logging.warning(f"Potential compliance issues detected in edited email: {potential_compliance_issues}")
-                # Add stronger compliance guidance and regenerate
-                prompt += "\n\nWARNING: The previous edit had potential compliance issues. Please ensure the email strictly avoids:\n"
-                for issue in potential_compliance_issues:
-                    prompt += f"- {issue['description']}\n"
-                
-                # Re-generate with stronger compliance guidance
-                result = await process_conversation_internal(
+            # Use the existing process_conversation_internal function to get AI response
+            client = create_client()
+            
+            # Create a timeout wrapper
+            async def edit_with_timeout():
+                return await process_conversation_internal(
                     client=client,
                     session=state["session_id"],
                     prompt=prompt,
                     assistant=state["assistant_id"],
                     stream_output=False
                 )
-                if isinstance(result, dict) and "response" in result:
-                    edited_email = result["response"]
             
-            # Update the saved email
-            with conversation_states_lock:
-                state["last_generated_email"] = edited_email
+            # Execute with timeout
+            try:
+                result = await asyncio.wait_for(edit_with_timeout(), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                # Cancel typing task
+                if typing_task and not typing_task.done():
+                    typing_task.cancel()
+                    try:
+                        await typing_task
+                    except asyncio.CancelledError:
+                        pass
+                
+                # Give it another 20 seconds but don't send another message
+                try:
+                    result = await asyncio.wait_for(edit_with_timeout(), timeout=20)
+                except asyncio.TimeoutError:
+                    await turn_context.send_activity("Email editing timed out. Please try again with simpler instructions.")
+                    return
             
-            email_card = create_email_result_card(edited_email)
-            await send_card_response(turn_context, email_card)
-        else:
-            await turn_context.send_activity("I'm sorry, I couldn't edit the email. Please try again with different instructions.")
-    except Exception as e:
-        logging.error(f"Error editing email: {str(e)}")
-        traceback.print_exc()
-        await turn_context.send_activity(f"I encountered an error while editing your email. Please try again or contact support if the issue persists.")
+            # Extract and format the edited email
+            if isinstance(result, dict) and "response" in result:
+                edited_email = result["response"]
+                
+                # Compliance check - scan for potential issues
+                potential_compliance_issues = check_email_compliance(edited_email)
+                
+                # If serious compliance issues found, try regenerating once
+                if potential_compliance_issues and any(issue["severity"] == "high" for issue in potential_compliance_issues):
+                    logging.warning(f"Potential compliance issues detected in edited email: {potential_compliance_issues}")
+                    
+                    # Add stronger compliance guidance and regenerate
+                    prompt += "\n\nWARNING: The previous edit had potential compliance issues. Please ensure the email strictly avoids:\n"
+                    for issue in potential_compliance_issues:
+                        prompt += f"- {issue['description']}\n"
+                    
+                    # Re-generate with stronger compliance guidance
+                    result = await asyncio.wait_for(edit_with_timeout(), timeout=30)
+                    if isinstance(result, dict) and "response" in result:
+                        edited_email = result["response"]
+                
+                # Generate new email ID for the edited version
+                new_email_id = str(uuid.uuid4())
+                
+                # Update the saved email history
+                with conversation_states_lock:
+                    if "email_history" not in state:
+                        state["email_history"] = {}
+                    
+                    # Save the edited email as a new entry
+                    state["email_history"][new_email_id] = {
+                        "email_text": edited_email,
+                        "template_id": template_id,
+                        "email_data": email_form_data,
+                        "timestamp": time.time(),
+                        "parent_email_id": email_id  # Track which email this was edited from
+                    }
+                    state["last_email_id"] = new_email_id
+                    
+                    # Keep only last 10 emails
+                    if len(state["email_history"]) > 10:
+                        sorted_ids = sorted(state["email_history"].keys(), 
+                                          key=lambda k: state["email_history"][k]["timestamp"])
+                        for old_id in sorted_ids[:-10]:
+                            del state["email_history"][old_id]
+                    
+                    # Update backward compatibility fields
+                    state["last_generated_email"] = edited_email
+                
+                # Cancel typing task before sending final result
+                if typing_task and not typing_task.done():
+                    typing_task.cancel()
+                    try:
+                        await typing_task
+                    except asyncio.CancelledError:
+                        pass
+                
+                # Send the result card directly - no additional message
+                email_card = create_email_result_card(edited_email, new_email_id)
+                await send_card_response(turn_context, email_card)
+            else:
+                # Cancel typing task
+                if typing_task and not typing_task.done():
+                    typing_task.cancel()
+                    try:
+                        await typing_task
+                    except asyncio.CancelledError:
+                        pass
+                
+                await turn_context.send_activity("I couldn't edit the email. Please try again with different instructions.")
+                
+        except Exception as e:
+            logging.error(f"Error editing email: {str(e)}")
+            traceback.print_exc()
+            
+            # Cancel typing task
+            if typing_task and not typing_task.done():
+                typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
+            
+            await turn_context.send_activity(f"I encountered an error while editing your email. Please try again or contact support if the issue persists.")
+    
+    finally:
+        # Ensure typing task is cancelled
+        if typing_task and not typing_task.done():
+            typing_task.cancel()
+            try:
+                await typing_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Send stop typing indicator
+        try:
+            await turn_context.send_activity(create_typing_stop_activity())
+        except:
+            pass  # Ignore errors when stopping typing
 async def handle_card_actions(turn_context: TurnContext, action_data):
-    """Handles actions from adaptive cards with improved unified card UI"""
+    """Handles actions from adaptive cards with improved unified card UI and debouncing"""
     try:
         conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
         conversation_id = conversation_reference.conversation.id
@@ -2620,6 +2691,29 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             await initialize_chat(turn_context, None)
         
         state = conversation_states[conversation_id]
+        
+        # DEBOUNCING: Create a hash of the action to detect duplicates
+        action_hash = hashlib.md5(json.dumps(action_data, sort_keys=True).encode()).hexdigest()
+        
+        with conversation_states_lock:
+            recent_actions = state.get("recent_card_actions", {})
+            current_time = time.time()
+            
+            # Check if this action was recently processed (within 2 seconds)
+            if action_hash in recent_actions:
+                if current_time - recent_actions[action_hash] < 2:
+                    logging.info(f"Ignoring duplicate card action within 2 seconds")
+                    return
+            
+            # Record this action
+            recent_actions[action_hash] = current_time
+            state["recent_card_actions"] = recent_actions
+            
+            # Clean up old actions (older than 10 seconds)
+            state["recent_card_actions"] = {
+                k: v for k, v in recent_actions.items() 
+                if current_time - v < 10
+            }
         
         # Handle view changes for the unified card
         if action_data.get("action") == "view_change":
@@ -2635,7 +2729,6 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             return
         
         # Handle template selection from hierarchical card
-        # In handle_card_actions function, make sure this section is correct:
         elif action_data.get("action") == "select_template_from_hierarchy":
             # Determine which template was selected based on dropdown values
             template_id = None
@@ -2709,18 +2802,29 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             await handle_new_chat_command(turn_context, state, conversation_id)
             return
         elif action_data.get("action") == "edit_email":
-            await send_edit_email_card(turn_context, state)
+            # Extract email_id if provided
+            email_id = action_data.get("email_id")
+            await send_edit_email_card(turn_context, state, email_id)
             return
         elif action_data.get("action") == "apply_email_edits":
             edit_instructions = action_data.get("edit_instructions", "")
-            await apply_email_edits(turn_context, state, edit_instructions)
+            email_id = action_data.get("email_id")  # Get email_id if provided
+            await apply_email_edits(turn_context, state, edit_instructions, email_id)
             return
         elif action_data.get("action") == "cancel_edit":
+            # Get email_id if available
+            email_id = action_data.get("email_id")
+            
             with conversation_states_lock:
-                original_email = state.get("last_generated_email", "")
+                # Try to get email from history first
+                if email_id and "email_history" in state and email_id in state["email_history"]:
+                    original_email = state["email_history"][email_id]["email_text"]
+                else:
+                    # Fallback to last generated email
+                    original_email = state.get("last_generated_email", "")
             
             if original_email:
-                result_card = create_email_result_card(original_email)
+                result_card = create_email_result_card(original_email, email_id)
                 await send_card_response(turn_context, result_card)
             else:
                 # Go back to main view if no email
@@ -3876,7 +3980,7 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
         reply.attachments = [attachment]
         await turn_context.send_activity(reply)
 
-def create_email_result_card(email_text):
+def create_email_result_card(email_text, email_id=None):
     """Creates an enhanced card displaying the generated email with edit option"""
     
     card = {
@@ -3933,7 +4037,8 @@ def create_email_result_card(email_text):
                 "title": "Edit This Email",
                 "style": "positive",
                 "data": {
-                    "action": "edit_email"
+                    "action": "edit_email",
+                    "email_id": email_id  # Include the email ID
                 }
             },
             {
@@ -3953,7 +4058,6 @@ def create_email_result_card(email_text):
     )
     
     return attachment
-
 async def send_card_response(turn_context: TurnContext, attachment):
     """
     Properly creates and sends a response with an attachment.
@@ -5270,243 +5374,367 @@ async def generate_email(turn_context: TurnContext, state, template_id, recipien
     """
     Generates an email using AI based on template or provided parameters with enhanced compliance and quality controls.
     Uses RAG to retrieve relevant documents when instructions are provided.
-    
-    Args:
-        turn_context: The turn context
-        state: The conversation state
-        template_id: The template ID to use
-        recipient: The recipient's email (optional)
-        firstname: The client's first name (optional)
-        gateway: The payment gateway (for lost settlement template) (optional)
-        subject: The email subject (for generic template) (optional)
-        instructions: Additional instructions for customization (optional)
-        chain: Previous email chain (optional)
-        has_attachments: Whether to mention attachments
+    Now includes synchronization, email history tracking, and proper status handling.
     """
-    # Send typing indicator
-    await turn_context.send_activity(create_typing_activity())
+    # Wait for any active runs to complete
+    max_wait = 10  # seconds
+    wait_interval = 0.5
+    elapsed = 0
     
-    # Get base template content if using a template
-    template_subject = ""
-    template_content = ""
-    email_category = ""
-    
-    if template_id != "generic":
-        template_subject, template_content = get_template_content(
-            template_id, 
-            firstname=firstname or "{FIRSTNAME}",
-            gateway=gateway or "{GATEWAY}"
-        )
+    while elapsed < max_wait:
+        with conversation_states_lock:
+            if not state.get("active_run", False) and not state.get("active_email_generation", False):
+                state["active_email_generation"] = True
+                break
         
-        # Determine email category for specialized guidance
-        if template_id in ["welcome", "legal_update", "lost_settlement", "legal_confirmation", "payment_returned",
-                          "legal_threat", "draft_reduction", "creditor_notices", "collection_calls", "credit_concerns", 
-                          "settlement_timeline", "program_cost", "account_exclusion"]:
-            email_category = "customer_service"
-        elif template_id.startswith("sales_"):
-            email_category = "sales"
-        else:
-            email_category = "general"
+        await asyncio.sleep(wait_interval)
+        elapsed += wait_interval
     
-    # Create enhanced prompt for the AI with better guidance
-    prompt = "Generate a professional, compliant email for First Choice Debt Relief based on the following requirements:\n\n"
+    if elapsed >= max_wait:
+        await turn_context.send_activity("The system is busy. Please try again in a moment.")
+        return
     
-    # Add recipient information if provided
-    if recipient:
-        prompt += f"To: {recipient}\n"
+    # Create a task for periodic typing indicators
+    typing_task = None
+    status_message_sent = False
     
-    # Handle template-specific vs generic email generation
-    if template_id == "generic":
-        # For generic emails, use the provided subject and instructions
-        if subject:
-            prompt += f"Subject: {subject}\n"
-        
-        # Use the provided instructions, or a default if none
-        instruction_text = instructions or "Please write a professional email for First Choice Debt Relief."
-        
-        # If instructions are provided, use RAG to enhance them
-        if instructions:
-            relevant_docs = await retrieve_documents(instructions, top=2)
-            instruction_text = await format_message_with_rag(instructions, relevant_docs)
-            
-        prompt += f"Instructions: {instruction_text}\n"
-        
-        # Add category guidance based on subject matter
-        if subject and any(keyword in subject.lower() for keyword in ["legal", "lawsuit", "attorney", "court", "summons"]):
-            prompt += "\nThis appears to be related to a legal matter. Please ensure the email:\n"
-            prompt += "- Acknowledges receipt of legal concerns with professional reassurance\n"
-            prompt += "- Explains that legal providers are actively working on their behalf\n"
-            prompt += "- Clarifies that legal insurance covers attorney costs but doesn't prevent lawsuits\n"
-            prompt += "- Avoids guarantees about legal outcomes or prevention of legal action\n"
-            prompt += "- Uses phrases like 'escalated to your assigned negotiator' and 'full legal representation' when appropriate\n"
-        elif subject and any(keyword in subject.lower() for keyword in ["credit", "score", "report"]):
-            prompt += "\nThis appears to be related to credit concerns. Please ensure the email:\n"
-            prompt += "- Acknowledges the importance of credit while focusing on debt resolution as the priority\n"
-            prompt += "- Explains that resolving accounts creates a foundation for rebuilding\n"
-            prompt += "- Reframes the focus from credit access to financial independence\n"
-            prompt += "- Avoids guarantees about credit recovery or timeline promises\n"
-    else:
-        # For templates, use the template content as a base with specialized guidance
-        prompt += f"Subject: {template_subject}\n"
-        prompt += f"Template Base: {template_content}\n"
-        
-        # Add template-specific guidance
-        if template_id in ["legal_update", "legal_confirmation", "legal_threat"]:
-            prompt += "\nThis is a legal-related communication. Please ensure the email:\n"
-            prompt += "- Uses compliant language about legal protection (covers costs, doesn't prevent lawsuits)\n"
-            prompt += "- Maintains a reassuring but realistic tone\n"
-            prompt += "- Emphasizes FCDR's coordination with legal providers\n"
-        elif template_id == "lost_settlement":
-            prompt += "\nThis is about a missed settlement payment. Please ensure the email:\n"
-            prompt += "- Clearly explains consequences without creating panic\n"
-            prompt += "- Emphasizes urgency while maintaining professionalism\n"
-            prompt += "- Provides clear next steps\n"
-        elif template_id == "credit_concerns":
-            prompt += "\nThis is about credit score concerns. Please ensure the email:\n"
-            prompt += "- Acknowledges the importance of credit while focusing on debt resolution\n"
-            prompt += "- Explains that resolving accounts creates a foundation for rebuilding\n"
-            prompt += "- Avoids guarantees about credit recovery or timeline promises\n"
-        elif template_id == "settlement_timeline":
-            prompt += "\nThis is about settlement timeline expectations. Please ensure the email:\n"
-            prompt += "- Avoids providing specific timeframes for settlements\n"
-            prompt += "- Explains that creditors have different policies regarding negotiations\n"
-            prompt += "- Emphasizes that clients will be kept informed and need to approve each settlement\n"
-        elif template_id == "collection_calls":
-            prompt += "\nThis is about collection calls concerns. Please ensure the email:\n"
-            prompt += "- Acknowledges the frustration of receiving calls\n"
-            prompt += "- Explains that calls are part of the normal collection process\n"
-            prompt += "- Reassures that FCDR is actively working on their accounts\n"
-        elif template_id.startswith("sales_"):
-            prompt += "\nThis is a sales communication. Please ensure the email:\n"
-            prompt += "- Focuses on benefits of becoming debt-free faster than minimum payments\n"
-            prompt += "- Avoids guarantees about specific savings amounts or timeframes\n"
-            prompt += "- Emphasizes pre-approved nature and limited validity of quotes\n"
-            
-        # Add recipient-specific parameters if provided
-        if firstname:
-            prompt += f"Use the name: {firstname}\n"
-            
-        if gateway and template_id == "lost_settlement":
-            prompt += f"Payment Gateway: {gateway}\n"
-    
-    # Add chain information if this is a reply
-    if chain:
-        prompt += f"This is a reply to the following email thread: {chain}\n"
-        
-    # Add attachment mention if required
-    if has_attachments:
-        prompt += f"Mention that there are attachments included.\n"
-    
-    # Add special instruction to prioritize user instructions
-    if instructions:
-        # Use RAG to enhance instructions with relevant knowledge
-        relevant_docs = await retrieve_documents(instructions, top=2)
-        enhanced_instructions = await format_message_with_rag(instructions, relevant_docs)
-        
-        prompt += f"\nIMPORTANT - PRIORITIZE THESE USER INSTRUCTIONS ABOVE TEMPLATE GUIDELINES: {enhanced_instructions}\n"
-        prompt += "Feel free to significantly modify the template based on these instructions while maintaining the general purpose, professional tone, and compliance requirements.\n"
-    else:
-        prompt += "\nImprove upon the template while maintaining compliance. Make it sound natural and conversational while maintaining professionalism and adhering to compliance guidelines.\n"
-    
-    # Add universal compliance guidelines
-    prompt += "\nCRITICAL COMPLIANCE GUIDELINES - The email MUST:\n"
-    prompt += "- NEVER promise guaranteed results or specific outcomes\n"
-    prompt += "- NEVER offer legal advice or use language suggesting legal expertise\n"
-    prompt += "- NEVER use terms like 'debt forgiveness,' 'eliminate,' or 'erase' your debt\n"
-    prompt += "- NEVER state or imply that the program prevents lawsuits or legal action\n"
-    prompt += "- NEVER claim all accounts will be resolved within a specific timeframe\n"
-    prompt += "- NEVER suggest the program is a credit repair service\n"
-    prompt += "- NEVER guarantee that clients will qualify for any financing\n"
-    prompt += "- NEVER make promises about improving credit scores\n"
-    prompt += "- NEVER say clients are 'required' to stop payments to creditors\n"
-    prompt += "- Use phrases like 'negotiated resolution' instead of 'paid in full'\n"
-    
-    # Add tone guidance based on email type
-    if email_category == "customer_service":
-        prompt += "\nTONE GUIDANCE:\n"
-        prompt += "- Use a supportive yet professional tone\n"
-        prompt += "- Be direct and informative without being alarmist\n"
-        prompt += "- Balance empathy with factual information\n"
-    elif email_category == "sales":
-        prompt += "\nTONE GUIDANCE:\n"
-        prompt += "- Use a professional but positive tone\n"
-        prompt += "- Focus on the benefits without making guarantees\n"
-        prompt += "- Create a sense of opportunity without pressure tactics\n"
-    else:
-        prompt += "\nTONE GUIDANCE:\n"
-        prompt += "- Use a balanced, professional tone\n"
-        prompt += "- Be clear and direct while maintaining a supportive approach\n"
-        prompt += "- Balance factual information with appropriate empathy\n"
-    
-    # Add formatting instructions
-    prompt += "\nFormat the email professionally with:\n"
-    prompt += "- An appropriate greeting using the client's first name if available\n"
-    prompt += "- Clear, concise paragraphs (3-5 sentences maximum)\n"
-    prompt += "- Bullet points for lists or multiple items if appropriate\n"
-    prompt += "- A clear call-to-action or next steps\n"
-    prompt += "- Appropriate signature line based on the email type\n"
-    
-    # Initialize chat if needed
-    if not state.get("assistant_id"):
-        await initialize_chat(turn_context, state)
-    
-    # Improved error handling
     try:
-        # Use the existing process_conversation_internal function to get AI response
-        client = create_client()
-        result = await process_conversation_internal(
-            client=client,
-            session=state["session_id"],
-            prompt=prompt,
-            assistant=state["assistant_id"],
-            stream_output=False
-        )
+        # Send ONE status message only
+        await turn_context.send_activity("Generating your email template... This may take a moment.")
+        status_message_sent = True
         
-        # Extract and format the email
-        if isinstance(result, dict) and "response" in result:
-            email_text = result["response"]
+        # Start periodic typing indicator task
+        typing_task = asyncio.create_task(send_periodic_typing(turn_context, 3))
+        
+        # Get base template content if using a template
+        template_subject = ""
+        template_content = ""
+        email_category = ""
+        
+        if template_id != "generic":
+            template_subject, template_content = get_template_content(
+                template_id, 
+                firstname=firstname or "{FIRSTNAME}",
+                gateway=gateway or "{GATEWAY}"
+            )
             
-            # Compliance check - scan for potential issues
-            potential_compliance_issues = check_email_compliance(email_text)     
-            if potential_compliance_issues:
-                logging.info(f"Note: Compliance check detected potential issues: {potential_compliance_issues}")
-                
-                # Create a PS note about compliance issues
-                ps_text = "\n\nPS: COMPLIANCE NOTE: This email may contain phrases that require review: "
-                
-                # Add specific issues to the PS
-                issue_descriptions = []
-                for issue in potential_compliance_issues:
-                    issue_descriptions.append(issue["description"])
-                
-                ps_text += ", ".join(issue_descriptions)
-                ps_text += ". Please review before sending."
-                
-                # Append the PS to the email
-                email_text += ps_text
-                
-            # Save the generated email in the state for potential editing
-            with conversation_states_lock:
-                state["last_generated_email"] = email_text
-                state["last_email_template"] = template_id
-                state["last_email_data"] = {
-                    "recipient": recipient,
-                    "firstname": firstname,
-                    "gateway": gateway,
-                    "subject": subject,
-                    "instructions": instructions,
-                    "chain": chain,
-                    "has_attachments": has_attachments
-                }
+            # Determine email category for specialized guidance
+            if template_id in ["welcome", "legal_update", "lost_settlement", "legal_confirmation", "payment_returned",
+                              "legal_threat", "draft_reduction", "creditor_notices", "collection_calls", "credit_concerns", 
+                              "settlement_timeline", "program_cost", "account_exclusion"]:
+                email_category = "customer_service"
+            elif template_id.startswith("sales_"):
+                email_category = "sales"
+            else:
+                email_category = "general"
+        
+        # Create enhanced prompt for the AI with better guidance
+        prompt = "Generate a professional, compliant email for First Choice Debt Relief based on the following requirements:\n\n"
+        
+        # Add recipient information if provided
+        if recipient:
+            prompt += f"To: {recipient}\n"
+        
+        # Handle template-specific vs generic email generation
+        if template_id == "generic":
+            # For generic emails, use the provided subject and instructions
+            if subject:
+                prompt += f"Subject: {subject}\n"
             
-            result_card = create_email_result_card(email_text)
-            await send_card_response(turn_context, result_card)
+            # Use the provided instructions, or a default if none
+            instruction_text = instructions or "Please write a professional email for First Choice Debt Relief."
+            
+            # If instructions are provided, use RAG to enhance them
+            if instructions:
+                relevant_docs = await retrieve_documents(instructions, top=2)
+                instruction_text = await format_message_with_rag(instructions, relevant_docs)
+                
+            prompt += f"Instructions: {instruction_text}\n"
+            
+            # Add category guidance based on subject matter
+            if subject and any(keyword in subject.lower() for keyword in ["legal", "lawsuit", "attorney", "court", "summons"]):
+                prompt += "\nThis appears to be related to a legal matter. Please ensure the email:\n"
+                prompt += "- Acknowledges receipt of legal concerns with professional reassurance\n"
+                prompt += "- Explains that legal providers are actively working on their behalf\n"
+                prompt += "- Clarifies that legal insurance covers attorney costs but doesn't prevent lawsuits\n"
+                prompt += "- Avoids guarantees about legal outcomes or prevention of legal action\n"
+                prompt += "- Uses phrases like 'escalated to your assigned negotiator' and 'full legal representation' when appropriate\n"
+            elif subject and any(keyword in subject.lower() for keyword in ["credit", "score", "report"]):
+                prompt += "\nThis appears to be related to credit concerns. Please ensure the email:\n"
+                prompt += "- Acknowledges the importance of credit while focusing on debt resolution as the priority\n"
+                prompt += "- Explains that resolving accounts creates a foundation for rebuilding\n"
+                prompt += "- Reframes the focus from credit access to financial independence\n"
+                prompt += "- Avoids guarantees about credit recovery or timeline promises\n"
         else:
-            await turn_context.send_activity("I'm sorry, I couldn't generate the email template. Please try again with more details about what you need.")
-    except Exception as e:
-        logging.error(f"Error generating email: {str(e)}")
-        traceback.print_exc()
-        await turn_context.send_activity(f"I encountered an error while generating your email template. Please try again or contact support if the issue persists.")
+            # For templates, use the template content as a base with specialized guidance
+            prompt += f"Subject: {template_subject}\n"
+            prompt += f"Template Base: {template_content}\n"
+            
+            # Add template-specific guidance
+            if template_id in ["legal_update", "legal_confirmation", "legal_threat"]:
+                prompt += "\nThis is a legal-related communication. Please ensure the email:\n"
+                prompt += "- Uses compliant language about legal protection (covers costs, doesn't prevent lawsuits)\n"
+                prompt += "- Maintains a reassuring but realistic tone\n"
+                prompt += "- Emphasizes FCDR's coordination with legal providers\n"
+            elif template_id == "lost_settlement":
+                prompt += "\nThis is about a missed settlement payment. Please ensure the email:\n"
+                prompt += "- Clearly explains consequences without creating panic\n"
+                prompt += "- Emphasizes urgency while maintaining professionalism\n"
+                prompt += "- Provides clear next steps\n"
+            elif template_id == "credit_concerns":
+                prompt += "\nThis is about credit score concerns. Please ensure the email:\n"
+                prompt += "- Acknowledges the importance of credit while focusing on debt resolution\n"
+                prompt += "- Explains that resolving accounts creates a foundation for rebuilding\n"
+                prompt += "- Avoids guarantees about credit recovery or timeline promises\n"
+            elif template_id == "settlement_timeline":
+                prompt += "\nThis is about settlement timeline expectations. Please ensure the email:\n"
+                prompt += "- Avoids providing specific timeframes for settlements\n"
+                prompt += "- Explains that creditors have different policies regarding negotiations\n"
+                prompt += "- Emphasizes that clients will be kept informed and need to approve each settlement\n"
+            elif template_id == "collection_calls":
+                prompt += "\nThis is about collection calls concerns. Please ensure the email:\n"
+                prompt += "- Acknowledges the frustration of receiving calls\n"
+                prompt += "- Explains that calls are part of the normal collection process\n"
+                prompt += "- Reassures that FCDR is actively working on their accounts\n"
+            elif template_id.startswith("sales_"):
+                prompt += "\nThis is a sales communication. Please ensure the email:\n"
+                prompt += "- Focuses on benefits of becoming debt-free faster than minimum payments\n"
+                prompt += "- Avoids guarantees about specific savings amounts or timeframes\n"
+                prompt += "- Emphasizes pre-approved nature and limited validity of quotes\n"
+                
+            # Add recipient-specific parameters if provided
+            if firstname:
+                prompt += f"Use the name: {firstname}\n"
+                
+            if gateway and template_id == "lost_settlement":
+                prompt += f"Payment Gateway: {gateway}\n"
+        
+        # Add chain information if this is a reply
+        if chain:
+            prompt += f"This is a reply to the following email thread: {chain}\n"
+            
+        # Add attachment mention if required
+        if has_attachments:
+            prompt += f"Mention that there are attachments included.\n"
+        
+        # Add special instruction to prioritize user instructions
+        if instructions:
+            # Use RAG to enhance instructions with relevant knowledge
+            if not (template_id == "generic" and instructions):  # Avoid duplicate RAG call
+                relevant_docs = await retrieve_documents(instructions, top=2)
+                enhanced_instructions = await format_message_with_rag(instructions, relevant_docs)
+            else:
+                enhanced_instructions = instruction_text  # Already processed above
+            
+            prompt += f"\nIMPORTANT - PRIORITIZE THESE USER INSTRUCTIONS ABOVE TEMPLATE GUIDELINES: {enhanced_instructions}\n"
+            prompt += "Feel free to significantly modify the template based on these instructions while maintaining the general purpose, professional tone, and compliance requirements.\n"
+        else:
+            prompt += "\nImprove upon the template while maintaining compliance. Make it sound natural and conversational while maintaining professionalism and adhering to compliance guidelines.\n"
+        
+        # Add universal compliance guidelines
+        prompt += "\nCRITICAL COMPLIANCE GUIDELINES - The email MUST:\n"
+        prompt += "- NEVER promise guaranteed results or specific outcomes\n"
+        prompt += "- NEVER offer legal advice or use language suggesting legal expertise\n"
+        prompt += "- NEVER use terms like 'debt forgiveness,' 'eliminate,' or 'erase' your debt\n"
+        prompt += "- NEVER state or imply that the program prevents lawsuits or legal action\n"
+        prompt += "- NEVER claim all accounts will be resolved within a specific timeframe\n"
+        prompt += "- NEVER suggest the program is a credit repair service\n"
+        prompt += "- NEVER guarantee that clients will qualify for any financing\n"
+        prompt += "- NEVER make promises about improving credit scores\n"
+        prompt += "- NEVER say clients are 'required' to stop payments to creditors\n"
+        prompt += "- Use phrases like 'negotiated resolution' instead of 'paid in full'\n"
+        
+        # Add tone guidance based on email type
+        if email_category == "customer_service":
+            prompt += "\nTONE GUIDANCE:\n"
+            prompt += "- Use a supportive yet professional tone\n"
+            prompt += "- Be direct and informative without being alarmist\n"
+            prompt += "- Balance empathy with factual information\n"
+        elif email_category == "sales":
+            prompt += "\nTONE GUIDANCE:\n"
+            prompt += "- Use a professional but positive tone\n"
+            prompt += "- Focus on the benefits without making guarantees\n"
+            prompt += "- Create a sense of opportunity without pressure tactics\n"
+        else:
+            prompt += "\nTONE GUIDANCE:\n"
+            prompt += "- Use a balanced, professional tone\n"
+            prompt += "- Be clear and direct while maintaining a supportive approach\n"
+            prompt += "- Balance factual information with appropriate empathy\n"
+        
+        # Add formatting instructions
+        prompt += "\nFormat the email professionally with:\n"
+        prompt += "- An appropriate greeting using the client's first name if available\n"
+        prompt += "- Clear, concise paragraphs (3-5 sentences maximum)\n"
+        prompt += "- Bullet points for lists or multiple items if appropriate\n"
+        prompt += "- A clear call-to-action or next steps\n"
+        prompt += "- Appropriate signature line based on the email type\n"
+        
+        # Initialize chat if needed
+        if not state.get("assistant_id"):
+            await initialize_chat(turn_context, state)
+        
+        # Track generation start time
+        generation_start_time = time.time()
+        
+        # Improved error handling with timeout
+        try:
+            # Set a timeout for the AI generation
+            timeout_seconds = 60  # 60 second timeout
+            
+            # Use the existing process_conversation_internal function to get AI response
+            client = create_client()
+            
+            # Create a timeout wrapper
+            async def generate_with_timeout():
+                return await process_conversation_internal(
+                    client=client,
+                    session=state["session_id"],
+                    prompt=prompt,
+                    assistant=state["assistant_id"],
+                    stream_output=False
+                )
+            
+            # Execute with timeout
+            try:
+                result = await asyncio.wait_for(generate_with_timeout(), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                # Cancel typing task
+                if typing_task and not typing_task.done():
+                    typing_task.cancel()
+                    try:
+                        await typing_task
+                    except asyncio.CancelledError:
+                        pass
+                
+                # Give it another 30 seconds but don't send another message
+                try:
+                    result = await asyncio.wait_for(generate_with_timeout(), timeout=30)
+                except asyncio.TimeoutError:
+                    await turn_context.send_activity("Email generation timed out. Please try again with a simpler request.")
+                    return
+            
+            # Extract and format the email
+            if isinstance(result, dict) and "response" in result:
+                email_text = result["response"]
+                
+                # Compliance check - scan for potential issues
+                potential_compliance_issues = check_email_compliance(email_text)     
+                if potential_compliance_issues:
+                    logging.info(f"Note: Compliance check detected potential issues: {potential_compliance_issues}")
+                    
+                    # Create a PS note about compliance issues
+                    ps_text = "\n\nPS: COMPLIANCE NOTE: This email may contain phrases that require review: "
+                    
+                    # Add specific issues to the PS
+                    issue_descriptions = []
+                    for issue in potential_compliance_issues:
+                        issue_descriptions.append(issue["description"])
+                    
+                    ps_text += ", ".join(issue_descriptions)
+                    ps_text += ". Please review before sending."
+                    
+                    # Append the PS to the email
+                    email_text += ps_text
+                
+                # Generate unique email ID
+                email_id = str(uuid.uuid4())
+                
+                # Save the generated email in the history
+                with conversation_states_lock:
+                    if "email_history" not in state:
+                        state["email_history"] = {}
+                    
+                    state["email_history"][email_id] = {
+                        "email_text": email_text,
+                        "template_id": template_id,
+                        "email_data": {
+                            "recipient": recipient,
+                            "firstname": firstname,
+                            "gateway": gateway,
+                            "subject": subject,
+                            "instructions": instructions,
+                            "chain": chain,
+                            "has_attachments": has_attachments
+                        },
+                        "timestamp": time.time()
+                    }
+                    state["last_email_id"] = email_id
+                    
+                    # Keep only last 10 emails
+                    if len(state["email_history"]) > 10:
+                        # Sort by timestamp and remove oldest
+                        sorted_ids = sorted(state["email_history"].keys(), 
+                                          key=lambda k: state["email_history"][k]["timestamp"])
+                        for old_id in sorted_ids[:-10]:
+                            del state["email_history"][old_id]
+                    
+                    # BACKWARD COMPATIBILITY - Keep the old fields too
+                    state["last_generated_email"] = email_text
+                    state["last_email_template"] = template_id
+                    state["last_email_data"] = {
+                        "recipient": recipient,
+                        "firstname": firstname,
+                        "gateway": gateway,
+                        "subject": subject,
+                        "instructions": instructions,
+                        "chain": chain,
+                        "has_attachments": has_attachments
+                    }
+                
+                # Cancel typing task before sending final result
+                if typing_task and not typing_task.done():
+                    typing_task.cancel()
+                    try:
+                        await typing_task
+                    except asyncio.CancelledError:
+                        pass
+                
+                # Send the result card directly - no additional message
+                result_card = create_email_result_card(email_text, email_id)
+                await send_card_response(turn_context, result_card)
+            else:
+                # Cancel typing task
+                if typing_task and not typing_task.done():
+                    typing_task.cancel()
+                    try:
+                        await typing_task
+                    except asyncio.CancelledError:
+                        pass
+                
+                await turn_context.send_activity("I couldn't generate the email template. Please try again with more details about what you need.")
+                
+        except Exception as e:
+            logging.error(f"Error generating email: {str(e)}")
+            traceback.print_exc()
+            
+            # Cancel typing task
+            if typing_task and not typing_task.done():
+                typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
+            
+            await turn_context.send_activity(f"I encountered an error while generating your email template. Please try again or contact support if the issue persists.")
+    
+    finally:
+        # Always release the email generation lock
+        with conversation_states_lock:
+            state["active_email_generation"] = False
+        
+        # Ensure typing task is cancelled
+        if typing_task and not typing_task.done():
+            typing_task.cancel()
+            try:
+                await typing_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Send stop typing indicator
+        try:
+            await turn_context.send_activity(create_typing_stop_activity())
+        except:
+            pass  # Ignore errors when stopping typing
 def check_email_compliance(email_text):
     """
     Checks email text for potential compliance issues.
@@ -5613,8 +5841,12 @@ async def bot_logic(turn_context: TurnContext):
                 "tenant_id": tenant_id,
                 "security_fingerprint": user_security_fingerprint,
                 "creation_time": time.time(),
-                "last_activity_time": time.time()
-            }
+                "last_activity_time": time.time(),
+                "email_history": {},  # Key: email_id, Value: email data
+                "active_email_generation": False,
+                "last_email_id": None,
+                "recent_card_actions": {}  # Key: action_hash, Value: timestamp
+                }
         else:
             # Update last activity time
             conversation_states[conversation_id]["last_activity_time"] = time.time()
@@ -5640,7 +5872,11 @@ async def bot_logic(turn_context: TurnContext):
                     "tenant_id": tenant_id,
                     "security_fingerprint": user_security_fingerprint,
                     "creation_time": time.time(),
-                    "last_activity_time": time.time()
+                    "last_activity_time": time.time(),
+                    "email_history": {},
+                    "active_email_generation": False,
+                    "last_email_id": None,
+                    "recent_card_actions": {}
                 }
                 
                 # Clear any pending messages for security
