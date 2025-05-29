@@ -1358,8 +1358,9 @@ def create_new_chat_card():
     )
 async def handle_new_chat_command(turn_context: TurnContext, state, conversation_id):
     """Handles commands to start a new chat or reset the current chat"""
-    # Send typing indicator
-    await turn_context.send_activity(create_typing_activity())
+    is_invoke = turn_context.activity.type == ActivityTypes.invoke
+    if not is_invoke:
+        await turn_context.send_activity(create_typing_activity())
     
     # Clear any pending messages for this conversation
     with pending_messages_lock:
@@ -1367,7 +1368,8 @@ async def handle_new_chat_command(turn_context: TurnContext, state, conversation
             pending_messages[conversation_id].clear()
     
     # Send a message informing the user
-    await turn_context.send_activity("Starting a new conversation...")
+    if not is_invoke:
+        await turn_context.send_activity("Starting a new conversation...")
     
     # Initialize a new chat
     await initialize_chat(turn_context, None)  # Pass None to force new state creation
@@ -2343,6 +2345,7 @@ async def send_edit_email_card(turn_context: TurnContext, state, email_id=None):
         state: The conversation state containing the last generated email
         email_id: Optional specific email ID to edit
     """
+    is_invoke = turn_context.activity.type == ActivityTypes.invoke
     with conversation_states_lock:
         # If email_id is provided, try to get that specific email
         if email_id and "email_history" in state and email_id in state["email_history"]:
@@ -2359,11 +2362,13 @@ async def send_edit_email_card(turn_context: TurnContext, state, email_id=None):
                 original_email = state.get("last_generated_email", "")
     
     if not original_email:
-        await turn_context.send_activity("I couldn't find a recently generated email to edit. Please create a new email first.")
+        if not is_invoke:
+            await turn_context.send_activity("I couldn't find a recently generated email to edit. Please create a new email first.")
         return
     
     edit_card = create_edit_email_card(original_email, email_id)
-    await send_card_response(turn_context, edit_card)
+    if not is_invoke:
+        await send_card_response(turn_context, edit_card)
 async def apply_email_edits(turn_context: TurnContext, state, edit_instructions):
     """
     Applies edits to the previously generated email with intelligent retrieval support.
@@ -2374,7 +2379,11 @@ async def apply_email_edits(turn_context: TurnContext, state, edit_instructions)
         edit_instructions: Instructions for editing the email
     """
     # Send typing indicator
-    await turn_context.send_activity(create_typing_activity())
+    is_invoke = turn_context.activity.type == ActivityTypes.invoke
+    
+    # Send typing indicator ONLY if not invoke
+    if not is_invoke:
+        await turn_context.send_activity(create_typing_activity())
     
     # Get the original email and metadata
     with conversation_states_lock:
@@ -2383,7 +2392,8 @@ async def apply_email_edits(turn_context: TurnContext, state, edit_instructions)
         email_data = state.get("last_email_data", {})
     
     if not original_email:
-        await turn_context.send_activity("I couldn't find the original email to edit. Please create a new email.")
+        if not is_invoke:
+            await turn_context.send_activity("I couldn't find the original email to edit. Please create a new email.")
         return
     
     # Build retrieval query based on email type and edit instructions
@@ -2458,16 +2468,22 @@ Please provide the complete revised email with all changes incorporated."""
             with conversation_states_lock:
                 state["last_generated_email"] = edited_email
             
-            email_card = create_email_result_card(edited_email)
-            await send_card_response(turn_context, email_card)
+            if not is_invoke:
+                email_card = create_email_result_card(edited_email)
+                await send_card_response(turn_context, email_card)
         else:
-            await turn_context.send_activity("I'm sorry, I couldn't edit the email. Please try again.")
+            if not is_invoke:
+                await turn_context.send_activity("I'm sorry, I couldn't edit the email. Please try again.")
     except Exception as e:
         logging.error(f"Error editing email: {str(e)}")
         traceback.print_exc()
-        await turn_context.send_activity("I encountered an error while editing your email. Please try again.")
+        if not is_invoke:
+            await turn_context.send_activity("I encountered an error while editing your email. Please try again.")
 async def handle_card_actions(turn_context: TurnContext, action_data):
     """Handles actions from adaptive cards with simplified email UI"""
+    # CRITICAL: Check if this is an invoke activity
+    is_invoke = turn_context.activity.type == ActivityTypes.invoke
+    
     try:
         conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
         conversation_id = conversation_reference.conversation.id
@@ -2487,8 +2503,9 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             # Create the unified card with appropriate view
             unified_card = create_unified_email_card(state, view, email_type)
             
-            # Send the updated card
-            await send_card_response(turn_context, unified_card)
+            # Send the updated card ONLY if not an invoke
+            if not is_invoke:
+                await send_card_response(turn_context, unified_card)
             return
         
         # Handle email generation from unified card
@@ -2520,36 +2537,68 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
         elif action_data.get("action") == "new_chat":
             await handle_new_chat_command(turn_context, state, conversation_id)
             return
+            
         elif action_data.get("action") == "edit_email":
-            await send_edit_email_card(turn_context, state)
+            # Get email_id if provided
+            email_id = action_data.get("email_id")
+            await send_edit_email_card(turn_context, state, email_id)
             return
+            
         elif action_data.get("action") == "apply_email_edits":
             edit_instructions = action_data.get("edit_instructions", "")
-            await apply_email_edits(turn_context, state, edit_instructions)
+            if edit_instructions:
+                await apply_email_edits(turn_context, state, edit_instructions)
+            else:
+                # Only send error if not invoke
+                if not is_invoke:
+                    await turn_context.send_activity("Please provide edit instructions.")
             return
+            
         elif action_data.get("action") == "cancel_edit":
             with conversation_states_lock:
                 original_email = state.get("last_generated_email", "")
             
             if original_email:
                 result_card = create_email_result_card(original_email)
-                await send_card_response(turn_context, result_card)
+                # Only send if not invoke
+                if not is_invoke:
+                    await send_card_response(turn_context, result_card)
             else:
                 # Go back to main view if no email
                 unified_card = create_unified_email_card(state, "main")
+                # Only send if not invoke
+                if not is_invoke:
+                    await send_card_response(turn_context, unified_card)
+            return
+        
+        elif action_data.get("action") == "show_upload_info":
+            await handle_info_request(turn_context, "upload")
+            return
+            
+        elif action_data.get("action") == "show_template_categories":
+            # Show main email card
+            unified_card = create_unified_email_card(state, "main")
+            # Only send if not invoke
+            if not is_invoke:
                 await send_card_response(turn_context, unified_card)
             return
         
         # Default to showing main view
         else:
+            logging.warning(f"Unknown card action: {action_data.get('action')}")
             unified_card = create_unified_email_card(state, "main")
-            await send_card_response(turn_context, unified_card)
+            # Only send if not invoke
+            if not is_invoke:
+                await send_card_response(turn_context, unified_card)
             return
             
     except Exception as e:
         logging.error(f"Error handling card action: {e}")
         traceback.print_exc()
-        await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
+        
+        # Only send error message if not invoke
+        if not is_invoke:
+            await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
 async def send_email_card(turn_context: TurnContext, template_mode="main", channel=None):
     """
     Sends a simplified unified email card.
@@ -2575,6 +2624,7 @@ async def send_email_card(turn_context: TurnContext, template_mode="main", chann
     await send_card_response(turn_context, card)
 async def handle_info_request(turn_context: TurnContext, info_type: str):
     """Handles requests for information about uploads or help"""
+    is_invoke = turn_context.activity.type == ActivityTypes.invoke
     if info_type == "upload":
         upload_info_card = {
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -2652,9 +2702,10 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
             content=upload_info_card
         )
         
-        reply = _create_reply(turn_context.activity)
-        reply.attachments = [attachment]
-        await turn_context.send_activity(reply)
+        if not is_invoke:
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [attachment]
+            await turn_context.send_activity(reply)
         
     elif info_type == "help":
         help_card = {
@@ -2756,9 +2807,10 @@ async def handle_info_request(turn_context: TurnContext, info_type: str):
             content=help_card
         )
         
-        reply = _create_reply(turn_context.activity)
-        reply.attachments = [attachment]
-        await turn_context.send_activity(reply)
+        if not is_invoke:
+            reply = _create_reply(turn_context.activity)
+            reply.attachments = [attachment]
+            await turn_context.send_activity(reply)
 
 
 async def send_card_response(turn_context: TurnContext, attachment):
@@ -3037,8 +3089,10 @@ async def generate_email(turn_context: TurnContext, state, email_type, recipient
         has_attachments: Whether to mention attachments
         skip_compliance_check: Skip the compliance check (default: False)
     """
-    # Send typing indicator
-    await turn_context.send_activity(create_typing_activity())
+    is_invoke = turn_context.activity.type == ActivityTypes.invoke
+    # Send typing indicator ONLY if not invoke
+    if not is_invoke:
+        await turn_context.send_activity(create_typing_activity())
     
     # Build SMART retrieval query based on email type and instructions
     retrieval_query = ""
@@ -3274,7 +3328,12 @@ Keep the same structure and intent, just fix the compliance issue mentioned."""
                     "has_attachments": has_attachments
                 }
             
-            result_card = create_email_result_card(email_text)
+            if not is_invoke:
+                result_card = create_email_result_card(email_text)
+                await send_card_response(turn_context, result_card)
+            else:
+                # For invoke, just save the email without sending a card
+                logging.info("Email generated during invoke, not sending card response")
             await send_card_response(turn_context, result_card)
         else:
             await turn_context.send_activity("I'm sorry, I couldn't generate the email. Please try again with more details.")
@@ -3659,7 +3718,13 @@ async def bot_logic(turn_context: TurnContext):
             await handle_message_activity_safe(turn_context, state, conversation_id, error_context)
             
         elif turn_context.activity.type == ActivityTypes.invoke:
-            await handle_invoke_activity_safe(turn_context, state, error_context)
+            try:
+                await handle_invoke_activity_safe(turn_context, state, error_context)
+                # For invoke activities, we need to return without sending additional messages
+                return
+            except Exception as e:
+                logging.error(f"Error in invoke handling: {e}")
+        return
             
         elif turn_context.activity.type == ActivityTypes.conversation_update:
             await handle_conversation_update_safe(turn_context, state, error_context)
@@ -3821,7 +3886,7 @@ async def handle_invoke_activity_safe(turn_context: TurnContext, state: dict, er
         error_context["has_error"] = True
         error_context["error_details"] = str(invoke_error)
         logging.error(f"Error in invoke activity handling: {invoke_error}")
-        await send_fallback_response(turn_context, context={"activity": "invoke"})
+        
 
 
 async def handle_conversation_update_safe(turn_context: TurnContext, state: dict, error_context: dict):
@@ -5895,6 +5960,7 @@ async def add_file_awareness_internal(thread_id: str, file_info: Dict[str, Any])
 # Initialize chat with the backend
 async def initialize_chat(turn_context: TurnContext, state=None, context=None):
     """Initialize a new chat session with the backend - with improved user isolation"""
+    is_invoke = turn_context.activity.type == ActivityTypes.invoke
     # Get the conversation reference including user identity information
     conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
     conversation_id = conversation_reference.conversation.id
@@ -5945,8 +6011,8 @@ async def initialize_chat(turn_context: TurnContext, state=None, context=None):
                 }
                 state = conversation_states[conversation_id]
                 
-        # Send typing indicator
-        await turn_context.send_activity(create_typing_activity())
+        if not is_invoke:
+            await turn_context.send_activity(create_typing_activity())
         
         # Log initialization attempt with user details for traceability
         logger.info(f"Initializing chat for user {user_id} in conversation {conversation_id} with context: {context}")
@@ -6007,24 +6073,25 @@ async def initialize_chat(turn_context: TurnContext, state=None, context=None):
             await update_context_internal(client, thread.id, context)
             
         # Tell the user chat was initialized
-        await turn_context.send_activity("Hi! I'm the AI Assistant here to help you with your tasks.")
+        if not is_invoke:
+            await turn_context.send_activity("Hi! I'm the AI Assistant here to help you with your tasks.")
         
-        if context:
-            #await turn_context.send_activity(f"I've initialized with your context: '{context}'")
+        if context and not is_invoke:
             # Also send the first response
             await send_message(turn_context, state)
             
     except Exception as e:
-        await turn_context.send_activity(f"Error initializing chat: {str(e)}")
+        if not is_invoke:
+            await turn_context.send_activity("I encountered an error while setting up. Please try again.")
         logger.error(f"Error in initialize_chat for user {user_id}: {str(e)}")
         traceback.print_exc()
         
         # Try a fallback response if everything else fails
         try:
-            await send_fallback_response(turn_context, context or "How can I help you today?")
+            if not is_invoke:
+                await send_fallback_response(turn_context, context or "How can I help you today?")
         except Exception as fallback_e:
             logging.error(f"Even fallback failed during initialization: {fallback_e}")
-
 # Send a message without user input (used after file upload or initialization)
 async def send_message(turn_context: TurnContext, state):
     try:
