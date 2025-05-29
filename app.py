@@ -5576,7 +5576,7 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
                                 streamer.replace_buffer_with(
                                     message_text or "I couldn't generate a response. Please try again."
                                 )
-                                await streamer.send_final_message()   # flush exactly once
+                                await streamer.end_stream()    # flush exactly once
                                 return                                # done with this user request
                                 # ──────────────────────────────────────────────────────────────
                         
@@ -5966,7 +5966,7 @@ async def poll_for_message(client, thread_id, streamer):
             if message_text:
                 # ── NO DUPLICATES ────────────────────────────────────────────
                 streamer.replace_buffer_with(message_text)  # new helper
-                await streamer.send_final_message()
+                await streamer.end_stream()
                 return
         
         streamer.replace_buffer_with(
