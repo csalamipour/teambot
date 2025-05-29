@@ -4051,10 +4051,12 @@ def create_new_conversation_state(user_id: str, tenant_id: str, security_fingerp
         "creation_time": time.time(),
         "last_activity_time": time.time(),
         "fallback_mode": False,
-        "fallback_level": 0
+        "fallback_level": 0,
+        "last_responses": deque(maxlen=5),  # Store last 5 response hashes for dedup
     }
-
-
+def get_response_hash(text):
+    """Generate a hash for response deduplication"""
+    return hashlib.md5(text.encode()).hexdigest()
 async def handle_message_activity_safe(turn_context: TurnContext, state: dict, conversation_id: str, error_context: dict):
     """Handle message activities with error boundaries"""
     try:
@@ -5036,8 +5038,14 @@ async def handle_text_message(turn_context: TurnContext, state):
         with pending_messages_lock:
             if conversation_id not in pending_messages:
                 pending_messages[conversation_id] = deque()
-            pending_messages[conversation_id].append(user_message)
-            queue_size = len(pending_messages[conversation_id])
+            
+            # Check for duplicate messages (prevent double-queueing)
+            if not pending_messages[conversation_id] or pending_messages[conversation_id][-1] != user_message:
+                pending_messages[conversation_id].append(user_message)
+                queue_size = len(pending_messages[conversation_id])
+            else:
+                queue_size = len(pending_messages[conversation_id])
+                logging.info(f"Prevented duplicate message from being queued: {user_message[:50]}...")
         
         # Provide informative message based on what's happening
         if active_operation == "email_generation":
@@ -5166,7 +5174,40 @@ async def handle_text_message(turn_context: TurnContext, state):
         # Handle thread recovery if needed
         await handle_thread_recovery(turn_context, state, str(e), "text_message")
 
-
+async def ensure_thread_ready(client, thread_id, max_wait=15):
+    """Ensure there are no active runs on the thread before proceeding"""
+    waited = 0
+    
+    while waited < max_wait:
+        try:
+            runs = client.beta.threads.runs.list(thread_id=thread_id, limit=5)
+            active_found = False
+            
+            for run in runs.data:
+                if run.status in ["in_progress", "queued", "requires_action"]:
+                    active_found = True
+                    logging.info(f"Found active run {run.id} with status {run.status}, attempting to cancel...")
+                    
+                    try:
+                        client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run.id)
+                    except Exception as cancel_e:
+                        logging.warning(f"Failed to cancel run {run.id}: {cancel_e}")
+                    
+                    break
+            
+            if not active_found:
+                logging.info(f"Thread {thread_id} is ready - no active runs found")
+                return True
+                
+        except Exception as e:
+            logging.warning(f"Error checking thread status: {e}")
+            return False
+        
+        await asyncio.sleep(2)
+        waited += 2
+    
+    logging.warning(f"Thread {thread_id} still has active runs after {waited}s wait")
+    return False
 # Modified process_pending_messages function to fix the run conflict
 async def process_pending_messages(turn_context: TurnContext, state, conversation_id):
     """Process any pending messages in the queue safely with improved handling"""
@@ -5184,24 +5225,37 @@ async def process_pending_messages(turn_context: TurnContext, state, conversatio
     if not messages_to_process:
         return
     
-    # Process messages outside the lock to avoid blocking
+    # Process messages sequentially with proper isolation
     for i, next_message in enumerate(messages_to_process):
         try:
-            # Announce processing if first message
+            # CRITICAL: Ensure thread is not busy before processing
+            max_wait_for_ready = 10  # seconds
+            waited = 0
+            while check_thread_busy(state) and waited < max_wait_for_ready:
+                await asyncio.sleep(1)
+                waited += 1
+                logging.info(f"Waiting for thread to be ready before processing pending message {i+1}...")
+            
+            # Mark thread as busy for this pending message
+            thread_id = state.get("session_id")
+            with conversation_states_lock:
+                state["active_run"] = True
+                state["active_operation"] = f"pending_message_{i+1}"
+            
+            if thread_id:
+                with active_runs_lock:
+                    active_runs[thread_id] = True
+            
+            # Announce processing
             if i == 0:
                 await turn_context.send_activity("I'll now address your follow-up messages...")
             
-            # Add small delay between messages to avoid overwhelming the system
-            if i > 0:
-                await asyncio.sleep(1.5)
-            
             # Get the thread and assistant IDs
-            thread_id = state.get("session_id")
             assistant_id = state.get("assistant_id")
             
             if not thread_id or not assistant_id:
                 await turn_context.send_activity(f"I'm having trouble with your follow-up question #{i+1}. Let's start a new conversation.")
-                return
+                continue
             
             # Create a new client
             client = create_client()
@@ -5209,44 +5263,8 @@ async def process_pending_messages(turn_context: TurnContext, state, conversatio
             # Send typing indicator
             await turn_context.send_activity(create_typing_activity())
             
-            # Check for any existing active runs and cancel them first
-            try:
-                runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
-                if runs.data:
-                    latest_run = runs.data[0]
-                    if latest_run.status in ["in_progress", "queued", "requires_action"]:
-                        logging.info(f"Cancelling active run {latest_run.id} before processing follow-up #{i+1}")
-                        client.beta.threads.runs.cancel(thread_id=thread_id, run_id=latest_run.id)
-                        await asyncio.sleep(2)  # Wait for cancellation to take effect
-            except Exception as cancel_e:
-                logging.warning(f"Error checking or cancelling runs for follow-up #{i+1}: {cancel_e}")
-            
-            # Wait to ensure no active runs
-            active_run_found = True
-            max_wait = 5  # Maximum 5 seconds to wait
-            start_time = time.time()
-            
-            while active_run_found and (time.time() - start_time) < max_wait:
-                try:
-                    # Check if any active runs still exist
-                    runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
-                    active_run_found = False
-                    
-                    if runs.data:
-                        for run in runs.data:
-                            if run.status in ["in_progress", "queued", "requires_action"]:
-                                active_run_found = True
-                                logging.info(f"Still waiting for run {run.id} to complete before follow-up #{i+1}...")
-                                await asyncio.sleep(1)
-                                break
-                    
-                    if not active_run_found:
-                        break
-                except Exception:
-                    break  # If we can't check, just proceed
-            
-            # Add progress indicator for multiple messages
-            progress_indicator = f" ({i+1}/{len(messages_to_process)})" if len(messages_to_process) > 1 else ""
+            # CRITICAL: Ensure no active runs before processing
+            await ensure_thread_ready(client, thread_id)
             
             # Check if this is an email-related follow-up
             is_email_followup = any(keyword in next_message.lower() for keyword in ["email", "change", "edit", "modify", "update"])
@@ -5258,10 +5276,14 @@ async def process_pending_messages(turn_context: TurnContext, state, conversatio
                 if is_email_followup and state.get("last_generated_email"):
                     message_content = f"{next_message}\n\n[Context: This relates to the previously generated email]"
                 
+                # RAG integration for follow-up messages
+                relevant_docs = await retrieve_documents(next_message, top=3)
+                enhanced_message = await format_message_with_rag(message_content, relevant_docs)
+                
                 client.beta.threads.messages.create(
                     thread_id=thread_id,
                     role="user",
-                    content=message_content
+                    content=enhanced_message
                 )
                 
                 logging.info(f"Added follow-up message #{i+1} to thread {thread_id}")
@@ -5270,32 +5292,45 @@ async def process_pending_messages(turn_context: TurnContext, state, conversatio
                 await turn_context.send_activity(f"I couldn't process follow-up message #{i+1}. Please try asking again.")
                 continue
             
-            # Process the response with streaming
+            # Process the response with streaming - use a dedicated wrapper
             try:
-                # Send processing indicator
-                if len(messages_to_process) > 1:
-                    await turn_context.send_activity(f"Processing your message{progress_indicator}...")
+                await process_single_pending_message(turn_context, state, client, thread_id, assistant_id, i+1, len(messages_to_process))
                 
-                if TEAMS_AI_AVAILABLE:
-                    await stream_with_teams_ai(turn_context, state, None)
-                else:
-                    await stream_with_custom_implementation(turn_context, state, None)
-                
-                # Brief pause before next message
+                # Brief pause before next message to ensure clean state
                 if i < len(messages_to_process) - 1:
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(1)
                     
             except Exception as process_error:
                 logging.error(f"Error processing follow-up #{i+1}: {process_error}")
                 await turn_context.send_activity(f"I had trouble processing follow-up message #{i+1}. Please try asking again.")
+            
+            finally:
+                # ALWAYS clean up state after each message
+                with conversation_states_lock:
+                    state["active_run"] = False
+                    state.pop("active_operation", None)
+                
+                if thread_id:
+                    with active_runs_lock:
+                        if thread_id in active_runs:
+                            del active_runs[thread_id]
                 
         except Exception as e:
             logging.error(f"Error processing follow-up message #{i+1}: {e}")
             traceback.print_exc()
             await turn_context.send_activity(f"I encountered an error with message #{i+1}. Please try asking again.")
             
-            # If we encounter an error, we might want to continue with remaining messages
-            # or stop processing based on severity
+            # Clean up state even on error
+            with conversation_states_lock:
+                state["active_run"] = False
+                state.pop("active_operation", None)
+            
+            if thread_id:
+                with active_runs_lock:
+                    if thread_id in active_runs:
+                        del active_runs[thread_id]
+            
+            # Continue with remaining messages
             if i < len(messages_to_process) - 1:
                 await turn_context.send_activity("I'll continue with your remaining messages...")
                 await asyncio.sleep(1)
@@ -5358,6 +5393,10 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
         state: The conversation state
         user_message: The user's message (can be None for follow-up processing)
     """
+    completed = False  # Track completion status for pending message processing
+    conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+    conversation_id = conversation_reference.conversation.id
+    
     try:
         client = create_client()
         thread_id = state["session_id"]
@@ -5525,7 +5564,7 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
             # Now handle the streaming with buffer management
             buffer = []
             last_chunk_time = time.time()
-            completed = False
+            final_message_text = ""  # Store the complete message for deduplication
             
             try:
                 # Poll for the run result instead of streaming to avoid race conditions
@@ -5569,9 +5608,22 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
                                     if content_part.type == 'text':
                                         message_text += content_part.text.value
                                 
-                                # Queue the complete message
-                                if message_text:
-                                    streamer.queue_text_chunk(message_text)
+                                # Store for deduplication
+                                final_message_text = message_text
+                                
+                                # Check for duplicate before sending
+                                response_hash = get_response_hash(message_text)
+                                with conversation_states_lock:
+                                    if "last_responses" not in state:
+                                        state["last_responses"] = deque(maxlen=5)
+                                    
+                                    if response_hash not in state["last_responses"]:
+                                        state["last_responses"].append(response_hash)
+                                        # Queue the complete message
+                                        if message_text:
+                                            streamer.queue_text_chunk(message_text)
+                                    else:
+                                        logging.warning(f"Prevented duplicate streaming response: {message_text[:50]}...")
                             
                             break
                             
@@ -5697,6 +5749,13 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
                         pass
             except Exception as cleanup_e:
                 logging.warning(f"Error during run cleanup: {cleanup_e}")
+            
+            # Process pending messages ONLY if we completed successfully
+            if completed:
+                # Add a small delay to ensure clean state
+                await asyncio.sleep(0.5)
+                # Process any pending messages
+                await process_pending_messages(turn_context, state, conversation_id)
                 
     except Exception as outer_e:
         logging.error(f"Outer error in stream_with_teams_ai: {str(outer_e)}")
@@ -5717,6 +5776,10 @@ async def stream_with_custom_implementation(turn_context: TurnContext, state, us
         state: The conversation state
         user_message: The user's message
     """
+    completed = False  # Track completion status for pending message processing
+    conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
+    conversation_id = conversation_reference.conversation.id
+    
     try:
         client = create_client()
         thread_id = state["session_id"]
@@ -5823,6 +5886,7 @@ async def stream_with_custom_implementation(turn_context: TurnContext, state, us
             elapsed_time = 0
             last_message_check_time = 0
             message_check_interval = 5  # Check for partial messages every 5 seconds
+            final_message_text = ""  # Store for deduplication
             
             while elapsed_time < max_wait_time:
                 # Send a typing indicator
@@ -5865,6 +5929,8 @@ async def stream_with_custom_implementation(turn_context: TurnContext, state, us
                     
                     # Handle completed run
                     if run_status.status == "completed":
+                        completed = True
+                        
                         # Get the final message
                         messages = client.beta.threads.messages.list(
                             thread_id=thread_id,
@@ -5878,6 +5944,9 @@ async def stream_with_custom_implementation(turn_context: TurnContext, state, us
                                 if content_part.type == 'text':
                                     message_text += content_part.text.value
                             
+                            # Store for deduplication
+                            final_message_text = message_text
+                            
                             # If there's new text we haven't sent yet
                             if message_text and message_text != accumulated_text:
                                 new_text = message_text[len(accumulated_text):]
@@ -5886,8 +5955,28 @@ async def stream_with_custom_implementation(turn_context: TurnContext, state, us
                                     await streamer.queue_update(new_text)
                                     accumulated_text = message_text
                         
-                        # Send the final complete message
-                        await streamer.send_final_message()
+                        # Check for duplicate before sending final message
+                        response_hash = get_response_hash(accumulated_text)
+                        with conversation_states_lock:
+                            if "last_responses" not in state:
+                                state["last_responses"] = deque(maxlen=5)
+                            
+                            if response_hash not in state["last_responses"]:
+                                state["last_responses"].append(response_hash)
+                                # Send the final complete message
+                                await streamer.send_final_message()
+                            else:
+                                logging.warning(f"Prevented duplicate custom streaming response: {accumulated_text[:50]}...")
+                                # Still need to stop typing
+                                await turn_context.send_activity(create_typing_stop_activity())
+                        
+                        # Add a small delay to ensure clean state
+                        await asyncio.sleep(0.5)
+                        
+                        # Only then process pending messages if completed successfully
+                        if completed:
+                            await process_pending_messages(turn_context, state, conversation_id)
+                        
                         return
                     
                     # Handle failed run
@@ -5910,7 +5999,17 @@ async def stream_with_custom_implementation(turn_context: TurnContext, state, us
             
             # Send whatever we've accumulated
             if accumulated_text:
-                await turn_context.send_activity(accumulated_text)
+                # Check for duplicate
+                response_hash = get_response_hash(accumulated_text)
+                with conversation_states_lock:
+                    if "last_responses" not in state:
+                        state["last_responses"] = deque(maxlen=5)
+                    
+                    if response_hash not in state["last_responses"]:
+                        state["last_responses"].append(response_hash)
+                        await turn_context.send_activity(accumulated_text)
+                    else:
+                        logging.warning(f"Prevented duplicate timeout response: {accumulated_text[:50]}...")
             else:
                 await turn_context.send_activity("I couldn't generate a response. Please try again or ask in a different way.")
         
