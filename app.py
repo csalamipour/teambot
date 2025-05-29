@@ -2371,6 +2371,332 @@ async def send_edit_email_card(turn_context: TurnContext, state, email_id=None):
     
     edit_card = create_edit_email_card(original_email, email_id)
     await send_card_response(turn_context, edit_card)
+async def safe_mark_thread_not_busy(state: dict, thread_id: str = None):
+    """Safely mark thread as not busy with proper locking"""
+    if not thread_id:
+        thread_id = state.get("session_id")
+    
+    with conversation_states_lock:
+        state["active_run"] = False
+        state.pop("active_operation", None)
+    
+    if thread_id:
+        with active_runs_lock:
+            if thread_id in active_runs:
+                del active_runs[thread_id]
+async def ensure_thread_completely_ready(client, thread_id, max_wait=30):
+    """
+    Ensure thread has NO active runs and is completely ready.
+    Enhanced version with better state verification and cleanup.
+    """
+    waited = 0
+    last_active_count = -1
+    
+    while waited < max_wait:
+        try:
+            # Get all recent runs to ensure we catch everything
+            runs = client.beta.threads.runs.list(thread_id=thread_id, limit=20)
+            active_runs_found = []
+            
+            for run in runs.data:
+                if run.status in ["in_progress", "queued", "requires_action", "cancelling"]:
+                    active_runs_found.append((run.id, run.status))
+            
+            # If no active runs, we're ready
+            if not active_runs_found:
+                logging.info(f"Thread {thread_id} is ready - no active runs")
+                return True
+            
+            # Only log when count changes to reduce noise
+            if len(active_runs_found) != last_active_count:
+                logging.info(f"Thread {thread_id} has {len(active_runs_found)} active runs: {active_runs_found}")
+                last_active_count = len(active_runs_found)
+            
+            # Try to cancel all active runs
+            for run_id, status in active_runs_found:
+                if status not in ["cancelling", "cancelled"]:
+                    try:
+                        client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run_id)
+                        logging.info(f"Requested cancellation of run {run_id}")
+                    except Exception as e:
+                        # Run might already be transitioning
+                        logging.debug(f"Could not cancel run {run_id}: {e}")
+            
+            # Wait with exponential backoff
+            wait_time = min(2 ** (waited // 5), 4)  # Max 4 second wait
+            await asyncio.sleep(wait_time)
+            waited += wait_time
+            
+        except Exception as e:
+            logging.error(f"Error checking thread readiness: {e}")
+            # On error, assume thread is not ready
+            return False
+    
+    logging.error(f"Thread {thread_id} not ready after {max_wait}s wait")
+    return False
+
+
+async def wait_for_run_completion(client, thread_id, run_id, max_wait=60):
+    """
+    Wait for a specific run to reach a terminal state.
+    Returns (success, final_status, error_message)
+    """
+    waited = 0
+    poll_interval = 2
+    last_status = None
+    
+    while waited < max_wait:
+        try:
+            run = client.beta.threads.runs.retrieve(
+                thread_id=thread_id,
+                run_id=run_id
+            )
+            
+            # Log status changes only
+            if run.status != last_status:
+                logging.info(f"Run {run_id} status: {run.status}")
+                last_status = run.status
+            
+            # Check if run is in terminal state
+            if run.status in ["completed", "failed", "cancelled", "expired"]:
+                return (run.status == "completed", run.status, None)
+            
+            await asyncio.sleep(poll_interval)
+            waited += poll_interval
+            
+        except Exception as e:
+            error_msg = f"Error checking run {run_id}: {e}"
+            logging.error(error_msg)
+            return (False, "error", error_msg)
+    
+    return (False, "timeout", f"Run did not complete within {max_wait}s")
+
+
+async def process_pending_messages(turn_context: TurnContext, state, conversation_id):
+    """
+    Process pending messages with improved state management and error recovery.
+    Complete rewrite with better isolation between messages.
+    """
+    messages_to_process = []
+    
+    # Get all pending messages atomically
+    with pending_messages_lock:
+        if conversation_id in pending_messages and pending_messages[conversation_id]:
+            messages_to_process = list(pending_messages[conversation_id])
+            pending_messages[conversation_id].clear()
+            logging.info(f"Processing {len(messages_to_process)} pending messages for conversation {conversation_id}")
+    
+    if not messages_to_process:
+        return
+    
+    # Get client and initial state
+    client = create_client()
+    thread_id = state.get("session_id")
+    assistant_id = state.get("assistant_id")
+    
+    if not thread_id or not assistant_id:
+        await turn_context.send_activity("I'm having trouble with follow-up messages. Please try asking again.")
+        return
+    
+    # Process each message with complete isolation
+    successfully_processed = 0
+    
+    for i, message_text in enumerate(messages_to_process):
+        message_num = i + 1
+        
+        try:
+            # Step 1: Ensure thread is completely ready before each message
+            logging.info(f"Preparing to process pending message {message_num}/{len(messages_to_process)}")
+            
+            # Clear any stale state
+            with conversation_states_lock:
+                state["active_run"] = False
+                state.pop("active_operation", None)
+            
+            with active_runs_lock:
+                if thread_id in active_runs:
+                    del active_runs[thread_id]
+            
+            # Wait for thread to be ready
+            thread_ready = await ensure_thread_completely_ready(client, thread_id, max_wait=20)
+            
+            if not thread_ready:
+                # Thread is stuck - create a new one
+                logging.warning(f"Thread {thread_id} not ready for message {message_num}, creating new thread")
+                
+                try:
+                    new_thread = client.beta.threads.create()
+                    old_thread_id = thread_id
+                    thread_id = new_thread.id
+                    
+                    # Update state
+                    with conversation_states_lock:
+                        state["session_id"] = thread_id
+                    
+                    logging.info(f"Created new thread {thread_id} for pending message {message_num}")
+                    
+                except Exception as thread_error:
+                    logging.error(f"Failed to create new thread: {thread_error}")
+                    await turn_context.send_activity(
+                        f"I couldn't process message {message_num}. Please try asking again."
+                    )
+                    continue
+            
+            # Step 2: Mark as busy for this specific message
+            with conversation_states_lock:
+                state["active_run"] = True
+                state["active_operation"] = f"pending_message_{message_num}"
+            
+            with active_runs_lock:
+                active_runs[thread_id] = True
+            
+            # Step 3: Send appropriate status update
+            if successfully_processed == 0:
+                await turn_context.send_activity("Now addressing your follow-up messages...")
+            elif successfully_processed > 0 and i < len(messages_to_process) - 1:
+                await turn_context.send_activity(f"Processing message {message_num} of {len(messages_to_process)}...")
+            
+            await turn_context.send_activity(create_typing_activity())
+            
+            # Step 4: Process the message
+            try:
+                # RAG integration
+                relevant_docs = await retrieve_documents(message_text, top=3)
+                enhanced_message = await format_message_with_rag(message_text, relevant_docs)
+                
+                # Add message to thread
+                client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content=enhanced_message
+                )
+                
+                # Create run
+                run = client.beta.threads.runs.create(
+                    thread_id=thread_id,
+                    assistant_id=assistant_id
+                )
+                run_id = run.id
+                logging.info(f"Created run {run_id} for pending message {message_num}")
+                
+                # Wait for completion with proper timeout
+                success, status, error = await wait_for_run_completion(
+                    client, thread_id, run_id, max_wait=60
+                )
+                
+                if success:
+                    # Get the response
+                    messages = client.beta.threads.messages.list(
+                        thread_id=thread_id,
+                        order="desc",
+                        limit=1
+                    )
+                    
+                    if messages.data:
+                        response_text = ""
+                        for content in messages.data[0].content:
+                            if content.type == 'text':
+                                response_text += content.text.value
+                        
+                        if response_text:
+                            # Send the response
+                            await turn_context.send_activity(response_text)
+                            successfully_processed += 1
+                            logging.info(f"Successfully processed pending message {message_num}")
+                        else:
+                            await turn_context.send_activity(
+                                f"I processed message {message_num} but couldn't generate a response."
+                            )
+                    else:
+                        await turn_context.send_activity(
+                            f"I couldn't retrieve the response for message {message_num}."
+                        )
+                else:
+                    # Handle failure
+                    error_msg = f"I encountered an issue with message {message_num}"
+                    if error:
+                        error_msg += f": {error}"
+                    await turn_context.send_activity(error_msg)
+                    logging.error(f"Failed to process pending message {message_num}: {status} - {error}")
+                
+            except Exception as process_error:
+                logging.error(f"Error processing pending message {message_num}: {process_error}")
+                await turn_context.send_activity(
+                    f"I encountered an error with message {message_num}. Please try asking again."
+                )
+            
+            finally:
+                # Step 5: Always clean up state after each message
+                with conversation_states_lock:
+                    state["active_run"] = False
+                    state.pop("active_operation", None)
+                
+                with active_runs_lock:
+                    if thread_id in active_runs:
+                        del active_runs[thread_id]
+                
+                # Step 6: Add a delay between messages to ensure clean state
+                if i < len(messages_to_process) - 1:
+                    await asyncio.sleep(3)  # Give more time between messages
+            
+        except Exception as outer_error:
+            logging.error(f"Outer error processing message {message_num}: {outer_error}")
+            traceback.print_exc()
+            
+            # Ensure cleanup even on outer errors
+            with conversation_states_lock:
+                state["active_run"] = False
+                state.pop("active_operation", None)
+            
+            with active_runs_lock:
+                if thread_id in active_runs:
+                    del active_runs[thread_id]
+            
+            await turn_context.send_activity(
+                f"I had trouble with message {message_num}. Please try asking again."
+            )
+    
+    # Final status message
+    if successfully_processed == len(messages_to_process):
+        if len(messages_to_process) > 1:
+            await turn_context.send_activity(
+                "I've finished addressing all your messages. Is there anything else I can help with?"
+            )
+    elif successfully_processed > 0:
+        await turn_context.send_activity(
+            f"I processed {successfully_processed} of {len(messages_to_process)} messages. "
+            "Please feel free to ask again about any unanswered questions."
+        )
+
+
+def check_thread_busy(state: dict) -> bool:
+    """
+    Enhanced thread busy check with verification against active_runs.
+    Includes self-healing for inconsistent state.
+    """
+    is_busy = False
+    thread_id = None
+    
+    with conversation_states_lock:
+        is_busy = state.get("active_run", False)
+        thread_id = state.get("session_id")
+        
+        # Verify against active_runs for consistency
+        if thread_id:
+            with active_runs_lock:
+                actual_busy = thread_id in active_runs
+                
+                # Self-heal inconsistent state
+                if is_busy and not actual_busy:
+                    logging.warning(f"State says busy but active_runs says not busy for thread {thread_id}. Fixing.")
+                    state["active_run"] = False
+                    is_busy = False
+                elif not is_busy and actual_busy:
+                    logging.warning(f"State says not busy but active_runs says busy for thread {thread_id}. Fixing.")
+                    state["active_run"] = True
+                    is_busy = True
+    
+    return is_busy
 async def apply_email_edits(turn_context: TurnContext, state: dict, edit_instructions: str, email_id: str = None):
     """
     Applies edits to a previously generated email with intelligent retrieval support.
@@ -4501,26 +4827,7 @@ async def check_session_timeout(state: dict) -> bool:
         return inactivity_period > session_timeout and state.get("session_id") is not None
 
 
-def check_thread_busy(state: dict) -> bool:
-    """Check if thread is currently processing"""
-    is_thread_busy = False
-    
-    with conversation_states_lock:
-        is_thread_busy = state.get("active_run", False)
-        
-        # Double-check with active_runs for consistency
-        with active_runs_lock:
-            thread_id = state.get("session_id")
-            if thread_id:
-                if thread_id in active_runs:
-                    is_thread_busy = True
-                    state["active_run"] = True
-                elif state.get("active_run", False):
-                    # State says active but active_runs doesn't have it
-                    state["active_run"] = False
-                    is_thread_busy = False
-    
-    return is_thread_busy
+
 
 async def handle_file_consent_response(turn_context: TurnContext, file_consent_response: FileConsentCardResponse):
     """Handle file consent card response."""
@@ -5528,351 +5835,8 @@ async def ensure_thread_ready(client, thread_id, max_wait=15):
     logging.warning(f"Thread {thread_id} still has active runs after {waited}s wait")
     return False
 
-async def ensure_thread_completely_ready(client, thread_id, max_wait=20):
-    """Ensure thread has NO active runs and is completely ready"""
-    waited = 0
-    while waited < max_wait:
-        try:
-            runs = client.beta.threads.runs.list(thread_id=thread_id, limit=5)
-            has_active = False
-            
-            for run in runs.data:
-                if run.status in ["in_progress", "queued", "requires_action", "cancelling"]:
-                    has_active = True
-                    logging.info(f"Thread {thread_id} has active run {run.id} with status {run.status}")
-                    
-                    # Try to cancel if not already cancelling
-                    if run.status != "cancelling":
-                        try:
-                            client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run.id)
-                        except:
-                            pass
-                    break
-            
-            if not has_active:
-                return True
-                
-            await asyncio.sleep(1)
-            waited += 1
-            
-        except Exception as e:
-            logging.error(f"Error checking thread readiness: {e}")
-            return False
-    
-    return False
-# Modified process_pending_messages function to fix the run conflict
-async def process_pending_messages(turn_context: TurnContext, state, conversation_id):
-    """Process any pending messages in the queue safely with improved handling"""
-    messages_to_process = []
-    
-    # Get all pending messages at once to avoid race conditions
-    with pending_messages_lock:
-        if conversation_id in pending_messages and pending_messages[conversation_id]:
-            # Get all messages and clear the queue
-            messages_to_process = list(pending_messages[conversation_id])
-            pending_messages[conversation_id].clear()
-            logging.info(f"Processing {len(messages_to_process)} pending messages for conversation {conversation_id}")
-    
-    # If no messages to process, return
-    if not messages_to_process:
-        return
-    
-    # Get client once for all messages
-    client = create_client()
-    
-    # Process messages sequentially with proper isolation
-    for i, next_message in enumerate(messages_to_process):
-        try:
-            # CRITICAL FIX: Ensure completely clean state before each message
-            thread_id = state.get("session_id")
-            assistant_id = state.get("assistant_id")
-            
-            if not thread_id or not assistant_id:
-                await turn_context.send_activity(f"I'm having trouble with your follow-up question #{i+1}. Let's start a new conversation.")
-                continue
-            
-            # Wait for thread to be completely ready (no active runs)
-            thread_ready = await ensure_thread_completely_ready(client, thread_id, max_wait=30)
-            
-            if not thread_ready:
-                # Thread is stuck, create a new one
-                logging.warning(f"Thread {thread_id} not ready after waiting, creating new thread for pending message {i+1}")
-                
-                try:
-                    # Create new thread
-                    new_thread = client.beta.threads.create()
-                    old_thread_id = thread_id
-                    thread_id = new_thread.id
-                    
-                    # Update state with new thread
-                    with conversation_states_lock:
-                        state["session_id"] = thread_id
-                        # Clear active run state
-                        state["active_run"] = False
-                        state.pop("active_operation", None)
-                    
-                    # Clear old thread from active runs
-                    with active_runs_lock:
-                        if old_thread_id in active_runs:
-                            del active_runs[old_thread_id]
-                    
-                    logging.info(f"Created new thread {thread_id} to replace stuck thread {old_thread_id}")
-                    
-                except Exception as thread_error:
-                    logging.error(f"Failed to create new thread: {thread_error}")
-                    await turn_context.send_activity(f"I couldn't process follow-up message #{i+1}. Please try asking again.")
-                    continue
-            
-            # Double-check state is clean
-            with conversation_states_lock:
-                if state.get("active_run", False):
-                    # Force clear if somehow still marked as active
-                    state["active_run"] = False
-                    state.pop("active_operation", None)
-            
-            # Mark thread as busy for this pending message
-            with conversation_states_lock:
-                state["active_run"] = True
-                state["active_operation"] = f"pending_message_{i+1}"
-            
-            if thread_id:
-                with active_runs_lock:
-                    active_runs[thread_id] = True
-            
-            # Announce processing
-            if i == 0:
-                await turn_context.send_activity("I'll now address your follow-up messages...")
-            
-            # Send typing indicator
-            await turn_context.send_activity(create_typing_activity())
-            
-            try:
-                # Check if this is an email-related follow-up
-                is_email_followup = any(keyword in next_message.lower() for keyword in ["email", "change", "edit", "modify", "update"])
-                
-                # Build message content
-                message_content = next_message
-                if is_email_followup and state.get("last_generated_email"):
-                    message_content = f"{next_message}\n\n[Context: This relates to the previously generated email]"
-                
-                # RAG integration for follow-up messages
-                relevant_docs = await retrieve_documents(next_message, top=3)
-                enhanced_message = await format_message_with_rag(message_content, relevant_docs)
-                
-                # Add message with retry logic
-                message_added = False
-                for retry in range(3):
-                    try:
-                        client.beta.threads.messages.create(
-                            thread_id=thread_id,
-                            role="user",
-                            content=enhanced_message
-                        )
-                        message_added = True
-                        logging.info(f"Added follow-up message #{i+1} to thread {thread_id}")
-                        break
-                    except Exception as msg_error:
-                        if retry < 2:
-                            logging.warning(f"Retry {retry+1} for adding message: {msg_error}")
-                            await asyncio.sleep(2 * (retry + 1))
-                        else:
-                            raise msg_error
-                
-                if not message_added:
-                    raise Exception("Failed to add message after retries")
-                
-                # Process the response using dedicated function
-                success = await process_single_pending_message_improved(
-                    turn_context, state, client, thread_id, assistant_id, i+1, len(messages_to_process)
-                )
-                
-                if not success:
-                    await turn_context.send_activity(f"I had trouble processing follow-up message #{i+1}. Please try asking again.")
-                
-                # Brief pause before next message to ensure clean state
-                if i < len(messages_to_process) - 1:
-                    await asyncio.sleep(2)
-                    
-            except Exception as process_error:
-                logging.error(f"Error processing follow-up #{i+1}: {process_error}")
-                await turn_context.send_activity(f"I had trouble processing follow-up message #{i+1}. Please try asking again.")
-            
-        except Exception as e:
-            logging.error(f"Error processing follow-up message #{i+1}: {e}")
-            traceback.print_exc()
-            await turn_context.send_activity(f"I encountered an error with message #{i+1}. Please try asking again.")
-            
-        finally:
-            # ALWAYS clean up state after each message
-            with conversation_states_lock:
-                state["active_run"] = False
-                state.pop("active_operation", None)
-            
-            if thread_id:
-                with active_runs_lock:
-                    if thread_id in active_runs:
-                        del active_runs[thread_id]
-            
-            # Continue with remaining messages
-            if i < len(messages_to_process) - 1:
-                await turn_context.send_activity("Continuing with your next message...")
-                await asyncio.sleep(1)
-    
-    # Final message if we processed multiple messages
-    if len(messages_to_process) > 1:
-        await turn_context.send_activity("I've finished processing all your follow-up messages. Is there anything else I can help you with?")
-async def process_single_pending_message_improved(turn_context, state, client, thread_id, assistant_id, message_num, total_messages):
-    """Process a single pending message with improved error handling"""
-    try:
-        # Create run with retry logic
-        run_id = None
-        run_created = False
-        
-        for retry in range(3):
-            try:
-                run = client.beta.threads.runs.create(
-                    thread_id=thread_id,
-                    assistant_id=assistant_id
-                )
-                run_id = run.id
-                run_created = True
-                logging.info(f"Created run {run_id} for pending message {message_num}")
-                break
-                
-            except Exception as run_error:
-                if "already has an active run" in str(run_error) and retry < 2:
-                    logging.warning(f"Thread busy on run creation attempt {retry+1}, waiting...")
-                    await asyncio.sleep(3 * (retry + 1))
-                    
-                    # Try to ensure thread is ready again
-                    ready = await ensure_thread_completely_ready(client, thread_id, max_wait=10)
-                    if not ready and retry == 1:
-                        # Last resort - create new thread
-                        new_thread = client.beta.threads.create()
-                        old_thread = thread_id
-                        thread_id = new_thread.id
-                        
-                        with conversation_states_lock:
-                            state["session_id"] = thread_id
-                        
-                        logging.info(f"Created new thread {thread_id} for pending message")
-                        # Don't break, let it retry with new thread
-                else:
-                    raise run_error
-        
-        if not run_created:
-            raise Exception("Failed to create run after all retries")
-        
-        # Poll for completion
-        max_wait = 60
-        poll_interval = 2
-        elapsed = 0
-        completed = False
-        
-        while elapsed < max_wait:
-            await turn_context.send_activity(create_typing_activity())
-            
-            try:
-                run_status = client.beta.threads.runs.retrieve(
-                    thread_id=thread_id,
-                    run_id=run_id
-                )
-                
-                if run_status.status == "completed":
-                    completed = True
-                    
-                    # Get the response
-                    messages = client.beta.threads.messages.list(
-                        thread_id=thread_id,
-                        order="desc",
-                        limit=1
-                    )
-                    
-                    if messages.data:
-                        response_text = ""
-                        for content in messages.data[0].content:
-                            if content.type == 'text':
-                                response_text += content.text.value
-                        
-                        if response_text:
-                            # Check for duplicate
-                            response_hash = get_response_hash(response_text)
-                            with conversation_states_lock:
-                                if "last_responses" not in state:
-                                    state["last_responses"] = deque(maxlen=5)
-                                
-                                if response_hash not in state["last_responses"]:
-                                    state["last_responses"].append(response_hash)
-                                    await turn_context.send_activity(response_text)
-                                else:
-                                    logging.warning(f"Prevented duplicate response for pending message {message_num}")
-                            
-                            logging.info(f"Successfully processed pending message {message_num}")
-                            return True
-                    break
-                    
-                elif run_status.status in ["failed", "cancelled", "expired"]:
-                    logging.error(f"Run {run_id} ended with status: {run_status.status}")
-                    break
-                    
-            except Exception as poll_error:
-                logging.error(f"Error polling run for pending message {message_num}: {poll_error}")
-                
-            await asyncio.sleep(poll_interval)
-            elapsed += poll_interval
-        
-        if not completed:
-            logging.error(f"Pending message {message_num} processing timed out or failed")
-            
-        return completed
-        
-    except Exception as e:
-        logging.error(f"Error processing pending message {message_num}: {e}")
-        traceback.print_exc()
-        return False
-async def ensure_thread_completely_ready(client, thread_id, max_wait=30):
-    """Ensure thread has NO active runs and is completely ready"""
-    waited = 0
-    
-    while waited < max_wait:
-        try:
-            runs = client.beta.threads.runs.list(thread_id=thread_id, limit=10)
-            has_active = False
-            active_runs_found = []
-            
-            for run in runs.data:
-                if run.status in ["in_progress", "queued", "requires_action", "cancelling"]:
-                    has_active = True
-                    active_runs_found.append((run.id, run.status))
-                    
-                    # Try to cancel if not already cancelling
-                    if run.status != "cancelling":
-                        try:
-                            client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run.id)
-                            logging.info(f"Requested cancellation of run {run.id}")
-                        except Exception as cancel_e:
-                            logging.warning(f"Could not cancel run {run.id}: {cancel_e}")
-            
-            if not has_active:
-                logging.info(f"Thread {thread_id} is ready - no active runs")
-                return True
-            
-            logging.info(f"Thread {thread_id} has {len(active_runs_found)} active runs: {active_runs_found}")
-            
-            # Wait a bit for cancellations to take effect
-            await asyncio.sleep(2)
-            waited += 2
-            
-            # After 10 seconds, try more aggressive cleanup
-            if waited >= 10 and has_active:
-                logging.warning(f"Thread {thread_id} still has active runs after {waited}s, may need new thread")
-                
-        except Exception as e:
-            logging.error(f"Error checking thread readiness: {e}")
-            return False
-    
-    logging.error(f"Thread {thread_id} not ready after {max_wait}s wait")
-    return False
+
+
 # Right before the function returns
 async def cleanup_after_message():
     """Ensure all state is properly reset after message processing"""
