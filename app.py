@@ -819,6 +819,8 @@ def create_unified_email_card(state=None, active_view="main", email_type=None):
     Returns:
         Attachment: The complete adaptive card
     """
+    if state is None:
+        state = {}
     # Base card structure
     card = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -2343,11 +2345,16 @@ async def send_edit_email_card(turn_context: TurnContext, state, email_id=None):
         state: The conversation state containing the last generated email
         email_id: Optional specific email ID to edit
     """
+    if not state:
+        await turn_context.send_activity("I need to access your conversation history to edit emails. Please try again.")
+        return
+    
     with conversation_states_lock:
-        # If email_id is provided, try to get that specific email
-        if email_id and "email_history" in state and email_id in state["email_history"]:
-            email_data = state["email_history"][email_id]
-            original_email = email_data.get("email_text", "")
+        # Validate email_id if provided
+        if email_id:
+            if "email_history" not in state or email_id not in state["email_history"]:
+                await turn_context.send_activity(f"I couldn't find the email with ID {email_id}. It may have been removed from history.")
+                return
         else:
             # Fallback to last generated email
             email_id = state.get("last_email_id")
@@ -2364,108 +2371,390 @@ async def send_edit_email_card(turn_context: TurnContext, state, email_id=None):
     
     edit_card = create_edit_email_card(original_email, email_id)
     await send_card_response(turn_context, edit_card)
-async def apply_email_edits(turn_context: TurnContext, state, edit_instructions):
+async def apply_email_edits(turn_context: TurnContext, state: dict, edit_instructions: str, email_id: str = None):
     """
-    Applies edits to the previously generated email with intelligent retrieval support.
-    
-    Args:
-        turn_context: The turn context
-        state: The conversation state
-        edit_instructions: Instructions for editing the email
+    Applies edits to a previously generated email with intelligent retrieval support.
+    Fixed version with proper state management and error recovery.
     """
-    # Send typing indicator
-    await turn_context.send_activity(create_typing_activity())
+    # Initialize tracking variables
+    thread_id = None
+    operation_id = f"edit_{int(time.time())}_{hashlib.md5(edit_instructions.encode()).hexdigest()[:8]}"
+    start_time = time.time()
     
-    # Get the original email and metadata
-    with conversation_states_lock:
-        original_email = state.get("last_generated_email", "")
-        email_type = state.get("last_email_type", "client_service")
-        email_data = state.get("last_email_data", {})
+    # Create state backup for recovery
+    state_backup = {}
     
-    if not original_email:
-        await turn_context.send_activity("I couldn't find the original email to edit. Please create a new email.")
-        return
+    # Log the edit request for monitoring
+    user_id = turn_context.activity.from_property.id if hasattr(turn_context.activity, 'from_property') else "unknown"
+    logging.info(f"Email edit request from user {user_id}: operation_id={operation_id}, email_id={email_id}")
     
-    # Build retrieval query based on email type and edit instructions
-    retrieval_query = ""
-    if email_type == "client_service":
-        retrieval_query = "customer service email templates compliance guidelines "
-    else:
-        retrieval_query = "sales email templates compliance guidelines "
-    
-    retrieval_query += f"{edit_instructions} {email_data.get('subject', '')} {email_data.get('instructions', '')}"
-    
-    relevant_docs = await retrieve_documents(retrieval_query, top=3)
-    
-    # Format retrieved context
-    retrieved_context = ""
-    if relevant_docs:
-        retrieved_context = "\n\n--- RETRIEVED KNOWLEDGE FOR EDITS ---\n\n"
-        for doc in relevant_docs:
-            if isinstance(doc, dict):
-                content = doc.get("content", "")
-                if content:
-                    retrieved_context += f"{content[:1500]}...\n\n" if len(content) > 1500 else f"{content}\n\n"
-    
-    # Create prompt for editing
-    email_category_text = "This is a Customer Service email." if email_type == "client_service" else "This is a Sales email."
-    
-    prompt = f"""Edit the following email based on these instructions: {edit_instructions}
+    try:
+        # Step 1: Validate state and check if system is ready
+        if not state:
+            logging.error(f"No state provided for email edit operation {operation_id}")
+            await turn_context.send_activity("I'm unable to access the conversation state. Please try creating a new email instead.")
+            return
+        
+        # Step 2: Atomic busy check and state backup
+        thread_id = state.get("session_id")
+        
+        with conversation_states_lock:
+            if state.get("active_run", False):
+                active_operation = state.get("active_operation", "another request")
+                logging.info(f"Edit operation {operation_id} blocked - system busy with {active_operation}")
+                
+                busy_message = f"I'm currently {active_operation.replace('_', ' ')}. Please wait a moment and try again."
+                await turn_context.send_activity(busy_message)
+                return
+            
+            # Mark thread as busy for this edit operation
+            state["active_run"] = True
+            state["active_operation"] = f"editing_email_{operation_id}"
+            
+            # Create state backup
+            state_backup = {
+                "last_generated_email": state.get("last_generated_email"),
+                "last_email_type": state.get("last_email_type"),
+                "last_email_data": copy.deepcopy(state.get("last_email_data")),
+                "last_email_id": state.get("last_email_id"),
+                "email_history": copy.deepcopy(state.get("email_history", {}))
+            }
+        
+        # Update active runs tracking
+        if thread_id:
+            with active_runs_lock:
+                active_runs[thread_id] = True
+        
+        # Step 3: Send initial typing indicator
+        await turn_context.send_activity(create_typing_activity())
+        
+        # Step 4: Retrieve original email and metadata with validation
+        original_email = None
+        email_type = None
+        email_data = None
+        email_found = False
+        
+        with conversation_states_lock:
+            # Try to get the specific email by ID
+            if email_id and "email_history" in state:
+                if email_id in state["email_history"]:
+                    email_info = state["email_history"][email_id]
+                    original_email = email_info.get("email_text", "")
+                    email_type = email_info.get("email_type", "client_service")
+                    email_data = email_info.get("data", {})
+                    email_found = True
+                    logging.info(f"Found email {email_id} in history for editing")
+                else:
+                    logging.warning(f"Email ID {email_id} not found in history")
+            
+            # Fallback to last generated email if specific ID not found
+            if not email_found:
+                fallback_email_id = state.get("last_email_id")
+                if fallback_email_id and "email_history" in state and fallback_email_id in state["email_history"]:
+                    email_info = state["email_history"][fallback_email_id]
+                    original_email = email_info.get("email_text", "")
+                    email_type = email_info.get("email_type", "client_service")
+                    email_data = email_info.get("data", {})
+                    email_id = fallback_email_id
+                    email_found = True
+                    logging.info(f"Using last email {fallback_email_id} for editing")
+                else:
+                    # Final fallback to legacy fields
+                    original_email = state.get("last_generated_email", "")
+                    email_type = state.get("last_email_type", "client_service")
+                    email_data = state.get("last_email_data", {})
+                    if original_email:
+                        email_found = True
+                        logging.info("Using legacy last_generated_email for editing")
+        
+        # Validate we have an email to edit
+        if not email_found or not original_email:
+            logging.warning(f"No email found to edit in operation {operation_id}")
+            await turn_context.send_activity(
+                "I couldn't find an email to edit. Please create a new email first, then you can edit it."
+            )
+            return
+        
+        # Step 5: Build intelligent retrieval query
+        logging.info(f"Building retrieval query for {email_type} email edit")
+        
+        # Extract key themes from edit instructions
+        edit_keywords = []
+        instruction_lower = edit_instructions.lower()
+        
+        # Common edit patterns and their associated keywords
+        edit_patterns = {
+            "tone": ["tone", "formal", "casual", "friendly", "professional", "urgent", "empathetic"],
+            "length": ["shorter", "longer", "concise", "detailed", "brief", "expand"],
+            "content": ["add", "remove", "include", "mention", "emphasize", "highlight"],
+            "compliance": ["compliance", "guarantee", "promise", "legal", "disclaimer"],
+            "structure": ["bullet", "paragraph", "list", "format", "organize"]
+        }
+        
+        for category, keywords in edit_patterns.items():
+            if any(keyword in instruction_lower for keyword in keywords):
+                edit_keywords.extend(keywords)
+        
+        # Build comprehensive retrieval query
+        retrieval_query = f"{email_type.replace('_', ' ')} email templates "
+        retrieval_query += f"editing modifying {' '.join(edit_keywords)} "
+        retrieval_query += f"{email_data.get('subject', '')} {email_data.get('instructions', '')} "
+        retrieval_query += "compliance guidelines email best practices"
+        
+        # Step 6: Retrieve relevant documents
+        relevant_docs = []
+        try:
+            relevant_docs = await retrieve_documents(retrieval_query, top=5)
+            logging.info(f"Retrieved {len(relevant_docs) if relevant_docs else 0} documents for email editing")
+        except Exception as retrieval_error:
+            logging.error(f"Document retrieval failed in operation {operation_id}: {retrieval_error}")
+            # Continue without retrieval
+        
+        # Format retrieved context
+        retrieved_context = ""
+        if relevant_docs:
+            retrieved_context = "\n\n--- RETRIEVED KNOWLEDGE FOR EDITING ---\n\n"
+            for i, doc in enumerate(relevant_docs, 1):
+                if isinstance(doc, dict):
+                    content = doc.get("content", "")
+                    title = doc.get("title", f"Document {i}")
+                    if content:
+                        max_content_length = 2000
+                        if len(content) > max_content_length:
+                            content = content[:max_content_length] + "..."
+                        retrieved_context += f"[{title}]\n{content}\n\n"
+        
+        # Step 7: Prepare editing prompt with all context
+        email_category = "Customer Service" if email_type == "client_service" else "Sales"
+        
+        # Preserve important flags
+        has_attachments = email_data.get("has_attachments", False)
+        recipient = email_data.get("recipient", "")
+        subject = email_data.get("subject", "")
+        
+        # Build comprehensive editing prompt
+        prompt = f"""You are editing a {email_category} email based on specific instructions.
 
-{email_category_text}
+EDIT INSTRUCTIONS: {edit_instructions}
+
+ORIGINAL EMAIL CONTEXT:
+- Type: {email_category} Email
+- Recipient: {recipient if recipient else "Not specified"}
+- Subject: {subject if subject else "Not specified"}
+- Has Attachments: {"Yes" if has_attachments else "No"}
 
 ORIGINAL EMAIL:
 {original_email}
 
 {retrieved_context}
 
-CRITICAL REQUIREMENTS:
-1. Maintain the warm, human-like tone - don't make it sound robotic
-2. Keep the same department signature format
-3. Apply all compliance guidelines
-4. Make the requested changes while preserving the email's purpose
-5. Use appropriate template language if switching to a different type of email
+EDITING REQUIREMENTS:
+1. Apply the requested changes while maintaining the email's core purpose and message
+2. Preserve the exact department signature format (do not modify the signature block)
+3. Maintain a warm, human-like tone - avoid robotic or overly formal language
+4. Keep all factual information accurate and consistent
+5. Ensure all compliance requirements are met (see below)
+6. If the original mentioned attachments, preserve those references appropriately
+7. Maintain the same general structure unless specifically asked to change it
 
-COMPLIANCE REMINDERS:
+COMPLIANCE REQUIREMENTS (MANDATORY):
 - NEVER promise guaranteed results or specific outcomes
-- NEVER offer legal advice
-- NEVER use terms like 'debt forgiveness,' 'eliminate,' or 'erase' your debt
-- NEVER state or imply that the program prevents lawsuits
-- Use phrases like 'negotiated resolution' instead of 'paid in full'
+- NEVER offer legal advice or imply legal expertise
+- NEVER use prohibited terms: 'debt forgiveness', 'eliminate debt', 'erase debt'
+- NEVER state the program prevents lawsuits or legal action
+- NEVER claim all accounts will be resolved in a specific timeframe
+- NEVER suggest this is a credit repair service
+- NEVER guarantee loan qualification or credit score improvement
+- NEVER say clients are "required" to stop payments
+- NEVER use "paid in full" - use "negotiated resolution" instead
+- NEVER use high-pressure language like "act immediately" or "final notice"
+- NEVER claim government affiliation
 
-Please provide the complete revised email with all changes incorporated."""
-    
-    # Initialize chat if needed
-    if not state.get("assistant_id"):
-        await initialize_chat(turn_context, state)
-    
-    try:
-        # Use the existing process_conversation_internal function to get AI response
-        client = create_client()
-        result = await process_conversation_internal(
-            client=client,
-            session=state["session_id"],
-            prompt=prompt,
-            assistant=state["assistant_id"],
-            stream_output=False
-        )
+IMPORTANT: Provide ONLY the complete edited email. Do not include any explanations, comments, or meta-text about the changes made."""
+
+        # Step 8: Validate assistant and thread before processing
+        if not state.get("assistant_id") or not thread_id:
+            logging.info(f"Initializing chat for email edit operation {operation_id}")
+            await initialize_chat(turn_context, state)
+            thread_id = state.get("session_id")
         
-        # Extract and format the edited email
-        if isinstance(result, dict) and "response" in result:
-            edited_email = result["response"]
+        # Step 9: Process the edit request through AI
+        try:
+            client = create_client()
             
-            # Update the saved email
+            # Ensure thread is ready
+            thread_ready = await ensure_thread_completely_ready(client, thread_id)
+            if not thread_ready:
+                raise Exception("Thread not ready after waiting")
+            
+            # Validate resources exist
+            validation = await validate_resources(client, thread_id, state.get("assistant_id"))
+            if not validation["thread_valid"] or not validation["assistant_valid"]:
+                logging.error(f"Invalid resources detected in operation {operation_id}")
+                raise Exception("Invalid conversation resources")
+            
+            # Send typing indicator before AI processing
+            await turn_context.send_activity(create_typing_activity())
+            
+            # Process the edit request
+            result = await process_conversation_internal(
+                client=client,
+                session=thread_id,
+                prompt=prompt,
+                assistant=state["assistant_id"],
+                stream_output=False
+            )
+            
+            if not isinstance(result, dict) or "response" not in result:
+                raise Exception("Invalid response format from AI")
+            
+            edited_email = result["response"].strip()
+            
+            if not edited_email:
+                raise Exception("Empty response from AI")
+            
+            # Step 10: Run compliance check on edited email
+            logging.info(f"Running compliance check on edited email in operation {operation_id}")
+            
+            try:
+                compliance_result = await check_email_compliance(edited_email, email_type)
+                
+                if compliance_result and compliance_result.get("has_issues"):
+                    logging.info(f"Compliance issues found: {compliance_result.get('suggestion', '')}")
+                    
+                    # Auto-fix compliance issues with a focused prompt
+                    fix_prompt = f"""Fix ONLY this specific compliance issue in the email below:
+
+COMPLIANCE ISSUE: {compliance_result.get('suggestion', '')}
+
+EMAIL TO FIX:
+{edited_email}
+
+Return ONLY the corrected email with the compliance issue fixed. Make minimal changes - fix only what's mentioned in the compliance issue."""
+                    
+                    await turn_context.send_activity(create_typing_activity())
+                    
+                    fix_result = await process_conversation_internal(
+                        client=client,
+                        session=thread_id,
+                        prompt=fix_prompt,
+                        assistant=state["assistant_id"],
+                        stream_output=False
+                    )
+                    
+                    if isinstance(fix_result, dict) and "response" in fix_result and fix_result["response"].strip():
+                        edited_email = fix_result["response"].strip()
+                        logging.info("Applied compliance fixes to edited email")
+                    else:
+                        logging.warning("Failed to apply compliance fixes, using original edit")
+                        
+            except Exception as compliance_error:
+                logging.error(f"Compliance check failed in operation {operation_id}: {compliance_error}")
+                # Continue with the edited email despite compliance check failure
+            
+            # Step 11: Update state with edited email (with proper locking)
+            edit_timestamp = time.time()
+            
             with conversation_states_lock:
+                # Update the main email reference
                 state["last_generated_email"] = edited_email
+                
+                # Create updated email data
+                updated_email_data = {
+                    "email_text": edited_email,
+                    "email_type": email_type,
+                    "timestamp": email_data.get("timestamp", edit_timestamp),
+                    "edit_timestamp": edit_timestamp,
+                    "edited": True,
+                    "edit_instructions": edit_instructions,
+                    "edit_count": email_data.get("edit_count", 0) + 1 if email_data else 1,
+                    "data": email_data
+                }
+                
+                # Update email history if we have a valid email_id
+                if email_id and "email_history" in state:
+                    state["email_history"][email_id] = updated_email_data
+                    logging.info(f"Updated email {email_id} in history with edit")
+                
+                # Also update last_email_id to point to this edited email
+                state["last_email_id"] = email_id if email_id else f"edited_{operation_id}"
+                
+                # If no email_id, add to history with a generated ID
+                if not email_id:
+                    new_email_id = f"edited_{operation_id}"
+                    if "email_history" not in state:
+                        state["email_history"] = {}
+                    state["email_history"][new_email_id] = updated_email_data
+                    state["last_email_id"] = new_email_id
+            
+            # Step 12: Send the edited email result
+            logging.info(f"Email edit completed successfully in {time.time() - start_time:.2f}s")
             
             email_card = create_email_result_card(edited_email)
             await send_card_response(turn_context, email_card)
-        else:
-            await turn_context.send_activity("I'm sorry, I couldn't edit the email. Please try again.")
-    except Exception as e:
-        logging.error(f"Error editing email: {str(e)}")
+            
+        except Exception as processing_error:
+            logging.error(f"Error processing email edit in operation {operation_id}: {processing_error}")
+            traceback.print_exc()
+            
+            # Restore state on error
+            with conversation_states_lock:
+                for key, value in state_backup.items():
+                    state[key] = value
+                logging.info(f"Restored state after error in operation {operation_id}")
+            
+            # Send user-friendly error message
+            error_message = "I encountered an error while editing your email. "
+            
+            if "rate limit" in str(processing_error).lower():
+                error_message += "The system is experiencing high demand. Please try again in a few moments."
+            elif "thread" in str(processing_error).lower():
+                error_message += "There was an issue with the conversation session. Please try creating a new email."
+            else:
+                error_message += "Please try again or create a new email if the issue persists."
+            
+            await turn_context.send_activity(error_message)
+            
+    except Exception as outer_error:
+        logging.error(f"Unexpected error in email edit operation {operation_id}: {outer_error}")
         traceback.print_exc()
-        await turn_context.send_activity("I encountered an error while editing your email. Please try again.")
+        
+        # Restore state on any error
+        if state_backup:
+            with conversation_states_lock:
+                for key, value in state_backup.items():
+                    state[key] = value
+        
+        # Send generic error message
+        await turn_context.send_activity(
+            "I'm sorry, but I couldn't complete the email edit due to an unexpected error. "
+            "Please try again or create a new email."
+        )
+        
+    finally:
+        # Step 13: Always clean up state (critical for production)
+        try:
+            with conversation_states_lock:
+                state["active_run"] = False
+                state.pop("active_operation", None)
+            
+            if thread_id:
+                with active_runs_lock:
+                    if thread_id in active_runs:
+                        del active_runs[thread_id]
+            
+            # Stop typing indicator
+            try:
+                await turn_context.send_activity(create_typing_stop_activity())
+            except:
+                pass  # Ignore errors stopping typing
+                
+            # Log operation completion
+            total_time = time.time() - start_time
+            logging.info(f"Email edit operation {operation_id} completed in {total_time:.2f}s")
+            
+        except Exception as cleanup_error:
+            logging.error(f"Error during cleanup in operation {operation_id}: {cleanup_error}")
 async def handle_card_actions(turn_context: TurnContext, action_data):
     """Handles actions from adaptive cards with simplified email UI"""
     try:
@@ -2644,10 +2933,14 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             
         elif action_type == "apply_email_edits":
             edit_instructions = action_data.get("edit_instructions", "")
+            email_id = action_data.get("email_id", "")  # Extract email_id
+            if check_thread_busy(state):
+                await turn_context.send_activity("I'm currently processing another request. Please wait a moment and try again.")
+                return
             if not edit_instructions:
                 await turn_context.send_activity("Please provide instructions for how you'd like to edit the email.")
                 return
-            await apply_email_edits(turn_context, state, edit_instructions)
+            await apply_email_edits(turn_context, state, edit_instructions, email_id)
             return
             
         elif action_type == "cancel_edit":
@@ -3183,16 +3476,32 @@ async def generate_email(turn_context: TurnContext, state, email_type, recipient
         skip_compliance_check: Skip the compliance check (default: False)
     """
     # Get thread ID early for state management
-    thread_id = state.get("session_id")
+    request_hash = hashlib.md5(f"{email_type}{recipient}{subject}{instructions}{context}{has_attachments}".encode()).hexdigest()
+    
+    with conversation_states_lock:
+        last_request_hash = state.get("last_email_request_hash")
+        last_request_time = state.get("last_email_request_time", 0)
+        
+        # If same request within 5 seconds, show the last generated email
+        if last_request_hash == request_hash and time.time() - last_request_time < 5:
+            if state.get("last_generated_email"):
+                email_card = create_email_result_card(state["last_generated_email"])
+                await send_card_response(turn_context, email_card)
+                return
+        
+        # Store new request hash
+        state["last_email_request_hash"] = request_hash
+        state["last_email_request_time"] = time.time()
     
     # Mark as busy BEFORE any async operations
     with conversation_states_lock:
         if state.get("active_run", False):
-            # Already processing something
             await turn_context.send_activity("I'm currently processing another request. Please wait a moment and try again.")
             return
         state["active_run"] = True
         state["active_operation"] = "email_generation"
+        thread_id = state.get("session_id")
+    
     
     if thread_id:
         with active_runs_lock:
@@ -4640,6 +4949,16 @@ async def summarize_thread_if_needed(client: AzureOpenAI, thread_id: str, state:
         bool: True if summarization was performed, False otherwise
     """
     try:
+        with conversation_states_lock:
+            if state.get("active_run", False):
+                logging.info(f"Skipping summarization - active operation: {state.get('active_operation', 'unknown')}")
+                return False
+            
+            # Also check for recent email operations
+            last_email_time = state.get("last_email_request_time", 0)
+            if time.time() - last_email_time < 60:  # Within last minute
+                logging.info("Skipping summarization - recent email operation")
+                return False
         # Check if we're in an email workflow - if so, skip summarization
         with conversation_states_lock:
             is_email_workflow = state.get("last_email_type") is not None
@@ -5208,6 +5527,39 @@ async def ensure_thread_ready(client, thread_id, max_wait=15):
     
     logging.warning(f"Thread {thread_id} still has active runs after {waited}s wait")
     return False
+
+async def ensure_thread_completely_ready(client, thread_id, max_wait=20):
+    """Ensure thread has NO active runs and is completely ready"""
+    waited = 0
+    while waited < max_wait:
+        try:
+            runs = client.beta.threads.runs.list(thread_id=thread_id, limit=5)
+            has_active = False
+            
+            for run in runs.data:
+                if run.status in ["in_progress", "queued", "requires_action", "cancelling"]:
+                    has_active = True
+                    logging.info(f"Thread {thread_id} has active run {run.id} with status {run.status}")
+                    
+                    # Try to cancel if not already cancelling
+                    if run.status != "cancelling":
+                        try:
+                            client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run.id)
+                        except:
+                            pass
+                    break
+            
+            if not has_active:
+                return True
+                
+            await asyncio.sleep(1)
+            waited += 1
+            
+        except Exception as e:
+            logging.error(f"Error checking thread readiness: {e}")
+            return False
+    
+    return False
 # Modified process_pending_messages function to fix the run conflict
 async def process_pending_messages(turn_context: TurnContext, state, conversation_id):
     """Process any pending messages in the queue safely with improved handling"""
@@ -5225,19 +5577,60 @@ async def process_pending_messages(turn_context: TurnContext, state, conversatio
     if not messages_to_process:
         return
     
+    # Get client once for all messages
+    client = create_client()
+    
     # Process messages sequentially with proper isolation
     for i, next_message in enumerate(messages_to_process):
         try:
-            # CRITICAL: Ensure thread is not busy before processing
-            max_wait_for_ready = 10  # seconds
-            waited = 0
-            while check_thread_busy(state) and waited < max_wait_for_ready:
-                await asyncio.sleep(1)
-                waited += 1
-                logging.info(f"Waiting for thread to be ready before processing pending message {i+1}...")
+            # CRITICAL FIX: Ensure completely clean state before each message
+            thread_id = state.get("session_id")
+            assistant_id = state.get("assistant_id")
+            
+            if not thread_id or not assistant_id:
+                await turn_context.send_activity(f"I'm having trouble with your follow-up question #{i+1}. Let's start a new conversation.")
+                continue
+            
+            # Wait for thread to be completely ready (no active runs)
+            thread_ready = await ensure_thread_completely_ready(client, thread_id, max_wait=30)
+            
+            if not thread_ready:
+                # Thread is stuck, create a new one
+                logging.warning(f"Thread {thread_id} not ready after waiting, creating new thread for pending message {i+1}")
+                
+                try:
+                    # Create new thread
+                    new_thread = client.beta.threads.create()
+                    old_thread_id = thread_id
+                    thread_id = new_thread.id
+                    
+                    # Update state with new thread
+                    with conversation_states_lock:
+                        state["session_id"] = thread_id
+                        # Clear active run state
+                        state["active_run"] = False
+                        state.pop("active_operation", None)
+                    
+                    # Clear old thread from active runs
+                    with active_runs_lock:
+                        if old_thread_id in active_runs:
+                            del active_runs[old_thread_id]
+                    
+                    logging.info(f"Created new thread {thread_id} to replace stuck thread {old_thread_id}")
+                    
+                except Exception as thread_error:
+                    logging.error(f"Failed to create new thread: {thread_error}")
+                    await turn_context.send_activity(f"I couldn't process follow-up message #{i+1}. Please try asking again.")
+                    continue
+            
+            # Double-check state is clean
+            with conversation_states_lock:
+                if state.get("active_run", False):
+                    # Force clear if somehow still marked as active
+                    state["active_run"] = False
+                    state.pop("active_operation", None)
             
             # Mark thread as busy for this pending message
-            thread_id = state.get("session_id")
             with conversation_states_lock:
                 state["active_run"] = True
                 state["active_operation"] = f"pending_message_{i+1}"
@@ -5250,28 +5643,14 @@ async def process_pending_messages(turn_context: TurnContext, state, conversatio
             if i == 0:
                 await turn_context.send_activity("I'll now address your follow-up messages...")
             
-            # Get the thread and assistant IDs
-            assistant_id = state.get("assistant_id")
-            
-            if not thread_id or not assistant_id:
-                await turn_context.send_activity(f"I'm having trouble with your follow-up question #{i+1}. Let's start a new conversation.")
-                continue
-            
-            # Create a new client
-            client = create_client()
-            
             # Send typing indicator
             await turn_context.send_activity(create_typing_activity())
             
-            # CRITICAL: Ensure no active runs before processing
-            await ensure_thread_ready(client, thread_id)
-            
-            # Check if this is an email-related follow-up
-            is_email_followup = any(keyword in next_message.lower() for keyword in ["email", "change", "edit", "modify", "update"])
-            
-            # Add the follow-up message to the thread
             try:
-                # If it's an email follow-up and we have email context, include it
+                # Check if this is an email-related follow-up
+                is_email_followup = any(keyword in next_message.lower() for keyword in ["email", "change", "edit", "modify", "update"])
+                
+                # Build message content
                 message_content = next_message
                 if is_email_followup and state.get("last_generated_email"):
                     message_content = f"{next_message}\n\n[Context: This relates to the previously generated email]"
@@ -5280,47 +5659,51 @@ async def process_pending_messages(turn_context: TurnContext, state, conversatio
                 relevant_docs = await retrieve_documents(next_message, top=3)
                 enhanced_message = await format_message_with_rag(message_content, relevant_docs)
                 
-                client.beta.threads.messages.create(
-                    thread_id=thread_id,
-                    role="user",
-                    content=enhanced_message
+                # Add message with retry logic
+                message_added = False
+                for retry in range(3):
+                    try:
+                        client.beta.threads.messages.create(
+                            thread_id=thread_id,
+                            role="user",
+                            content=enhanced_message
+                        )
+                        message_added = True
+                        logging.info(f"Added follow-up message #{i+1} to thread {thread_id}")
+                        break
+                    except Exception as msg_error:
+                        if retry < 2:
+                            logging.warning(f"Retry {retry+1} for adding message: {msg_error}")
+                            await asyncio.sleep(2 * (retry + 1))
+                        else:
+                            raise msg_error
+                
+                if not message_added:
+                    raise Exception("Failed to add message after retries")
+                
+                # Process the response using dedicated function
+                success = await process_single_pending_message_improved(
+                    turn_context, state, client, thread_id, assistant_id, i+1, len(messages_to_process)
                 )
                 
-                logging.info(f"Added follow-up message #{i+1} to thread {thread_id}")
-            except Exception as msg_error:
-                logging.error(f"Error adding follow-up message #{i+1}: {msg_error}")
-                await turn_context.send_activity(f"I couldn't process follow-up message #{i+1}. Please try asking again.")
-                continue
-            
-            # Process the response with streaming - use a dedicated wrapper
-            try:
-                await process_single_pending_message(turn_context, state, client, thread_id, assistant_id, i+1, len(messages_to_process))
+                if not success:
+                    await turn_context.send_activity(f"I had trouble processing follow-up message #{i+1}. Please try asking again.")
                 
                 # Brief pause before next message to ensure clean state
                 if i < len(messages_to_process) - 1:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(2)
                     
             except Exception as process_error:
                 logging.error(f"Error processing follow-up #{i+1}: {process_error}")
                 await turn_context.send_activity(f"I had trouble processing follow-up message #{i+1}. Please try asking again.")
             
-            finally:
-                # ALWAYS clean up state after each message
-                with conversation_states_lock:
-                    state["active_run"] = False
-                    state.pop("active_operation", None)
-                
-                if thread_id:
-                    with active_runs_lock:
-                        if thread_id in active_runs:
-                            del active_runs[thread_id]
-                
         except Exception as e:
             logging.error(f"Error processing follow-up message #{i+1}: {e}")
             traceback.print_exc()
             await turn_context.send_activity(f"I encountered an error with message #{i+1}. Please try asking again.")
             
-            # Clean up state even on error
+        finally:
+            # ALWAYS clean up state after each message
             with conversation_states_lock:
                 state["active_run"] = False
                 state.pop("active_operation", None)
@@ -5332,36 +5715,164 @@ async def process_pending_messages(turn_context: TurnContext, state, conversatio
             
             # Continue with remaining messages
             if i < len(messages_to_process) - 1:
-                await turn_context.send_activity("I'll continue with your remaining messages...")
+                await turn_context.send_activity("Continuing with your next message...")
                 await asyncio.sleep(1)
     
     # Final message if we processed multiple messages
     if len(messages_to_process) > 1:
         await turn_context.send_activity("I've finished processing all your follow-up messages. Is there anything else I can help you with?")
-# Add this to the end of handle_text_message function
-async def ensure_no_active_runs(client, thread_id):
-    """Ensure there are no active runs on the thread"""
+async def process_single_pending_message_improved(turn_context, state, client, thread_id, assistant_id, message_num, total_messages):
+    """Process a single pending message with improved error handling"""
     try:
-        runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
-        active_run_found = False
+        # Create run with retry logic
+        run_id = None
+        run_created = False
         
-        if runs.data:
-            for run in runs.data:
-                if run.status in ["in_progress", "queued", "requires_action"]:
-                    # Try to cancel it
-                    logging.info(f"Cancelling active run {run.id}")
-                    try:
-                        client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run.id)
-                    except Exception as cancel_e:
-                        logging.warning(f"Error cancelling run {run.id}: {cancel_e}")
+        for retry in range(3):
+            try:
+                run = client.beta.threads.runs.create(
+                    thread_id=thread_id,
+                    assistant_id=assistant_id
+                )
+                run_id = run.id
+                run_created = True
+                logging.info(f"Created run {run_id} for pending message {message_num}")
+                break
+                
+            except Exception as run_error:
+                if "already has an active run" in str(run_error) and retry < 2:
+                    logging.warning(f"Thread busy on run creation attempt {retry+1}, waiting...")
+                    await asyncio.sleep(3 * (retry + 1))
                     
-                    active_run_found = True
+                    # Try to ensure thread is ready again
+                    ready = await ensure_thread_completely_ready(client, thread_id, max_wait=10)
+                    if not ready and retry == 1:
+                        # Last resort - create new thread
+                        new_thread = client.beta.threads.create()
+                        old_thread = thread_id
+                        thread_id = new_thread.id
+                        
+                        with conversation_states_lock:
+                            state["session_id"] = thread_id
+                        
+                        logging.info(f"Created new thread {thread_id} for pending message")
+                        # Don't break, let it retry with new thread
+                else:
+                    raise run_error
         
-        # If we found an active run, wait for it to be cancelled
-        if active_run_found:
-            await asyncio.sleep(2)  # Give the cancellation time to take effect
+        if not run_created:
+            raise Exception("Failed to create run after all retries")
+        
+        # Poll for completion
+        max_wait = 60
+        poll_interval = 2
+        elapsed = 0
+        completed = False
+        
+        while elapsed < max_wait:
+            await turn_context.send_activity(create_typing_activity())
+            
+            try:
+                run_status = client.beta.threads.runs.retrieve(
+                    thread_id=thread_id,
+                    run_id=run_id
+                )
+                
+                if run_status.status == "completed":
+                    completed = True
+                    
+                    # Get the response
+                    messages = client.beta.threads.messages.list(
+                        thread_id=thread_id,
+                        order="desc",
+                        limit=1
+                    )
+                    
+                    if messages.data:
+                        response_text = ""
+                        for content in messages.data[0].content:
+                            if content.type == 'text':
+                                response_text += content.text.value
+                        
+                        if response_text:
+                            # Check for duplicate
+                            response_hash = get_response_hash(response_text)
+                            with conversation_states_lock:
+                                if "last_responses" not in state:
+                                    state["last_responses"] = deque(maxlen=5)
+                                
+                                if response_hash not in state["last_responses"]:
+                                    state["last_responses"].append(response_hash)
+                                    await turn_context.send_activity(response_text)
+                                else:
+                                    logging.warning(f"Prevented duplicate response for pending message {message_num}")
+                            
+                            logging.info(f"Successfully processed pending message {message_num}")
+                            return True
+                    break
+                    
+                elif run_status.status in ["failed", "cancelled", "expired"]:
+                    logging.error(f"Run {run_id} ended with status: {run_status.status}")
+                    break
+                    
+            except Exception as poll_error:
+                logging.error(f"Error polling run for pending message {message_num}: {poll_error}")
+                
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+        
+        if not completed:
+            logging.error(f"Pending message {message_num} processing timed out or failed")
+            
+        return completed
+        
     except Exception as e:
-        logging.warning(f"Error checking for active runs: {e}")
+        logging.error(f"Error processing pending message {message_num}: {e}")
+        traceback.print_exc()
+        return False
+async def ensure_thread_completely_ready(client, thread_id, max_wait=30):
+    """Ensure thread has NO active runs and is completely ready"""
+    waited = 0
+    
+    while waited < max_wait:
+        try:
+            runs = client.beta.threads.runs.list(thread_id=thread_id, limit=10)
+            has_active = False
+            active_runs_found = []
+            
+            for run in runs.data:
+                if run.status in ["in_progress", "queued", "requires_action", "cancelling"]:
+                    has_active = True
+                    active_runs_found.append((run.id, run.status))
+                    
+                    # Try to cancel if not already cancelling
+                    if run.status != "cancelling":
+                        try:
+                            client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run.id)
+                            logging.info(f"Requested cancellation of run {run.id}")
+                        except Exception as cancel_e:
+                            logging.warning(f"Could not cancel run {run.id}: {cancel_e}")
+            
+            if not has_active:
+                logging.info(f"Thread {thread_id} is ready - no active runs")
+                return True
+            
+            logging.info(f"Thread {thread_id} has {len(active_runs_found)} active runs: {active_runs_found}")
+            
+            # Wait a bit for cancellations to take effect
+            await asyncio.sleep(2)
+            waited += 2
+            
+            # After 10 seconds, try more aggressive cleanup
+            if waited >= 10 and has_active:
+                logging.warning(f"Thread {thread_id} still has active runs after {waited}s, may need new thread")
+                
+        except Exception as e:
+            logging.error(f"Error checking thread readiness: {e}")
+            return False
+    
+    logging.error(f"Thread {thread_id} not ready after {max_wait}s wait")
+    return False
 # Right before the function returns
 async def cleanup_after_message():
     """Ensure all state is properly reset after message processing"""
@@ -5393,6 +5904,28 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
         state: The conversation state
         user_message: The user's message (can be None for follow-up processing)
     """
+    if user_message:
+        message_hash = get_response_hash(user_message)
+        with conversation_states_lock:
+            if "recent_queries" not in state:
+                state["recent_queries"] = deque(maxlen=10)
+            
+            # Check if this exact query was just processed
+            recent_hashes = [q["hash"] for q in state["recent_queries"]]
+            if message_hash in recent_hashes:
+                # Find the recent response
+                for q in state["recent_queries"]:
+                    if q["hash"] == message_hash and time.time() - q["time"] < 5:
+                        logging.info("Detected duplicate query within 5 seconds")
+                        await turn_context.send_activity(q["response"])
+                        return
+            
+            # Add to recent queries
+            state["recent_queries"].append({
+                "hash": message_hash,
+                "time": time.time(),
+                "response": None  # Will be updated when response is ready
+            })
     completed = False  # Track completion status for pending message processing
     conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
     conversation_id = conversation_reference.conversation.id
