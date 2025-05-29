@@ -1432,7 +1432,10 @@ class TeamsStreamingResponse:
         self.stream_id = f"stream_{int(time.time())}"
         self.last_update_time = 0
         self.min_update_interval = 1.5  # Minimum time between updates in seconds (Teams requirement)
-        
+    def replace_buffer_with(self, text: str) -> None:
+        """Make *text* the only thing that will be sent in send_final_message()."""
+        self.message_parts.clear()
+        self.message_parts.append(text)
     async def send_typing_indicator(self):
         """Sends a typing indicator to Teams"""
         await self.turn_context.send_activity(create_typing_activity())
@@ -5553,27 +5556,37 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
                         if run_status.status == "completed":
                             logging.info(f"Run {run_id} completed successfully")
                             completed = True
-                            
-                            # Get the complete message
+                        
+                            # Fetch the assistant’s most-recent message (same logic as before)
                             messages = client.beta.threads.messages.list(
                                 thread_id=thread_id,
                                 order="desc",
                                 limit=1
                             )
-                            
+                        
                             if messages.data:
                                 latest_message = messages.data[0]
                                 message_text = ""
-                                
+                        
                                 for content_part in latest_message.content:
-                                    if content_part.type == 'text':
+                                    if content_part.type == "text":
                                         message_text += content_part.text.value
-                                
-                                # Queue the complete message
-                                if message_text:
-                                    streamer.queue_text_chunk(message_text)
-                            
-                            break
+                        
+                                # ── NO DUPLICATES ─────────────────────────────────────────────
+                                streamer.replace_buffer_with(
+                                    message_text or "I couldn't generate a response. Please try again."
+                                )
+                                await streamer.send_final_message()   # flush exactly once
+                                return                                # done with this user request
+                                # ──────────────────────────────────────────────────────────────
+                        
+                            # Fallback if, for some reason, there was no text message
+                            streamer.replace_buffer_with(
+                                "I didn't receive a valid response. Please try again."
+                            )
+                            await streamer.send_final_message()
+                            return
+
                             
                         # Check for failure states
                         elif run_status.status in ["failed", "cancelled", "expired"]:
@@ -5951,14 +5964,22 @@ async def poll_for_message(client, thread_id, streamer):
             
             # Queue the complete message if we have it
             if message_text:
-                streamer.queue_text_chunk(message_text)
+                # ── NO DUPLICATES ────────────────────────────────────────────
+                streamer.replace_buffer_with(message_text)  # new helper
+                await streamer.send_final_message()
                 return
         
-        streamer.queue_text_chunk("I processed your request but couldn't generate a proper response. Please try again.")
+        streamer.replace_buffer_with(
+            "I processed your request but couldn't generate a proper response. Please try again."
+        )
+        await streamer.send_final_message()
         
     except Exception as e:
         logging.error(f"Error in poll_for_message: {e}")
-        streamer.queue_text_chunk("I encountered an error while retrieving the response. Please try again.")
+        streamer.replace_buffer_with(
+            "I encountered an error while retrieving the response. Please try again."
+        )
+        await streamer.send_final_message()
 
 async def validate_resources(client: AzureOpenAI, thread_id: Optional[str], assistant_id: Optional[str]) -> Dict[str, bool]:
     """
