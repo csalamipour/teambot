@@ -2479,8 +2479,74 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
         
         state = conversation_states[conversation_id]
         
+        # Check if busy for any action that will generate content
+        action_type = action_data.get("action")
+        
+        # List of actions that require processing
+        processing_actions = ["generate_email", "apply_email_edits", "create_email"]
+        
+        if action_type in processing_actions:
+            if check_thread_busy(state):
+                # Get current operation for better messaging
+                active_operation = state.get("active_operation", "another request")
+                
+                # Create an informative card about the busy state
+                busy_card = {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.5",
+                    "body": [
+                        {
+                            "type": "Container",
+                            "style": "attention",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": "⏳ Processing in Progress",
+                                    "size": "medium",
+                                    "weight": "bolder",
+                                    "horizontalAlignment": "center"
+                                }
+                            ],
+                            "bleed": True
+                        },
+                        {
+                            "type": "Container",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": f"I'm currently busy with {active_operation}.",
+                                    "wrap": True
+                                },
+                                {
+                                    "type": "TextBlock",
+                                    "text": "Please wait a moment and try again. Most operations complete within 10-30 seconds.",
+                                    "wrap": True,
+                                    "isSubtle": True
+                                }
+                            ]
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "type": "Action.Submit",
+                            "title": "Try Again",
+                            "data": action_data,
+                            "style": "positive"
+                        }
+                    ]
+                }
+                
+                attachment = Attachment(
+                    content_type="application/vnd.microsoft.card.adaptive",
+                    content=busy_card
+                )
+                
+                await send_card_response(turn_context, attachment)
+                return
+        
         # Handle view changes for the unified card
-        if action_data.get("action") == "view_change":
+        if action_type == "view_change":
             view = action_data.get("view", "main")
             email_type = action_data.get("email_type", None)
             
@@ -2492,7 +2558,7 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             return
         
         # Handle email generation from unified card
-        elif action_data.get("action") == "generate_email":
+        elif action_type == "generate_email":
             # Get email type
             email_type = action_data.get("email_type", "client_service")
             
@@ -2502,6 +2568,55 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             instructions = action_data.get("instructions", "")
             context = action_data.get("context", "")
             has_attachments = action_data.get("hasAttachments", "false") == "true"
+            
+            # Validate required fields
+            if not instructions:
+                # Show error card
+                error_card = {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.5",
+                    "body": [
+                        {
+                            "type": "Container",
+                            "style": "attention",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": "⚠️ Missing Required Information",
+                                    "size": "medium",
+                                    "weight": "bolder",
+                                    "color": "attention"
+                                }
+                            ],
+                            "bleed": True
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "Please provide instructions for the email. This helps me understand what kind of email you need.",
+                            "wrap": True
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "type": "Action.Submit",
+                            "title": "Go Back",
+                            "data": {
+                                "action": "view_change",
+                                "view": "form",
+                                "email_type": email_type
+                            }
+                        }
+                    ]
+                }
+                
+                attachment = Attachment(
+                    content_type="application/vnd.microsoft.card.adaptive",
+                    content=error_card
+                )
+                
+                await send_card_response(turn_context, attachment)
+                return
             
             # Generate email using AI with retrieval
             await generate_email(
@@ -2517,19 +2632,33 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
             return
         
         # Handle other actions as before
-        elif action_data.get("action") == "new_chat":
+        elif action_type == "new_chat":
             await handle_new_chat_command(turn_context, state, conversation_id)
             return
-        elif action_data.get("action") == "edit_email":
-            await send_edit_email_card(turn_context, state)
+            
+        elif action_type == "edit_email":
+            # Get the email ID if provided
+            email_id = action_data.get("email_id")
+            await send_edit_email_card(turn_context, state, email_id)
             return
-        elif action_data.get("action") == "apply_email_edits":
+            
+        elif action_type == "apply_email_edits":
             edit_instructions = action_data.get("edit_instructions", "")
+            if not edit_instructions:
+                await turn_context.send_activity("Please provide instructions for how you'd like to edit the email.")
+                return
             await apply_email_edits(turn_context, state, edit_instructions)
             return
-        elif action_data.get("action") == "cancel_edit":
+            
+        elif action_type == "cancel_edit":
+            # Get email ID from action data
+            email_id = action_data.get("email_id")
+            
             with conversation_states_lock:
-                original_email = state.get("last_generated_email", "")
+                if email_id and "email_history" in state and email_id in state["email_history"]:
+                    original_email = state["email_history"][email_id]["email_text"]
+                else:
+                    original_email = state.get("last_generated_email", "")
             
             if original_email:
                 result_card = create_email_result_card(original_email)
@@ -2540,8 +2669,19 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
                 await send_card_response(turn_context, unified_card)
             return
         
+        elif action_type == "show_upload_info":
+            await handle_info_request(turn_context, "upload")
+            return
+        
+        elif action_type == "show_template_categories":
+            # Show main email card
+            unified_card = create_unified_email_card(state, "main")
+            await send_card_response(turn_context, unified_card)
+            return
+        
         # Default to showing main view
         else:
+            logging.warning(f"Unknown card action: {action_type}")
             unified_card = create_unified_email_card(state, "main")
             await send_card_response(turn_context, unified_card)
             return
@@ -2549,7 +2689,12 @@ async def handle_card_actions(turn_context: TurnContext, action_data):
     except Exception as e:
         logging.error(f"Error handling card action: {e}")
         traceback.print_exc()
-        await turn_context.send_activity(f"I couldn't process your request. Please try again later.")
+        
+        # Try to send a friendly error message
+        try:
+            await turn_context.send_activity("I encountered an error processing your request. Please try again.")
+        except:
+            pass  # If even error message fails, just log it
 async def send_email_card(turn_context: TurnContext, template_mode="main", channel=None):
     """
     Sends a simplified unified email card.
@@ -3037,89 +3182,106 @@ async def generate_email(turn_context: TurnContext, state, email_type, recipient
         has_attachments: Whether to mention attachments
         skip_compliance_check: Skip the compliance check (default: False)
     """
-    # Send typing indicator
-    await turn_context.send_activity(create_typing_activity())
+    # Get thread ID early for state management
+    thread_id = state.get("session_id")
     
-    # Build SMART retrieval query based on email type and instructions
-    retrieval_query = ""
+    # Mark as busy BEFORE any async operations
+    with conversation_states_lock:
+        if state.get("active_run", False):
+            # Already processing something
+            await turn_context.send_activity("I'm currently processing another request. Please wait a moment and try again.")
+            return
+        state["active_run"] = True
+        state["active_operation"] = "email_generation"
     
-    # Analyze instructions to extract key topics
-    instruction_keywords = ""
-    if instructions:
-        instruction_lower = instructions.lower()
-        # Extract keywords based on common scenarios
-        keyword_mapping = {
-            # Customer Service Keywords
-            "legal": "legal update legal threat lawsuit summons complaint legal action attorney",
-            "settlement": "settlement missed payment lost settlement voided agreement negotiated savings",
-            "payment": "payment returned draft reduction monthly payment gateway insufficient funds",
-            "collection": "collection calls creditor contact harassment creditor notices",
-            "credit": "credit score credit concerns credit report credit impact rebuilding credit",
-            "timeline": "settlement timeline when resolved how long timeframe negotiation schedule",
-            "cost": "program cost fees expensive afford monthly payment burden",
-            "account": "account exclusion creditor jealousy exclude accounts keep accounts open",
-            "welcome": "welcome new client enrollment congratulations program guide",
-            
-            # Sales Keywords
-            "quote": "pre-approved quote debt relief quote monthly savings payment comparison",
-            "analysis": "financial analysis debt situation credit utilization interest rates",
-            "follow": "follow up previous conversation checking in next steps",
-            "loan": "loan qualification loan option pre-qualification denied approval",
-            "decision": "uncertain decision comparing options minimum payments consolidation",
-            "program": "program overview debt resolution how it works benefits faster",
-        }
+    if thread_id:
+        with active_runs_lock:
+            active_runs[thread_id] = True
+    
+    try:
+        # Send typing indicator
+        await turn_context.send_activity(create_typing_activity())
         
-        for key, keywords in keyword_mapping.items():
-            if key in instruction_lower:
-                instruction_keywords += f" {keywords}"
-    
-    if email_type == "client_service":
-        # For customer service, build comprehensive keyword query
-        retrieval_query = "customer service email templates existing client support "
-        retrieval_query += "welcome email legal update lost settlement legal confirmation "
-        retrieval_query += "payment returned legal threat draft reduction creditor notices "
-        retrieval_query += "collection calls credit concerns settlement timeline program cost "
-        retrieval_query += "account exclusion client services team signature "
-        retrieval_query += instruction_keywords
-    else:  # sales_service
-        # For sales, build comprehensive keyword query
-        retrieval_query = "sales email templates pre-approved quote enrollment prospect "
-        retrieval_query += "financial analysis debt consolidation program overview "
-        retrieval_query += "follow-up decision uncertainty loan qualification "
-        retrieval_query += "sales signature direct line monthly savings debt-free faster "
-        retrieval_query += instruction_keywords
-    
-    # Add specific context to retrieval
-    if subject:
-        retrieval_query += f" {subject}"
-    if context:
-        retrieval_query += f" {context}"
-    
-    # Use RAG to retrieve relevant documents
-    logging.info(f"Smart retrieval for {email_type} with enhanced query: {retrieval_query[:300]}...")
-    relevant_docs = await retrieve_documents(retrieval_query, top=5)
-    
-    # Format the retrieved information
-    retrieved_context = ""
-    if relevant_docs and len(relevant_docs) > 0:
-        retrieved_context = "\n\n--- RETRIEVED KNOWLEDGE ---\n\n"
-        for i, doc in enumerate(relevant_docs, 1):
-            if isinstance(doc, dict):
-                title = doc.get("title", "")
-                content = doc.get("content", "")
-                if title:
-                    retrieved_context += f"{title}\n"
-                if content:
-                    # Include substantial content for template matching
-                    if len(content) > 4000:
-                        content = content[:4000] + "..."
-                    retrieved_context += f"{content}\n\n"
-        logging.info(f"Retrieved {len(relevant_docs)} relevant documents for {email_type} email generation")
-    
-    # Create the prompt with routing intelligence
-    email_category_text = "This is a Customer Service email request." if email_type == "client_service" else "This is a Sales email request."
-    
-    prompt = f"""{email_category_text}
+        # Build SMART retrieval query based on email type and instructions
+        retrieval_query = ""
+        
+        # Analyze instructions to extract key topics
+        instruction_keywords = ""
+        if instructions:
+            instruction_lower = instructions.lower()
+            # Extract keywords based on common scenarios
+            keyword_mapping = {
+                # Customer Service Keywords
+                "legal": "legal update legal threat lawsuit summons complaint legal action attorney",
+                "settlement": "settlement missed payment lost settlement voided agreement negotiated savings",
+                "payment": "payment returned draft reduction monthly payment gateway insufficient funds",
+                "collection": "collection calls creditor contact harassment creditor notices",
+                "credit": "credit score credit concerns credit report credit impact rebuilding credit",
+                "timeline": "settlement timeline when resolved how long timeframe negotiation schedule",
+                "cost": "program cost fees expensive afford monthly payment burden",
+                "account": "account exclusion creditor jealousy exclude accounts keep accounts open",
+                "welcome": "welcome new client enrollment congratulations program guide",
+                
+                # Sales Keywords
+                "quote": "pre-approved quote debt relief quote monthly savings payment comparison",
+                "analysis": "financial analysis debt situation credit utilization interest rates",
+                "follow": "follow up previous conversation checking in next steps",
+                "loan": "loan qualification loan option pre-qualification denied approval",
+                "decision": "uncertain decision comparing options minimum payments consolidation",
+                "program": "program overview debt resolution how it works benefits faster",
+            }
+            
+            for key, keywords in keyword_mapping.items():
+                if key in instruction_lower:
+                    instruction_keywords += f" {keywords}"
+        
+        if email_type == "client_service":
+            # For customer service, build comprehensive keyword query
+            retrieval_query = "customer service email templates existing client support "
+            retrieval_query += "welcome email legal update lost settlement legal confirmation "
+            retrieval_query += "payment returned legal threat draft reduction creditor notices "
+            retrieval_query += "collection calls credit concerns settlement timeline program cost "
+            retrieval_query += "account exclusion client services team signature "
+            retrieval_query += instruction_keywords
+        else:  # sales_service
+            # For sales, build comprehensive keyword query
+            retrieval_query = "sales email templates pre-approved quote enrollment prospect "
+            retrieval_query += "financial analysis debt consolidation program overview "
+            retrieval_query += "follow-up decision uncertainty loan qualification "
+            retrieval_query += "sales signature direct line monthly savings debt-free faster "
+            retrieval_query += instruction_keywords
+        
+        # Add specific context to retrieval
+        if subject:
+            retrieval_query += f" {subject}"
+        if context:
+            retrieval_query += f" {context}"
+        
+        # Use RAG to retrieve relevant documents
+        logging.info(f"Smart retrieval for {email_type} with enhanced query: {retrieval_query[:300]}...")
+        relevant_docs = await retrieve_documents(retrieval_query, top=5)
+        
+        # Format the retrieved information
+        retrieved_context = ""
+        if relevant_docs and len(relevant_docs) > 0:
+            retrieved_context = "\n\n--- RETRIEVED KNOWLEDGE ---\n\n"
+            for i, doc in enumerate(relevant_docs, 1):
+                if isinstance(doc, dict):
+                    title = doc.get("title", "")
+                    content = doc.get("content", "")
+                    if title:
+                        retrieved_context += f"{title}\n"
+                    if content:
+                        # Include substantial content for template matching
+                        if len(content) > 4000:
+                            content = content[:4000] + "..."
+                        retrieved_context += f"{content}\n\n"
+            logging.info(f"Retrieved {len(relevant_docs)} relevant documents for {email_type} email generation")
+        
+        # Create the prompt with routing intelligence
+        email_category_text = "This is a Customer Service email request." if email_type == "client_service" else "This is a Sales email request."
+        
+        prompt = f"""{email_category_text}
 
 You are the First Choice Debt Relief AI Assistant helping an employee draft an email. 
 
@@ -3144,9 +3306,9 @@ CRITICAL INSTRUCTIONS:
 
 DEPARTMENT-SPECIFIC REQUIREMENTS:
 """
-    
-    if email_type == "client_service":
-        prompt += """
+        
+        if email_type == "client_service":
+            prompt += """
 This is a CUSTOMER SERVICE communication. Requirements:
 - Focus on supporting existing clients with their concerns
 - Tone: Supportive, solution-oriented, reassuring but honest
@@ -3159,8 +3321,8 @@ This is a CUSTOMER SERVICE communication. Requirements:
   Phone: 800-985-9319
   Email: service@firstchoicedebtrelief.com
 """
-    else:  # sales_service
-        prompt += """
+        else:  # sales_service
+            prompt += """
 This is a SALES communication. Requirements:
 - Focus on enrollment, quotes, and program benefits for prospects
 - Tone: Optimistic but realistic, benefits-focused, non-pressuring
@@ -3172,13 +3334,13 @@ This is a SALES communication. Requirements:
   First Choice Debt Relief
   [YOUR_PHONE]
 """
-    
-    # Add attachment mention if required
-    if has_attachments:
-        prompt += "\n\nMention that there are attachments included in a natural way."
-    
-    # Add compliance guidelines
-    prompt += """
+        
+        # Add attachment mention if required
+        if has_attachments:
+            prompt += "\n\nMention that there are attachments included in a natural way."
+        
+        # Add compliance guidelines
+        prompt += """
 
 COMPLIANCE REQUIREMENTS (MANDATORY - NEVER VIOLATE):
 - NEVER promise guaranteed results or specific outcomes
@@ -3210,25 +3372,138 @@ FORMAT REQUIREMENTS:
 - Clear next steps or call-to-action
 - Exact department signature (no variations)
 """
-    
-    # Initialize chat if needed
-    if not state.get("assistant_id"):
-        await initialize_chat(turn_context, state)
-    
-    try:
-        # Use the existing process_conversation_internal function to get AI response
-        client = create_client()
-        result = await process_conversation_internal(
-            client=client,
-            session=state["session_id"],
-            prompt=prompt,
-            assistant=state["assistant_id"],
-            stream_output=False
-        )
         
-        # Extract and format the email
-        if isinstance(result, dict) and "response" in result:
-            email_text = result["response"]
+        # Initialize chat if needed
+        if not state.get("assistant_id"):
+            await initialize_chat(turn_context, state)
+            # Re-get thread_id after initialization
+            thread_id = state.get("session_id")
+        
+        try:
+            # Get client
+            client = create_client()
+            
+            # Wait for any active runs to complete first
+            if thread_id:
+                wait_attempts = 0
+                max_wait_attempts = 15  # 30 seconds total
+                
+                while wait_attempts < max_wait_attempts:
+                    try:
+                        runs = client.beta.threads.runs.list(thread_id=thread_id, limit=1)
+                        if runs.data:
+                            latest_run = runs.data[0]
+                            if latest_run.status in ["in_progress", "queued", "requires_action"]:
+                                logging.info(f"Waiting for active run {latest_run.id} to complete (attempt {wait_attempts + 1})")
+                                await turn_context.send_activity(create_typing_activity())
+                                await asyncio.sleep(2)
+                                wait_attempts += 1
+                                continue
+                            elif latest_run.status in ["completed", "failed", "cancelled", "expired"]:
+                                # Run is done, we can proceed
+                                break
+                        else:
+                            # No runs, we can proceed
+                            break
+                    except Exception as e:
+                        logging.warning(f"Error checking runs: {e}")
+                        break
+                
+                if wait_attempts >= max_wait_attempts:
+                    logging.warning("Timed out waiting for active run to complete")
+            
+            # Add the message
+            try:
+                client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content=prompt
+                )
+            except Exception as msg_error:
+                logging.error(f"Error adding email generation message: {msg_error}")
+                raise
+            
+            # Create and poll run
+            run = client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=state["assistant_id"]
+            )
+            run_id = run.id
+            logging.info(f"Created email generation run {run_id}")
+            
+            # Poll for completion
+            max_wait = 120
+            poll_interval = 2
+            elapsed = 0
+            email_text = ""
+            last_typing_time = time.time()
+            
+            while elapsed < max_wait:
+                # Send typing indicator periodically
+                current_time = time.time()
+                if current_time - last_typing_time > 5:
+                    await turn_context.send_activity(create_typing_activity())
+                    last_typing_time = current_time
+                
+                try:
+                    run_status = client.beta.threads.runs.retrieve(
+                        thread_id=thread_id,
+                        run_id=run_id
+                    )
+                    
+                    if run_status.status == "completed":
+                        # Get the response
+                        messages = client.beta.threads.messages.list(
+                            thread_id=thread_id,
+                            order="desc",
+                            limit=1
+                        )
+                        
+                        if messages.data:
+                            for content in messages.data[0].content:
+                                if content.type == 'text':
+                                    email_text += content.text.value
+                        
+                        logging.info("Email generation completed successfully")
+                        break
+                        
+                    elif run_status.status in ["failed", "cancelled", "expired"]:
+                        error_msg = f"Email generation run ended with status: {run_status.status}"
+                        logging.error(error_msg)
+                        
+                        # Try to get any partial response
+                        try:
+                            messages = client.beta.threads.messages.list(
+                                thread_id=thread_id,
+                                order="desc",
+                                limit=1
+                            )
+                            if messages.data and messages.data[0].role == "assistant":
+                                for content in messages.data[0].content:
+                                    if content.type == 'text':
+                                        email_text += content.text.value
+                                if email_text:
+                                    logging.info("Retrieved partial email response")
+                                    break
+                        except:
+                            pass
+                        
+                        if not email_text:
+                            raise Exception(error_msg)
+                    
+                    elif run_status.status == "requires_action":
+                        # Handle tool calls if needed
+                        logging.warning("Email generation run requires action - this shouldn't happen")
+                        # For now, just wait
+                    
+                except Exception as poll_error:
+                    logging.error(f"Error polling email generation run: {poll_error}")
+                
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
+            
+            if not email_text:
+                raise Exception("No email response generated after timeout")
             
             # COMPLIANCE CHECK (if not skipped)
             if not skip_compliance_check:
@@ -3249,18 +3524,52 @@ COMPLIANCE FEEDBACK: {compliance_result.get('suggestion', '')}
 Please regenerate the email addressing the compliance concern while maintaining the warm, human tone and all original requirements.
 Keep the same structure and intent, just fix the compliance issue mentioned."""
                     
-                    # Get revised version
-                    revision_result = await process_conversation_internal(
-                        client=client,
-                        session=state["session_id"],
-                        prompt=edit_prompt,
-                        assistant=state["assistant_id"],
-                        stream_output=False
+                    # Add edit message
+                    client.beta.threads.messages.create(
+                        thread_id=thread_id,
+                        role="user",
+                        content=edit_prompt
                     )
                     
-                    if isinstance(revision_result, dict) and "response" in revision_result:
-                        email_text = revision_result["response"]
-                        logging.info("Email regenerated with compliance fixes")
+                    # Create revision run
+                    revision_run = client.beta.threads.runs.create(
+                        thread_id=thread_id,
+                        assistant_id=state["assistant_id"]
+                    )
+                    
+                    # Poll for revision completion
+                    revision_elapsed = 0
+                    while revision_elapsed < 60:  # 60 second timeout for revision
+                        await turn_context.send_activity(create_typing_activity())
+                        
+                        revision_status = client.beta.threads.runs.retrieve(
+                            thread_id=thread_id,
+                            run_id=revision_run.id
+                        )
+                        
+                        if revision_status.status == "completed":
+                            # Get revised email
+                            messages = client.beta.threads.messages.list(
+                                thread_id=thread_id,
+                                order="desc",
+                                limit=1
+                            )
+                            
+                            if messages.data:
+                                revised_text = ""
+                                for content in messages.data[0].content:
+                                    if content.type == 'text':
+                                        revised_text += content.text.value
+                                if revised_text:
+                                    email_text = revised_text
+                                    logging.info("Email regenerated with compliance fixes")
+                            break
+                        elif revision_status.status in ["failed", "cancelled", "expired"]:
+                            logging.warning(f"Revision run failed with status: {revision_status.status}")
+                            break
+                        
+                        await asyncio.sleep(2)
+                        revision_elapsed += 2
             
             # Save the generated email in the state for potential editing
             with conversation_states_lock:
@@ -3273,15 +3582,44 @@ Keep the same structure and intent, just fix the compliance issue mentioned."""
                     "context": context,
                     "has_attachments": has_attachments
                 }
+                # Generate a unique email ID
+                email_id = f"email_{int(time.time())}_{hashlib.md5(email_text.encode()).hexdigest()[:8]}"
+                state["last_email_id"] = email_id
+                
+                # Store in email history
+                if "email_history" not in state:
+                    state["email_history"] = {}
+                state["email_history"][email_id] = {
+                    "email_text": email_text,
+                    "email_type": email_type,
+                    "timestamp": time.time(),
+                    "data": state["last_email_data"]
+                }
+                
+                # Keep only last 10 emails in history
+                if len(state["email_history"]) > 10:
+                    oldest_emails = sorted(state["email_history"].items(), key=lambda x: x[1]["timestamp"])[:len(state["email_history"]) - 10]
+                    for old_id, _ in oldest_emails:
+                        del state["email_history"][old_id]
             
             result_card = create_email_result_card(email_text)
             await send_card_response(turn_context, result_card)
-        else:
-            await turn_context.send_activity("I'm sorry, I couldn't generate the email. Please try again with more details.")
-    except Exception as e:
-        logging.error(f"Error generating email: {str(e)}")
-        traceback.print_exc()
-        await turn_context.send_activity("I encountered an error while generating your email. Please try again.")
+            
+        except Exception as e:
+            logging.error(f"Error generating email: {str(e)}")
+            traceback.print_exc()
+            await turn_context.send_activity("I encountered an error while generating your email. Please try again.")
+            
+    finally:
+        # Always clean up state
+        with conversation_states_lock:
+            state["active_run"] = False
+            state.pop("active_operation", None)
+        
+        if thread_id:
+            with active_runs_lock:
+                if thread_id in active_runs:
+                    del active_runs[thread_id]
 async def check_email_compliance(email_text: str, email_type: str) -> dict:
     """
     Checks email for compliance issues using a dedicated compliance-focused GPT call.
@@ -4602,179 +4940,26 @@ async def format_message_with_rag(user_message, documents):
         except:
             # Ultimate fallback - return original message
             return user_message
-# Modified handle_text_message with thread summarization
-# async def handle_text_message(turn_context: TurnContext, state):
-#     """Handle text messages from users with RAG integration"""
-#     user_message = turn_context.activity.text.strip()
-#     conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
-#     conversation_id = conversation_reference.conversation.id
-    
-#     # Handle special commands
-#     if user_message.lower() in ["/email", "create email", "write email", "email template", "email"]:
-#         await send_email_card(turn_context)
-#         return
-#     if user_message.lower() in ["/new", "/reset", "new chat", "start over", "reset chat"]:
-#         await handle_new_chat_command(turn_context, state, conversation_id)
-#         return
-        
-#     # Extract user identity for security validation
-#     user_id = turn_context.activity.from_property.id if hasattr(turn_context.activity, 'from_property') else "unknown"
-    
-#     # Thread-safe access to state values
-#     with conversation_states_lock:
-#         stored_user_id = state.get("user_id")
-#         stored_assistant_id = state.get("assistant_id")
-#         stored_session_id = state.get("session_id")
-    
-#     # Verify user identity matches state (double-check)
-#     if stored_user_id and stored_user_id != user_id:
-#         logging.warning(f"SECURITY ALERT: User mismatch detected in handle_text_message! Expected {stored_user_id}, got {user_id}")
-#         # This is a severe security issue - reinitialize chat for this user
-#         await turn_context.send_activity("For security reasons, I need to create a new conversation session.")
-#         await initialize_chat(turn_context, None, context=user_message)
-#         return
-    
-#     # Record this user's message processing (audit trail)
-#     logging.info(f"Processing message from user {user_id} in conversation {conversation_id}: {user_message[:50]}...")
-    
-#     # If no assistant yet, initialize chat with the message as context
-#     if not stored_assistant_id:
-#         # Initialize chat silently first
-#         success = await initialize_chat_silent(turn_context, state)
-        
-#         if success:
-#             # Now process the user's message directly
-#             with conversation_states_lock:
-#                 stored_assistant_id = state.get("assistant_id")
-#                 stored_session_id = state.get("session_id")
-            
-#             # Process the message without sending welcome messages
-#             client = create_client()
-            
-#             # RAG INTEGRATION - RETRIEVE RELEVANT DOCUMENTS
-#             relevant_docs = await retrieve_documents(user_message, top=3)
-            
-#             # Format the message with RAG context and user query
-#             enhanced_message = await format_message_with_rag(user_message, relevant_docs)
-            
-#             # Send the enhanced message
-#             client.beta.threads.messages.create(
-#                 thread_id=stored_session_id,
-#                 role="user",
-#                 content=enhanced_message
-#             )
-            
-#             # Process the message with streaming
-#             if TEAMS_AI_AVAILABLE:
-#                 await stream_with_teams_ai(turn_context, state, None)
-#             else:
-#                 await stream_with_custom_implementation(turn_context, state, None)
-#         else:
-#             # Fallback if initialization failed
-#             await turn_context.send_activity("I'm sorry, I encountered an issue while setting up our conversation. Please try again.")
-        
-#         return
-    
-#     # Send typing indicator
-#     await turn_context.send_activity(create_typing_activity())
-    
-#     # Check if thread needs summarization (with thread safety)
-#     summarized = False
-#     if stored_session_id:
-#         client = create_client()
-#         summarized = await summarize_thread_if_needed(client, stored_session_id, state, threshold=30)
-        
-#         if summarized:
-#             # Update stored_session_id after summarization (thread may have changed)
-#             with conversation_states_lock:
-#                 stored_session_id = state.get("session_id")
-                
-#             await turn_context.send_activity("I've summarized our previous conversation to maintain context while keeping the conversation focused.")
-    
-#     # Mark thread as busy (thread-safe)
-#     current_session_id = None
-#     with conversation_states_lock:
-#         state["active_run"] = True
-#         current_session_id = state.get("session_id")
-    
-#     if current_session_id:
-#         with active_runs_lock:
-#             active_runs[current_session_id] = True
-    
-#     try:
-#         # Double-verify resources before proceeding
-#         client = create_client()
-#         validation = await validate_resources(client, current_session_id, stored_assistant_id)
-        
-#         # If any resource is invalid, force recovery
-#         if not validation["thread_valid"] or not validation["assistant_valid"]:
-#             logging.warning(f"Resource validation failed for user {user_id}: thread_valid={validation['thread_valid']}, assistant_valid={validation['assistant_valid']}")
-#             raise Exception("Invalid conversation resources detected - forcing recovery")
-        
-#         # RAG INTEGRATION - RETRIEVE RELEVANT DOCUMENTS
-#         relevant_docs = await retrieve_documents(user_message, top=3)
-        
-#         # Format the message with RAG context and user query
-#         enhanced_message = await format_message_with_rag(user_message, relevant_docs)
-        
-#         # Send the enhanced message
-#         try:
-#             client.beta.threads.messages.create(
-#                 thread_id=current_session_id,
-#                 role="user",
-#                 content=enhanced_message
-#             )
-#         except Exception as msg_error:
-#             logging.error(f"Error adding message to thread: {msg_error}")
-#             raise
-            
-#         # Use the optimal streaming approach based on available libraries and preferences
-#         if TEAMS_AI_AVAILABLE:
-#             # Use enhanced streaming with Teams AI library
-#             await stream_with_teams_ai(turn_context, state, None)
-#         else:
-#             # Use custom TeamsStreamingResponse if Teams AI library is not available
-#             await stream_with_custom_implementation(turn_context, state, None)
-        
-#         # Mark thread as no longer busy (thread-safe)
-#         with conversation_states_lock:
-#             state["active_run"] = False
-#             current_session_id = state.get("session_id")
-        
-#         with active_runs_lock:
-#             if current_session_id in active_runs:
-#                 del active_runs[current_session_id]
-        
-#         # Process any pending messages
-#         await process_pending_messages(turn_context, state, conversation_id)
-            
-#     except Exception as e:
-#         # Mark thread as no longer busy even on error (thread-safe)
-#         with conversation_states_lock:
-#             state["active_run"] = False
-#             current_session_id = state.get("session_id")
-            
-#         with active_runs_lock:
-#             if current_session_id in active_runs:
-#                 del active_runs[current_session_id]
-            
-#         # Don't show raw error details to users
-#         logging.error(f"Error in handle_text_message for user {user_id}: {str(e)}")
-#         traceback.print_exc()
-#         await turn_context.send_activity("I'm sorry, I encountered a problem while processing your message. Please try again.")
-        
-#         # Try a fallback direct completion if there was a severe error
-#         try:
-#             await send_fallback_response(turn_context, user_message)
-#         except Exception as fallback_error:
-#             logging.error(f"Fallback response also failed: {fallback_error}")
 async def handle_text_message(turn_context: TurnContext, state):
     """Handle text messages from users with RAG integration"""
     user_message = turn_context.activity.text.strip()
     conversation_reference = TurnContext.get_conversation_reference(turn_context.activity)
     conversation_id = conversation_reference.conversation.id
+    
+    # Handle special commands
     if user_message.lower() in ["/email", "create email", "write email", "email template", "email"]:
-        await send_email_card(turn_context, "main")  # Always show the main view for email commands
+        # Check if busy before showing email card
+        if check_thread_busy(state):
+            await turn_context.send_activity("I'm currently processing another request. Please wait a moment and try again.")
+            
+            # Queue this command for later
+            with pending_messages_lock:
+                if conversation_id not in pending_messages:
+                    pending_messages[conversation_id] = deque()
+                pending_messages[conversation_id].append(user_message)
+            return
+            
+        await send_email_card(turn_context, "main")
         return
 
     if user_message.lower() in ["/new", "/reset", "new chat", "start over", "reset chat"]:
@@ -4839,6 +5024,30 @@ async def handle_text_message(turn_context: TurnContext, state):
         
         return
     
+    # Track if thread is currently processing
+    is_thread_busy = check_thread_busy(state)
+    
+    # Handle based on busy state
+    if is_thread_busy:
+        # Get the active operation type for better messaging
+        active_operation = state.get("active_operation", "request")
+        
+        # Queue the message
+        with pending_messages_lock:
+            if conversation_id not in pending_messages:
+                pending_messages[conversation_id] = deque()
+            pending_messages[conversation_id].append(user_message)
+            queue_size = len(pending_messages[conversation_id])
+        
+        # Provide informative message based on what's happening
+        if active_operation == "email_generation":
+            message = f"I'm currently generating an email. Your message has been queued (position {queue_size}). I'll respond as soon as I'm done."
+        else:
+            message = f"I'm still processing your previous request. Your message has been queued (position {queue_size}). I'll respond as soon as I'm done."
+        
+        await turn_context.send_activity(message)
+        return
+    
     # Send typing indicator
     await turn_context.send_activity(create_typing_activity())
     
@@ -4859,6 +5068,7 @@ async def handle_text_message(turn_context: TurnContext, state):
     current_session_id = None
     with conversation_states_lock:
         state["active_run"] = True
+        state["active_operation"] = "message_processing"
         current_session_id = state.get("session_id")
     
     if current_session_id:
@@ -4874,6 +5084,31 @@ async def handle_text_message(turn_context: TurnContext, state):
         if not validation["thread_valid"] or not validation["assistant_valid"]:
             logging.warning(f"Resource validation failed for user {user_id}: thread_valid={validation['thread_valid']}, assistant_valid={validation['assistant_valid']}")
             raise Exception("Invalid conversation resources detected - forcing recovery")
+        
+        # Wait for any active runs to complete first
+        wait_attempts = 0
+        max_wait_attempts = 10  # 20 seconds total
+        
+        while wait_attempts < max_wait_attempts:
+            try:
+                runs = client.beta.threads.runs.list(thread_id=current_session_id, limit=1)
+                if runs.data:
+                    latest_run = runs.data[0]
+                    if latest_run.status in ["in_progress", "queued", "requires_action"]:
+                        logging.info(f"Waiting for active run {latest_run.id} to complete before processing message")
+                        await turn_context.send_activity(create_typing_activity())
+                        await asyncio.sleep(2)
+                        wait_attempts += 1
+                        continue
+                    else:
+                        # Run is done
+                        break
+                else:
+                    # No runs
+                    break
+            except Exception as e:
+                logging.warning(f"Error checking runs: {e}")
+                break
         
         # RAG INTEGRATION - RETRIEVE RELEVANT DOCUMENTS
         relevant_docs = await retrieve_documents(user_message, top=3)
@@ -4903,6 +5138,7 @@ async def handle_text_message(turn_context: TurnContext, state):
         # Mark thread as no longer busy (thread-safe)
         with conversation_states_lock:
             state["active_run"] = False
+            state.pop("active_operation", None)
             current_session_id = state.get("session_id")
         
         with active_runs_lock:
@@ -4916,6 +5152,7 @@ async def handle_text_message(turn_context: TurnContext, state):
         # Mark thread as no longer busy even on error (thread-safe)
         with conversation_states_lock:
             state["active_run"] = False
+            state.pop("active_operation", None)
             current_session_id = state.get("session_id")
             
         with active_runs_lock:
@@ -4925,14 +5162,9 @@ async def handle_text_message(turn_context: TurnContext, state):
         # Don't show raw error details to users
         logging.error(f"Error in handle_text_message for user {user_id}: {str(e)}")
         traceback.print_exc()
-        await turn_context.send_activity("I'm sorry, I encountered a problem while processing your message. Please try again.")
         
-        # Try a fallback direct completion if there was a severe error
-        try:
-            await send_fallback_response(turn_context, user_message)
-        except Exception as fallback_error:
-            logging.error(f"Fallback response also failed: {fallback_error}")
-
+        # Handle thread recovery if needed
+        await handle_thread_recovery(turn_context, state, str(e), "text_message")
 
 
 # Modified process_pending_messages function to fix the run conflict
@@ -6146,119 +6378,109 @@ async def process_conversation_internal(
                 raise HTTPException(status_code=500, detail="Failed to create a valid assistant")
         
         # Check if there's an active run before adding a message
-        active_run = False
-        run_id = None
-        try:
-            # List runs to check for active ones
-            runs = client.beta.threads.runs.list(thread_id=session, limit=1)
-            if runs.data:
-                latest_run = runs.data[0]
-                if latest_run.status in ["in_progress", "queued", "requires_action"]:
-                    active_run = True
-                    run_id = latest_run.id
-                    logging.warning(f"Active run {run_id} detected with status {latest_run.status}")
-        except Exception as e:
-            logging.warning(f"Error checking for active runs: {e}")
-            # Continue anyway - we'll handle failure when adding messages
-
-        # Add user message to the thread if prompt is given
         if prompt:
-            max_retries = 5
-            base_retry_delay = 3
-            success = False
+            # Wait for any active runs to complete
+            wait_attempts = 0
+            max_wait_attempts = 15  # 30 seconds total
+            active_run_id = None
             
-            # Handle active run if found
-            if active_run and run_id:
+            while wait_attempts < max_wait_attempts:
                 try:
-                    # Cancel the run
-                    client.beta.threads.runs.cancel(thread_id=session, run_id=run_id)
-                    logging.info(f"Requested cancellation of active run {run_id}")
-                    
-                    # Wait for run to be fully canceled
-                    cancel_wait_time = 5
-                    max_cancel_wait = 30
-                    wait_time = 0
-                    
-                    while wait_time < max_cancel_wait:
-                        await asyncio.sleep(cancel_wait_time)
-                        wait_time += cancel_wait_time
-                        
-                        # Check if run is actually canceled or completed
-                        try:
-                            run_status = client.beta.threads.runs.retrieve(thread_id=session, run_id=run_id)
-                            if run_status.status in ["cancelled", "completed", "failed", "expired"]:
-                                logging.info(f"Run {run_id} is now in state {run_status.status} after waiting {wait_time}s")
-                                break
-                            else:
-                                logging.warning(f"Run {run_id} still in state {run_status.status} after waiting {wait_time}s")
-                                # Gradually increase wait time
-                                cancel_wait_time = min(cancel_wait_time * 1.5, 10)
-                        except Exception as status_e:
-                            logging.warning(f"Error checking run status after cancellation: {status_e}")
+                    runs = client.beta.threads.runs.list(thread_id=session, limit=1)
+                    if runs.data:
+                        latest_run = runs.data[0]
+                        if latest_run.status in ["in_progress", "queued", "requires_action"]:
+                            active_run_id = latest_run.id
+                            logging.info(f"Found active run {active_run_id} with status {latest_run.status}, waiting... (attempt {wait_attempts + 1})")
+                            await asyncio.sleep(2)
+                            wait_attempts += 1
+                            continue
+                        else:
+                            # Run is completed/failed/cancelled
+                            logging.info(f"Previous run {latest_run.id} has status {latest_run.status}, proceeding")
                             break
+                    else:
+                        # No runs found
+                        break
+                except Exception as e:
+                    logging.warning(f"Error checking for active runs: {e}")
+                    break
+            
+            # If we still have an active run after waiting, try to cancel it
+            if wait_attempts >= max_wait_attempts and active_run_id:
+                logging.warning(f"Active run {active_run_id} still running after {wait_attempts * 2}s")
+                try:
+                    client.beta.threads.runs.cancel(thread_id=session, run_id=active_run_id)
+                    logging.info(f"Requested cancellation of run {active_run_id}")
                     
-                    # If we've waited the maximum time and run is still active, create a new thread
-                    if wait_time >= max_cancel_wait:
-                        logging.warning(f"Unable to cancel run {run_id} after waiting {wait_time}s, creating new thread")
-                        thread = client.beta.threads.create()
-                        session = thread.id
-                        logging.info(f"Created new thread {session} due to stuck run")
-                        active_run = False
+                    # Wait a bit more for cancellation
+                    cancel_wait = 0
+                    while cancel_wait < 10:  # 10 seconds for cancellation
+                        await asyncio.sleep(2)
+                        cancel_wait += 2
+                        try:
+                            run_check = client.beta.threads.runs.retrieve(thread_id=session, run_id=active_run_id)
+                            if run_check.status in ["cancelled", "failed", "expired", "completed"]:
+                                logging.info(f"Run {active_run_id} now has status {run_check.status}")
+                                break
+                        except:
+                            break
+                            
                 except Exception as cancel_e:
-                    logging.error(f"Error canceling run {run_id}: {cancel_e}")
-                    # Create a new thread as fallback
+                    logging.error(f"Failed to cancel run {active_run_id}: {cancel_e}")
+                    # As last resort, create a new thread
                     try:
                         thread = client.beta.threads.create()
+                        old_session = session
                         session = thread.id
-                        logging.info(f"Created new thread {session} after failed run cancellation")
-                        active_run = False
+                        logging.info(f"Created new thread {session} to replace busy thread {old_session}")
                     except Exception as thread_e:
-                        logging.error(f"Failed to create new thread after cancellation error: {thread_e}")
-                        raise HTTPException(status_code=500, detail="Failed to handle active run and create new thread")
+                        logging.error(f"Failed to create new thread: {thread_e}")
+                        raise HTTPException(status_code=500, detail="Thread is busy and cannot create new thread")
             
-            # Now try to add the message with retries
-            retry_delay = base_retry_delay
-            for attempt in range(max_retries):
+            # Now add the message
+            max_retries = 3
+            message_added = False
+            
+            for retry in range(max_retries):
                 try:
                     client.beta.threads.messages.create(
                         thread_id=session,
                         role="user",
                         content=prompt
                     )
-                    logging.info(f"Added user message to thread {session} (attempt {attempt+1})")
-                    success = True
+                    logging.info(f"Added user message to thread {session}")
+                    message_added = True
                     break
                 except Exception as e:
-                    if "while a run" in str(e) and attempt < max_retries - 1:
-                        logging.warning(f"Failed to add message (attempt {attempt+1}), run is still active. Retrying in {retry_delay}s: {e}")
-                        await asyncio.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
-                        
-                        # If we're still having issues after multiple attempts, create a new thread
-                        if attempt >= 2:  # After 3rd attempt
+                    error_msg = str(e)
+                    if "while a run" in error_msg or "active run" in error_msg:
+                        if retry < max_retries - 1:
+                            logging.warning(f"Thread still busy, waiting before retry {retry + 2}/{max_retries}")
+                            await asyncio.sleep(3 * (retry + 1))  # Exponential backoff
+                        else:
+                            # Final attempt - create new thread
                             try:
-                                logging.warning("Creating new thread due to persistent run issues")
                                 thread = client.beta.threads.create()
                                 old_session = session
                                 session = thread.id
-                                logging.info(f"Switched from thread {old_session} to new thread {session}")
-                                # Add the message to the new thread
                                 client.beta.threads.messages.create(
                                     thread_id=session,
                                     role="user",
                                     content=prompt
                                 )
-                                success = True
-                                break
-                            except Exception as new_thread_e:
-                                logging.error(f"Error creating new thread during retries: {new_thread_e}")
+                                message_added = True
+                                logging.info(f"Created new thread {session} and added message after retries")
+                            except Exception as new_e:
+                                logging.error(f"Failed to create new thread and add message: {new_e}")
+                                raise HTTPException(status_code=500, detail="Failed to process message after multiple attempts")
                     else:
-                        logging.error(f"Failed to add message to thread {session}: {e}")
-                        if attempt == max_retries - 1:
-                            raise HTTPException(status_code=500, detail="Failed to add message to conversation thread")
+                        logging.error(f"Error adding message: {e}")
+                        if retry == max_retries - 1:
+                            raise
             
-            if not success:
-                raise HTTPException(status_code=500, detail="Failed to add message to conversation thread after retries")
+            if not message_added:
+                raise HTTPException(status_code=500, detail="Failed to add message to conversation")
         
         # For streaming mode (/conversation endpoint)
         if stream_output:
@@ -6394,268 +6616,120 @@ async def process_conversation_internal(
                             raise NotImplementedError("Stream method not available")
                             
                     except (NotImplementedError, AttributeError) as stream_not_available:
-                        # Fallback to iter_chunks if stream is not available
-                        logging.info(f"Direct streaming not available: {stream_not_available}. Falling back to iter_chunks")
+                        # Fallback to polling approach
+                        logging.info(f"Direct streaming not available: {stream_not_available}. Using polling approach")
                         
-                        # Create run with stream=True for iter_chunks approach
+                        # Create run without streaming
                         run = client.beta.threads.runs.create(
                             thread_id=session,
-                            assistant_id=assistant,
-                            stream=True
+                            assistant_id=assistant
                         )
                         
                         run_id = run.id
+                        logging.info(f"Created polling run {run_id}")
                         
-                        # Use iter_chunks if available
-                        if hasattr(run, "iter_chunks"):
-                            logging.info(f"Using iter_chunks() for streaming run {run_id}")
-                            
-                            for chunk in run.iter_chunks():
-                                text_piece = ""
-                                
-                                if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
-                                    delta = chunk.data.delta
-                                    if hasattr(delta, "content") and delta.content:
-                                        for content in delta.content:
-                                            if content.type == "text" and hasattr(content.text, "value"):
-                                                text_piece = content.text.value
-                                                
-                                if text_piece:
-                                    # Add to buffer
-                                    buffer.append(text_piece)
-                                    
-                                    # Yield chunks periodically
-                                    current_time = time.time()
-                                    if len(buffer) >= 3 or (current_time - last_yield_time >= 0.5 and buffer):
-                                        joined_text = ''.join(buffer)
-                                        yield joined_text
-                                        buffer = []
-                                        last_yield_time = current_time
-                                
-                                # Small delay to work with asyncio
-                                await asyncio.sleep(0.01)
-                            
-                            # Yield any remaining text
-                            if buffer:
-                                joined_text = ''.join(buffer)
-                                yield joined_text
-                                buffer = []
-                                    
-                        # Fallback to events iterator
-                        elif hasattr(run, "events"):
-                            logging.info(f"Using events iterator for streaming run {run_id}")
-                            
-                            for event in run.events:
-                                if event.event == "thread.message.delta":
-                                    if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
-                                        for content in event.data.delta.content:
-                                            if content.type == "text" and hasattr(content.text, "value"):
-                                                # Add to buffer
-                                                buffer.append(content.text.value)
-                                                
-                                                # Yield chunks periodically
-                                                current_time = time.time()
-                                                if len(buffer) >= 3 or (current_time - last_yield_time >= 0.5 and buffer):
-                                                    joined_text = ''.join(buffer)
-                                                    yield joined_text
-                                                    buffer = []
-                                                    last_yield_time = current_time
-                                                
-                                                # Small delay
-                                                await asyncio.sleep(0.01)
-                            
-                            # Yield any remaining text
-                            if buffer:
-                                joined_text = ''.join(buffer)
-                                yield joined_text
-                                buffer = []
+                        # Poll for completion
+                        max_wait_time = 90  # seconds
+                        wait_interval = 2   # seconds
+                        elapsed_time = 0
+                        last_status = None
                         
-                        # Final fallback to polling
-                        else:
-                            logging.info(f"Falling back to polling for streaming run {run_id}")
-                            yield "Processing your request...\n"
-                            
-                            max_wait_time = 90  # seconds
-                            wait_interval = 2   # seconds
-                            elapsed_time = 0
-                            last_status = None
-                            
-                            while elapsed_time < max_wait_time:
-                                try:
-                                    run_status = client.beta.threads.runs.retrieve(
-                                        thread_id=session, 
-                                        run_id=run_id
+                        while elapsed_time < max_wait_time:
+                            try:
+                                run_status = client.beta.threads.runs.retrieve(
+                                    thread_id=session, 
+                                    run_id=run_id
+                                )
+                                
+                                # Only log when status changes
+                                if last_status != run_status.status:
+                                    logging.info(f"Run {run_id} status: {run_status.status}")
+                                    last_status = run_status.status
+                                
+                                if run_status.status == "completed":
+                                    # Get the complete message
+                                    messages = client.beta.threads.messages.list(
+                                        thread_id=session,
+                                        order="desc",
+                                        limit=1
                                     )
                                     
-                                    # Only log when status changes
-                                    if last_status != run_status.status:
-                                        logging.info(f"Run {run_id} status: {run_status.status}")
-                                        last_status = run_status.status
-                                    
-                                    if run_status.status == "completed":
-                                        yield "\n"  # Clear the progress line
+                                    if messages.data:
+                                        latest_message = messages.data[0]
+                                        message_text = ""
                                         
-                                        # Get the complete message
+                                        for content_part in latest_message.content:
+                                            if content_part.type == 'text':
+                                                message_text += content_part.text.value
+                                        
+                                        # Split into chunks for better streaming experience
+                                        if len(message_text) > 500:
+                                            # Use sentence-aware chunking
+                                            sentences = message_text.split('. ')
+                                            current_chunk = ""
+                                            
+                                            for sentence in sentences:
+                                                current_chunk += sentence + '. '
+                                                
+                                                if len(current_chunk) >= 200:
+                                                    yield current_chunk
+                                                    current_chunk = ""
+                                                    await asyncio.sleep(0.05)
+                                            
+                                            # Yield any remaining text
+                                            if current_chunk:
+                                                yield current_chunk
+                                        else:
+                                            # For shorter responses, yield the whole thing
+                                            yield message_text
+                                    break
+                                
+                                elif run_status.status in ["failed", "cancelled", "expired"]:
+                                    error_msg = f"Run ended with status {run_status.status}"
+                                    
+                                    # Try to get any partial response
+                                    try:
                                         messages = client.beta.threads.messages.list(
                                             thread_id=session,
                                             order="desc",
                                             limit=1
                                         )
-                                        
-                                        if messages.data:
-                                            latest_message = messages.data[0]
-                                            message_text = ""
-                                            
-                                            for content_part in latest_message.content:
+                                        if messages.data and messages.data[0].role == "assistant":
+                                            partial_text = ""
+                                            for content_part in messages.data[0].content:
                                                 if content_part.type == 'text':
-                                                    message_text += content_part.text.value
-                                            
-                                            # Split long responses into chunks for better streaming
-                                            if len(message_text) > 500:
-                                                # Use sentence-aware chunking if possible
-                                                sentences = message_text.split('. ')
-                                                current_chunk = ""
-                                                
-                                                for sentence in sentences:
-                                                    current_chunk += sentence + '. '
-                                                    
-                                                    if len(current_chunk) >= 200:
-                                                        yield current_chunk
-                                                        current_chunk = ""
-                                                        await asyncio.sleep(0.05)  # Small delay between chunks
-                                                
-                                                # Yield any remaining text
-                                                if current_chunk:
-                                                    yield current_chunk
-                                            else:
-                                                # For shorter responses, just yield the whole thing
-                                                yield message_text
-                                        break
+                                                    partial_text += content_part.text.value
+                                            if partial_text:
+                                                yield partial_text
+                                                return
+                                    except:
+                                        pass
                                     
-                                    elif run_status.status in ["failed", "cancelled", "expired"]:
-                                        yield f"\nError: Run ended with status {run_status.status}. Please try again."
-                                        break
-                                    
-                                    elif run_status.status == "requires_action":
-                                        yield "\n[Run requires additional actions which cannot be handled in polling mode.]\n"
-                                        # Try to cancel the run since we can't handle actions in polling mode
-                                        try:
-                                            client.beta.threads.runs.cancel(
-                                                thread_id=session,
-                                                run_id=run_id
-                                            )
-                                            logging.info(f"Cancelled run {run_id} that required actions in polling mode")
-                                        except Exception as cancel_e:
-                                            logging.error(f"Failed to cancel run requiring actions: {cancel_e}")
-                                        break
-                                    
-                                    yield "."  # Show progress
-                                    await asyncio.sleep(wait_interval)
-                                    elapsed_time += wait_interval
-                                    
-                                except Exception as poll_e:
-                                    logging.error(f"Error polling run status: {poll_e}")
-                                    yield "E"  # Show error in progress
-                                    await asyncio.sleep(wait_interval)
-                                    elapsed_time += wait_interval
-                            
-                            if elapsed_time >= max_wait_time:
-                                yield "\nResponse timed out. Please try again with a simpler request."
+                                    yield f"\nError: {error_msg}. Please try again."
+                                    break
+                                
+                                elif run_status.status == "requires_action":
+                                    yield "\n[This response requires additional actions which cannot be handled in the current mode.]\n"
+                                    break
+                                
+                                await asyncio.sleep(wait_interval)
+                                elapsed_time += wait_interval
+                                
+                            except Exception as poll_e:
+                                logging.error(f"Error polling run status: {poll_e}")
+                                await asyncio.sleep(wait_interval)
+                                elapsed_time += wait_interval
+                        
+                        if elapsed_time >= max_wait_time:
+                            yield "\nResponse timed out. Please try again with a simpler request."
                 
                 except Exception as e:
                     error_details = traceback.format_exc()
                     logging.error(f"Error in streaming generation: {e}\n{error_details}")
                     yield f"\n[ERROR] An error occurred while generating the response: {str(e)}. Please try again.\n"
+            
             # Return streaming generator
             return async_generator()
-            # async def async_generator():
-            #     try:
-            #         # Create run with stream=True
-            #         run = client.beta.threads.runs.create(
-            #             thread_id=session,
-            #             assistant_id=assistant,
-            #             stream=True
-            #         )
-                    
-            #         # Handle the stream based on available methods
-            #         if hasattr(run, "iter_chunks"):
-            #             # Using iter_chunks synchronous iterator
-            #             logging.info("Using iter_chunks() for API streaming")
-            #             for chunk in run.iter_chunks():
-            #                 text_piece = ""
-                            
-            #                 if hasattr(chunk, "data") and hasattr(chunk.data, "delta"):
-            #                     delta = chunk.data.delta
-            #                     if hasattr(delta, "content") and delta.content:
-            #                         for content in delta.content:
-            #                             if content.type == "text" and hasattr(content.text, "value"):
-            #                                 text_piece = content.text.value
-                                            
-            #                 if text_piece:
-            #                     yield text_piece
-            #                     # Small delay to make it work with asyncio
-            #                     await asyncio.sleep(0.01)
-                                
-            #         elif hasattr(run, "events"):
-            #             # Using events iterator
-            #             logging.info("Using events iterator for API streaming")
-            #             for event in run.events:
-            #                 if event.event == "thread.message.delta":
-            #                     if hasattr(event.data, "delta") and hasattr(event.data.delta, "content"):
-            #                         for content in event.data.delta.content:
-            #                             if content.type == "text" and hasattr(content.text, "value"):
-            #                                 yield content.text.value
-            #                                 await asyncio.sleep(0.01)
-            #         else:
-            #             # Fallback to polling
-            #             logging.info("Using fallback polling for API streaming")
-            #             yield "Processing your request...\n"
-                        
-            #             run_id = run.id
-            #             max_wait_time = 90  # seconds
-            #             wait_interval = 2   # seconds
-            #             elapsed_time = 0
-                        
-            #             while elapsed_time < max_wait_time:
-            #                 run_status = client.beta.threads.runs.retrieve(
-            #                     thread_id=session, 
-            #                     run_id=run_id
-            #                 )
-                            
-            #                 if run_status.status == "completed":
-            #                     yield "\n"  # Clear the progress line
-                                
-            #                     # Get the complete message
-            #                     messages = client.beta.threads.messages.list(
-            #                         thread_id=session,
-            #                         order="desc",
-            #                         limit=1
-            #                     )
-                                
-            #                     if messages.data:
-            #                         latest_message = messages.data[0]
-            #                         for content_part in latest_message.content:
-            #                             if content_part.type == 'text':
-            #                                 yield content_part.text.value
-            #                     break
-                            
-            #                 elif run_status.status in ["failed", "cancelled", "expired"]:
-            #                     yield f"\nError: Run ended with status {run_status.status}. Please try again."
-            #                     break
-                            
-            #                 yield "."  # Show progress
-            #                 await asyncio.sleep(wait_interval)
-            #                 elapsed_time += wait_interval
-                        
-            #             if elapsed_time >= max_wait_time:
-            #                 yield "\nResponse timed out. Please try again."
-                
-            #     except Exception as e:
-            #         logging.error(f"Error in streaming generation: {e}")
-            #         yield f"\n[ERROR] An error occurred while generating the response: {str(e)}. Please try again.\n"
-            
-            # # Return streaming generator
-            # return async_generator()
         
         # Handle non-streaming mode (/chat endpoint)
         else:
@@ -6681,7 +6755,8 @@ async def process_conversation_internal(
                             run_id=run_id
                         )
                         
-                        logging.info(f"Run status poll {attempt+1}/{max_poll_attempts}: {run_status.status}")
+                        if attempt % 6 == 0:  # Log every 30 seconds
+                            logging.info(f"Run status poll {attempt+1}/{max_poll_attempts}: {run_status.status}")
                         
                         # Handle completed run
                         if run_status.status == "completed":
@@ -6704,6 +6779,23 @@ async def process_conversation_internal(
                         # Handle failed/cancelled/expired run
                         elif run_status.status in ["failed", "cancelled", "expired"]:
                             logging.error(f"Run ended with status: {run_status.status}")
+                            
+                            # Try to get partial response
+                            try:
+                                messages = client.beta.threads.messages.list(
+                                    thread_id=session,
+                                    order="desc",
+                                    limit=1
+                                )
+                                if messages.data and messages.data[0].role == "assistant":
+                                    for content_part in messages.data[0].content:
+                                        if content_part.type == 'text':
+                                            full_response += content_part.text.value
+                                    if full_response:
+                                        return {"response": full_response}
+                            except:
+                                pass
+                            
                             return {"response": f"Sorry, I encountered an error and couldn't complete your request. Run status: {run_status.status}. Please try again."}
                         
                         # Continue polling if still in progress
@@ -6739,6 +6831,7 @@ async def process_conversation_internal(
                 
             except Exception as e:
                 logging.error(f"Error in non-streaming response generation: {e}")
+                traceback.print_exc()
                 return {
                     "response": "An error occurred while processing your request. Please try again."
                 }
@@ -6746,6 +6839,8 @@ async def process_conversation_internal(
     except Exception as e:
         endpoint_type = "conversation" if stream_output else "chat"
         logging.error(f"Error in /{endpoint_type} endpoint setup: {e}")
+        traceback.print_exc()
+        
         if stream_output:
             # For streaming, we need to return a generator that yields the error
             async def error_generator():
