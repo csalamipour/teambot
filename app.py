@@ -6118,7 +6118,12 @@ async def stream_with_teams_ai(turn_context: TurnContext, state, user_message):
                                         state["last_responses"].append(response_hash)
                                         # Queue the complete message
                                         if message_text:
-                                            streamer.queue_text_chunk(message_text)
+                                            # Check if this message is already in the streamer
+                                            current_content = streamer.get_full_message()
+                                            if message_text == current_content:
+                                                logging.warning(f"Message already in streamer buffer, skipping duplicate queue")
+                                            else:
+                                                streamer.queue_text_chunk(message_text)
                                     else:
                                         logging.warning(f"Prevented duplicate streaming response: {message_text[:50]}...")
                             
